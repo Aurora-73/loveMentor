@@ -98,8 +98,6 @@ SUB_WATERMARK = [
     re.compile(r"美团外卖.*?"),
     re.compile(r"支付成功"),
     re.compile(r"^M$"),
-    re.compile(r"^MM$"),
-    re.compile(r"^MMM$"),
     re.compile(r"林宇晨"),
     re.compile(r"三□"),
     re.compile(r"三0"),
@@ -132,17 +130,12 @@ SUB_WATERMARK = [
     re.compile(r"^三D$"),
     re.compile(r"^三>0$"),
     re.compile(r"^厂$"),
-    re.compile(r"^L$"),
     re.compile(r"^CC$"),
     re.compile(r"^a$"),
     re.compile(r"^好室息$"),
-    re.compile(r"不敢岐声"),
     re.compile(r"geinis"),
     re.compile(r"女玉玉"),
     re.compile(r"广州刘天天"),
-    re.compile(r"不敢咬声"),
-    re.compile(r"不敢哎声"),
-    re.compile(r"不敢吱声"),
     re.compile(r"^V$"),
     re.compile(r"^\+$"),
     re.compile(r"^三！$"),
@@ -150,7 +143,6 @@ SUB_WATERMARK = [
     re.compile(r"^\?\?$"),
     re.compile(r"^\?\?\?$"),
     re.compile(r"^\?$"),
-    re.compile(r"^秋$"),
     re.compile(r"^D$"),
     re.compile(r"^\)P十$"),
     re.compile(r"^三口$"),
@@ -168,12 +160,6 @@ SUB_WATERMARK = [
     re.compile(r"查无此人"),
     re.compile(r"全部>"),
     re.compile(r"礼物墙"),
-    re.compile(r"认识朋友"),
-    re.compile(r"^天秤座$"),
-    re.compile(r"^宠物$"),
-    re.compile(r"^5G$"),
-    re.compile(r"^嗷鸣~$"),
-    re.compile(r"^来了$"),
     re.compile(r"^三O$"),
     re.compile(r"^4\" \($"),
     re.compile(r"^7\(0$"),
@@ -202,7 +188,6 @@ SUB_WATERMARK = [
     re.compile(r"^>D$"),
     re.compile(r"^三>D$"),
     re.compile(r"^王昆明$"),
-    re.compile(r"^春$"),
     re.compile(r"^月天$"),
     re.compile(r"^起多好玩$"),
     re.compile(r"^田$"),
@@ -215,7 +200,6 @@ SUB_WATERMARK = [
     re.compile(r"^3:57 4三$"),
     re.compile(r"^3:57 4=$"),
     re.compile(r"星期四下"),
-    re.compile(r"^免了$"),
     re.compile(r"成都大胸妹"),
     re.compile(r"^7:57 4$"),
     re.compile(r"^三> □$"),
@@ -374,18 +358,3 @@ def clean_message(content: str, verbose: bool = False) -> str | None:
         return None
     result = "\n".join(kept)
     return result if len(result.strip()) >= 3 else None
-
-
-def is_all_garbage(text: str) -> bool:
-    """判断整条消息是否纯垃圾（全是OCR碎片）。"""
-    cleaned = text.strip()
-    if not cleaned:
-        return True
-    has_chinese = any('一' <= c <= '鿿' for c in cleaned)
-    has_word = any(c.isalpha() and ord(c) < 128 for c in cleaned)
-    word_count = sum(1 for c in cleaned if c.isalpha())
-    if not has_chinese and not has_word:
-        return True
-    if has_word and word_count <= 2 and not has_chinese:
-        return len(cleaned) <= 5
-    return False

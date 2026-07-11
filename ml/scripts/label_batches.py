@@ -30,7 +30,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from collections import Counter, defaultdict
+from collections import Counter
 
 BATCHES_DIR = Path(__file__).resolve().parent.parent / "dataset" / "batches"
 CLEANED_DIR = BATCHES_DIR / "rerun" / "cleaned"
