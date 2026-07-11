@@ -1,0 +1,52 @@
+﻿﻿name: emotion_positive
+description: 正向情绪（出现正向情绪词/语气）
+version: "0.1"
+source: 规划定义
+
+patterns:
+  - type: keyword
+    value:
+      - "哈哈哈"
+      - "笑死"
+      - "真的吗"
+      - "好可爱"
+      - "好好"
+      - "天哪"
+      - "厉害"
+      - "牛"
+      - "太有意思"
+      - "好搞笑"
+      - "开心"
+      - "幸福"
+      - "满足"
+      - "感动"
+      - "温暖"
+      - "期待"
+      - "兴奋"
+      - "激动"
+      - "惊喜"
+      - "嘻嘻"
+      - "嘿嘿"
+      - "哈哈"
+      - "太棒了"
+      - "太好了"
+      - "好棒"
+      - "好开心"
+      - "美滋滋"
+      - "甜"
+      - "爱了"
+      - "喜欢"
+      - "想你"
+      - "开心死了"
+    weight: 1.0
+
+  - type: regex
+    value: ".*~.*"
+    weight: 0.3
+
+  - type: regex
+    value: ".*[呀啊哇啦哦吧嘛呢].*"
+    weight: 0.3
+
+window_rule:
+  her_hit_threshold: 2

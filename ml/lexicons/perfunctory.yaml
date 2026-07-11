@@ -1,0 +1,38 @@
+﻿name: perfunctory
+description: 敷衍回应（她用单字/简短回应且不延续话题）
+version: "0.1"
+source: 规划定义
+
+patterns:
+  - type: exact_match
+    value:
+      - "嗯"
+      - "哦"
+      - "好"
+      - "好的"
+      - "是的"
+      - "嗯嗯"
+      - "哦哦"
+      - "好吧"
+      - "ok"
+      - "OK"
+      - "行"
+      - "收到"
+      - "了解"
+      - "嗯呢"
+      - "嗯好"
+      - "哦好"
+      - "好滴"
+      - "好哒"
+      - "哦了"
+      - "昂"
+      - "嗯呐"
+    weight: 1.0
+
+  - type: length_le
+    value: 2
+    weight: 0.5
+
+window_rule:
+  her_ratio_threshold: 0.3
+  min_count: 3

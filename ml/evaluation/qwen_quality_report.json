@@ -1,0 +1,84 @@
+{
+  "summary": {
+    "qwen_samples": 315,
+    "gold_samples": 150,
+    "common_samples": 150
+  },
+  "per_label": {
+    "information_exchange": {
+      "kappa": -0.06557377049180313,
+      "precision": 0.2857142857142857,
+      "recall": 0.4166666666666667,
+      "f1": 0.3389830508474576,
+      "support": 48.0
+    },
+    "opinion_expression": {
+      "kappa": 0.08074981975486661,
+      "precision": 0.47058823529411764,
+      "recall": 0.5,
+      "f1": 0.48484848484848486,
+      "support": 64.0
+    },
+    "emotion_positive": {
+      "kappa": 0.07058823529411762,
+      "precision": 0.8833333333333333,
+      "recall": 0.424,
+      "f1": 0.572972972972973,
+      "support": 125.0
+    },
+    "emotion_negative": {
+      "kappa": -0.018099547511312153,
+      "precision": 0.27586206896551724,
+      "recall": 0.18181818181818182,
+      "f1": 0.2191780821917808,
+      "support": 44.0
+    },
+    "flirt": {
+      "kappa": 0.11627906976744184,
+      "precision": 0.4,
+      "recall": 0.17142857142857143,
+      "f1": 0.24,
+      "support": 35.0
+    },
+    "question_asking": {
+      "kappa": 0.11581137309292644,
+      "precision": 0.65625,
+      "recall": 0.4772727272727273,
+      "f1": 0.5526315789473685,
+      "support": 88.0
+    },
+    "self_disclosure": {
+      "kappa": 0.025755879059350506,
+      "precision": 0.12727272727272726,
+      "recall": 0.4117647058823529,
+      "f1": 0.19444444444444445,
+      "support": 17.0
+    },
+    "invitation": {
+      "kappa": 0.1691842900302114,
+      "precision": 0.5555555555555556,
+      "recall": 0.21739130434782608,
+      "f1": 0.3125,
+      "support": 46.0
+    },
+    "framing_boundary": {
+      "kappa": 0.3455497382198953,
+      "precision": 0.4166666666666667,
+      "recall": 0.38461538461538464,
+      "f1": 0.4,
+      "support": 13.0
+    },
+    "perfunctory": {
+      "kappa": 0.26900584795321636,
+      "precision": 0.3333333333333333,
+      "recall": 0.25,
+      "f1": 0.2857142857142857,
+      "support": 4.0
+    }
+  },
+  "overall": {
+    "mean_kappa": 0.11092509351689109,
+    "min_kappa": -0.06557377049180313,
+    "max_kappa": 0.3455497382198953
+  }
+}

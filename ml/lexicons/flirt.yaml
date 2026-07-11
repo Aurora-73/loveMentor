@@ -1,0 +1,33 @@
+﻿name: flirt
+description: 暧昧/调侃（出现暧昧关键词或撒娇语气）
+version: "0.1"
+source: 规划定义
+
+patterns:
+  - type: keyword
+    value:
+      - "想你"
+      - "喜欢你"
+      - "爱你"
+      - "宝贝"
+      - "亲爱的"
+      - "么么哒"
+      - "亲亲"
+      - "抱抱"
+      - "宝宝"
+      - "好喜欢"
+      - "么么"
+      - "乖乖"
+      - "臭宝"
+      - "笨蛋"
+      - "傻瓜"
+      - "讨厌"
+      - "你好坏"
+      - "哼"
+      - "切"
+      - "嘿嘿"
+      - "嘻嘻"
+    weight: 1.0
+
+window_rule:
+  her_hit_threshold: 1

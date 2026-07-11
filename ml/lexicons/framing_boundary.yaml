@@ -1,0 +1,33 @@
+﻿name: framing_boundary
+description: 关系边界信号（她主动使用非恋爱关系框架的语言标签）
+version: "0.1"
+source: 规划定义（替代 friend_zoning）
+
+patterns:
+  - type: keyword
+    value:
+      - "兄弟"
+      - "姐妹"
+      - "闺蜜"
+      - "好朋友"
+      - "好哥们"
+      - "铁哥们"
+      - "当朋友"
+      - "做朋友"
+      - "只是朋友"
+      - "普通朋友"
+      - "好朋友而已"
+      - "你是我最好的朋友"
+      - "我们只是朋友"
+      - "朋友关系"
+      - "朋友而已"
+      - "纯友谊"
+      - "兄弟情"
+      - "闺蜜情"
+      - "哥们"
+      - "老铁"
+      - "兄弟伙"
+    weight: 1.0
+
+window_rule:
+  her_hit_threshold: 1

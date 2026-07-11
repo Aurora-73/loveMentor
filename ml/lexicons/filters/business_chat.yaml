@@ -1,0 +1,48 @@
+﻿name: business_chat_filter
+version: "0.1"
+description: 过滤商务/非关系对话
+
+patterns:
+  - type: keyword
+    value:
+      - "修图"
+      - "价格"
+      - "付款"
+      - "报价"
+      - "修改稿"
+      - "订单"
+      - "快递"
+      - "发货"
+      - "转账"
+      - "收款"
+      - "原件"
+      - "排版"
+      - "设计"
+      - "合同"
+      - "发票"
+      - "多少钱"
+      - "费用"
+      - "成本"
+      - "预算"
+      - "结算"
+      - "支付"
+      - "账单"
+      - "收据"
+      - "定金"
+      - "尾款"
+      - "合作"
+      - "项目"
+      - "方案"
+      - "策划"
+      - "需求"
+      - "对接"
+      - "进度"
+      - "交付"
+      - "验收"
+    threshold: 5
+    scope: conversation
+
+  - type: sender_ratio
+    me_ratio_threshold: 0.8
+    her_reply_avg_len: 5
+
