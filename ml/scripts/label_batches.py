@@ -160,7 +160,7 @@ def show_progress() -> None:
         path = get_batch_path(batch_num)
         samples = load_jsonl(path)
         done = annotated_sample_ids(batch_num)
-        batch_total = len(samples)
+        batch_total = len({s["sample_id"] for s in samples})
         batch_done = len(done)
         total_samples += batch_total
         total_done += batch_done
