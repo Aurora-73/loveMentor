@@ -6,22 +6,26 @@
 
 | batch | 状态 | 说明 |
 |-------|------|------|
-| batch_001~007 | 已标完 | 旧流程，均已标注完成 |
-| batch_008 | 部分标注 | 尾部模板化已清理，剩余 300 条 |
+| batch_001~007 | 已标完 | 均已标注完成 |
+| batch_008 | 部分标注 | 尾部模板化已清理，剩余约 300 条 |
 | batch_009~014 | 未标注 | 待标注，每批约 1000 条 |
 
-### 清洗后 rerun（`batches/rerun/cleaned/`）
+### 全局水印清洗
 
-| batch | 状态 | 说明 |
-|-------|------|------|
-| batch_001~009 | 未标注 | 从被放弃样本清洗后重新捞出，待标注 |
+所有 batch 文件已通过 `clean_watermarks.py` 进行全局水印清洗，覆盖以下类型：
+
+- **OCR 语音按钮叠加**："按住说话" 及变体
+- **时间戳水印**：导出时间戳及碎片
+- **百度云/PUA 广告**：PUA 教程推广块
+- **WCD 元数据**：距离/时间/已读回执
+- **其他**：表情包占位符、截断 @ 提及、瑞恩情感广告
 
 ---
 
 ## 核心流程
 
 ```
-预览 → 泛用清洗 → 特化清洗(可选) → 标注 → 自动校验
+预览 → 全局清洗(已完成) → 特化清洗(可选) → 标注 → 自动校验
 ```
 
 ### 第一步：预览
@@ -29,42 +33,42 @@
 看看数据长什么样，有没有明显脏数据。
 
 ```bash
-# 原始 batch
+# 完整内容预览（推荐）
+python -X utf8 ml/scripts/read_for_label.py --batch 009 --offset 0 --count 20
+
+# 快速预览（内容截断至 100 字）
 python -X utf8 ml/scripts/label_batches.py --batch 009 --count 20
-
-# 清洗后 batch
-python -X utf8 ml/scripts/label_batches.py --batch 001 --source cleaned --count 20
 ```
 
-### 第二步：泛用清洗（有脏数据时）
+### 第二步：全局水印清洗
 
-预览发现水印/时间戳/OCR 碎片/教学旁白时执行。
+所有 batch 已经过全局清洗。如需重新执行：
 
 ```bash
-# 清洗窗口（只影响 --offset 开始的 --count 条）
-python -X utf8 ml/scripts/clean_batch.py --batch 009 --count 20 --offset 40 --inplace
+# 预览影响
+python -X utf8 ml/scripts/clean_watermarks.py --dry-run
+
+# 查看具体差异
+python -X utf8 ml/scripts/clean_watermarks.py --diff --batch 009
+
+# 执行清洗
+python -X utf8 ml/scripts/clean_watermarks.py
 ```
 
-参数：
+### 第三步：特化清洗（残留脏数据时）
 
-| 参数 | 说明 |
-|------|------|
-| `--batch 009` | batch 编号 |
-| `--source cleaned` | 数据源（省略=原始 batches） |
-| `--count 20` | 操作条数 |
-| `--offset 40` | 起始偏移 |
-| `--inplace` | 写回原文件 |
-| `--prune "短语1,短语2"` | 特化清洗（见第三步） |
-
-### 第三步：特化清洗（残留教学标签时）
-
-泛用清洗后如果还有教学标签（"展示价值"、"测试窗口"等），用 `--prune` 指定短语行内删除。
+全局清洗后如果还有残留子串（如教学标签、特定 OCR 碎片），用 `clean_subset.py` 进行行内清洗。
 
 ```bash
-python -X utf8 ml/scripts/clean_batch.py --batch 009 --count 20 --offset 40 --prune "展示价值,测试窗口,操盘手" --inplace
-```
+# 从未标注列表第 40 条开始，移除子串
+python -X utf8 ml/scripts/clean_subset.py --batch 009 --offset 40 --count 20 --remove "某文本"
 
-`--prune` 不会删整行，只删除匹配的短语本身，保留对话内容。
+# 删除包含某文本的行
+python -X utf8 ml/scripts/clean_subset.py --batch 009 --offset 40 --count 20 --drop-line "残留文本"
+
+# 删除整条消息
+python -X utf8 ml/scripts/clean_subset.py --batch 009 --offset 40 --count 20 --drop-msg "完全匹配的消息"
+```
 
 ### 第四步：标注
 
@@ -72,11 +76,11 @@ python -X utf8 ml/scripts/clean_batch.py --batch 009 --count 20 --offset 40 --pr
 # 单条
 python -X utf8 ml/scripts/label_batches.py --batch 009 --submit "7|8|6|1|5|5|3|7|6|1"
 
-# 放弃（质量太差无法判断时）
-python -X utf8 ml/scripts/label_batches.py --batch 009 --submit "-1"
+# 放弃（质量太差无法判断时，必须写明理由）
+python -X utf8 ml/scripts/label_batches.py --batch 009 --submit "-1:乱码过多无法标注"
 
 # 批量
-python -X utf8 ml/scripts/label_batches.py --batch 009 --submit "7|8|6|1|5|5|3|7|6|1" "3|8|1|6|0|1|2|0|5|1" "-1"
+python -X utf8 ml/scripts/label_batches.py --batch 009 --submit "7|8|6|1|5|5|3|7|6|1" "3|8|1|6|0|1|2|0|5|1"
 ```
 
 #### ⚠️ 自动校验
@@ -121,6 +125,7 @@ python -X utf8 ml/scripts/label_batches.py --progress
 - **标 -1 只应在数据确实无法标注时使用**，不要因为嫌麻烦就放弃
 - 分数应该多样化：同一个人的对话在不同轮次有不同行为
 - **如果连续多条分数完全一样**，说明没有认真看数据
+- 水印清洗后可能产生少量空消息（原"按住说话"行），这些空行不影响整体判断
 
 ---
 
@@ -128,10 +133,7 @@ python -X utf8 ml/scripts/label_batches.py --progress
 
 ```
 原始 batches（batch_009 → batch_014 逐个标注）
-  └── 每个 batch：预览 → 清洗 → 标注 → 下一批
-
-清洗后 rerun（batch_001 → batch_009 逐个标注）
-  └── 每个 batch 约 100~900 条
+  └── 每个 batch：预览 → 全局清洗(已完成) → 特化清洗 → 标注 → 下一批
 ```
 
-每个 branch 只处理一个 batch，标注 1000 条后换下一个 branch，避免混淆。
+每个 batch 标注 1000 条后换下一个 batch，避免混淆。

@@ -23,7 +23,7 @@
   # 查看某批的标注结果统计
   python ml/scripts/label_batches.py --batch 001 --stats
 
-标注文件: data/ml_dataset/annotations_XXX.jsonl
+标注文件: ml/dataset/annotations/annotations_XXX.jsonl
 """
 from __future__ import annotations
 
@@ -33,10 +33,6 @@ from pathlib import Path
 from collections import Counter
 
 BATCHES_DIR = Path(__file__).resolve().parent.parent / "dataset" / "batches"
-CLEANED_DIR = BATCHES_DIR / "rerun" / "cleaned"
-
-def resolve_batch_dir(source: str = "original") -> Path:
-    return CLEANED_DIR if source == "cleaned" else BATCHES_DIR
 LABELS = [
     "information_exchange",
     "opinion_expression",
@@ -52,7 +48,7 @@ LABELS = [
 
 
 def get_annotations_path(batch_num: str, suffix: str = "") -> Path:
-    base = Path(__file__).resolve().parent.parent.parent / "data" / "ml_dataset"
+    base = Path(__file__).resolve().parent.parent.parent / "ml" / "dataset" / "annotations"
     tag = f"_{suffix}" if suffix else ""
     return base / f"annotations_{batch_num}{tag}.jsonl"
 
@@ -87,11 +83,11 @@ def find_next_n(samples: list[dict], done: set[str], n: int) -> list[dict]:
 
 
 def display_sample(sample: dict, index: int) -> None:
-    print(f"--- {index}. {sample['sample_id']} ---")
+    turn_count = sample.get("turn_count", len(sample["messages"]) // 2)
+    print(f"--- {index}. {sample['sample_id']} ({turn_count}轮, {len(sample['messages'])}条) ---")
     for msg in sample["messages"]:
         role = "我" if msg["role"] == "me" else "她"
-        content = msg["content"].replace("\n", " ")[:100]
-        print(f"[{role}] {content}")
+        print(f"  [{role}] {msg['content']}")
     print()
 
 
@@ -261,28 +257,18 @@ def main() -> None:
 
     if "--batch" not in sys.argv or len(sys.argv) < 3:
         print("用法:")
-        print("  查看样本: python label_batches.py --batch 001 [--count N] [--source cleaned]")
+        print("  查看样本: python label_batches.py --batch 001 [--count N]")
         print("  提交单条: python label_batches.py --batch 001 --submit \"分数\"")
         print("  放弃样本: python label_batches.py --batch 001 --submit \"-1:理由\"")
         print("  批量提交: python label_batches.py --batch 001 --submit \"分数1\" \"分数2\" ...")
         print("  进度统计: python label_batches.py --progress")
         print("  批次统计: python label_batches.py --batch 001 --stats")
-        print("  数据源: python label_batches.py --batch 001 --source cleaned --count 10")
         sys.exit(1)
 
     idx = sys.argv.index("--batch")
     batch_num = sys.argv[idx + 1]
 
-    # --source cleaned 指向 rerun/cleaned/，省略则用原目录
-    source = "original"
-    if "--source" in sys.argv:
-        src_idx = sys.argv.index("--source")
-        source = sys.argv[src_idx + 1]
-    source_dir = resolve_batch_dir(source)
-    # cleaned 源使用独立的标注文件 annotations_XXX_rerun.jsonl
-    ann_suffix = "rerun" if source == "cleaned" else ""
-
-    batch_path = source_dir / f"batch_{batch_num}.jsonl"
+    batch_path = BATCHES_DIR / f"batch_{batch_num}.jsonl"
     if not batch_path.exists():
         print(f"错误：找不到批次文件 {batch_path}")
         sys.exit(1)
@@ -292,12 +278,12 @@ def main() -> None:
         return
 
     samples = load_jsonl(batch_path)
-    done = annotated_sample_ids(batch_num, ann_suffix)
+    done = annotated_sample_ids(batch_num)
     remaining = sum(1 for s in samples if s["sample_id"] not in done)
 
     if "--submit" in sys.argv:
         submit_idx = sys.argv.index("--submit")
-        score_args = sys.argv[submit_idx + 1:]
+        score_args = [a for a in sys.argv[submit_idx + 1:] if not a.startswith("--")]
         if not score_args:
             print("错误：--submit 后需要提供分数")
             sys.exit(1)
@@ -309,16 +295,16 @@ def main() -> None:
 
         for sample, arg in zip(batch, score_args):
             scores, discard_reason = parse_scores(arg)
-            append_annotation(sample["sample_id"], sample["contact_wxid"], scores, batch_num, ann_suffix, discard_reason)
+            append_annotation(sample["sample_id"], sample["contact_wxid"], scores, batch_num, discard_reason=discard_reason)
             status = "弃" if scores is None else "OK"
             detail = f" - {discard_reason}" if discard_reason else ""
             print(f"[{status}] {sample['sample_id']}: {arg}{detail}")
 
-        new_done = len(done) + len(batch)
-        total = sum(len(load_jsonl(source_dir / f"batch_{b}.jsonl")) for b in get_all_batches(source_dir))
-        print(f"\n进度: {new_done}/{total} ({new_done / total * 100:.1f}%)")
+        batch_total = len(samples)
+        batch_done = len(done) + len(batch)
+        print(f"\nbatch_{batch_num} 进度: {batch_done}/{batch_total} ({batch_done / batch_total * 100:.1f}%)")
 
-        check_templating(batch_num, ann_suffix)
+        check_templating(batch_num)
         return
 
     count = 1

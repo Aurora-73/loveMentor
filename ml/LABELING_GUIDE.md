@@ -384,43 +384,37 @@
 
 ## 七、标注工具
 
-使用 `ml/scripts/label.py` 管理标注流程，标注结果写入 `ml/dataset/annotations_phase2.jsonl`。
+使用 `ml/scripts/label_batches.py` 管理标注流程，标注结果写入 `ml/dataset/annotations/annotations_XXX.jsonl`（XXX 为批次号）。
 
-### 查看下一个样本
+### 预览未标注样本
 
 ```bash
-python -X utf8 ml/scripts/label.py
-```
+# 完整内容预览
+python -X utf8 ml/scripts/read_for_label.py --batch 004 --offset 0 --count 20
 
-只显示对话内容（[我]/[她] 标注），不显示元信息。
+# 快速预览（内容截断至 100 字）
+python -X utf8 ml/scripts/label_batches.py --batch 004 --count 20
+```
 
 ### 提交标注
 
 ```bash
-python -X utf8 ml/scripts/label.py "3|8|1|6|0|1|2|0|5|1"
+# 单条
+python -X utf8 ml/scripts/label_batches.py --batch 004 --submit "3|8|1|6|0|1|2|0|5|1"
+
+# 批量
+python -X utf8 ml/scripts/label_batches.py --batch 004 --submit "7|8|6|1|5|5|3|7|6|1" "3|8|1|6|0|1|2|0|5|1"
+
+# 放弃（必须写明理由）
+python -X utf8 ml/scripts/label_batches.py --batch 004 --submit "-1:乱码过多"
 ```
 
 参数为 10 个 0-9 整数，用 `|` 分隔，顺序与上表一致。**Bash 下需加引号**，否则 `|` 会被解释为管道符。
 
-### 输出 JSON 格式
+### 查看进度
 
-```json
-{
-  "sample_id": "s_000170",
-  "contact_wxid": "wxid_xxx",
-  "labels": {
-    "information_exchange": 7,
-    "opinion_expression": 8,
-    "emotion_positive": 6,
-    "emotion_negative": 1,
-    "flirt": 5,
-    "question_asking": 5,
-    "self_disclosure": 3,
-    "invitation": 8,
-    "framing_boundary": 7,
-    "perfunctory": 1
-  }
-}
+```bash
+python -X utf8 ml/scripts/label_batches.py --progress
 ```
 
 ### 输出 JSON 格式

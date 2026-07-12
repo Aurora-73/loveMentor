@@ -32,7 +32,7 @@ import sys
 from pathlib import Path
 
 BATCHES_DIR = Path(__file__).resolve().parent.parent / "dataset" / "batches"
-ANNOTATIONS_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "ml_dataset"
+ANNOTATIONS_DIR = Path(__file__).resolve().parent.parent / "dataset" / "annotations"
 
 
 def load_jsonl(path: Path) -> list[dict]:
@@ -57,6 +57,29 @@ def clean_content(content: str, remove: list[str], drop_line: list[str]) -> str:
     return content.strip()
 
 
+def clean_sample(sample: dict, remove: list[str], drop_msg: list[str], drop_line: list[str]) -> dict:
+    """对单个样本执行清洗，返回清洗后的样本。"""
+    valid = []
+    for m in sample["messages"]:
+        content = m["content"]
+        if content.strip() in drop_msg:
+            continue
+        content = clean_content(content, remove, drop_line)
+        if content:
+            valid.append({
+                "role": m["role"],
+                "content": content,
+                "timestamp": m.get("timestamp", 0),
+            })
+    return {
+        "sample_id": sample["sample_id"],
+        "contact_wxid": sample.get("contact_wxid", ""),
+        "contact_remark": sample.get("contact_remark", ""),
+        "turn_count": len(valid) // 2,
+        "messages": valid,
+    }
+
+
 def main() -> None:
     import argparse
     parser = argparse.ArgumentParser(description="对样本子集进行字符串级原地清洗")
@@ -66,6 +89,7 @@ def main() -> None:
     parser.add_argument("--remove", action="append", default=[], help="从内容中移除精确子串")
     parser.add_argument("--drop-msg", action="append", default=[], help="删除内容完全匹配的消息")
     parser.add_argument("--drop-line", action="append", default=[], help="删除包含此文本的行")
+    parser.add_argument("--dry-run", action="store_true", help="预览模式（不修改文件）")
     args = parser.parse_args()
 
     if not args.remove and not args.drop_msg and not args.drop_line:
@@ -91,43 +115,33 @@ def main() -> None:
         print(f"错误：offset={args.offset} 超出未标注样本范围 (共 {len(unlabeled_indices)} 个)")
         sys.exit(1)
 
-    # 清洗
+    # 清洗（使用 clean_sample() 统一逻辑）
     total_msgs_before = 0
     total_msgs_after = 0
-    drop_msg_set = [t.strip() for t in args.drop_msg]
 
     for idx in target_indices:
-        s = all_samples[idx]
-        total_msgs_before += len(s["messages"])
+        cleaned = clean_sample(all_samples[idx], args.remove, args.drop_msg, args.drop_line)
+        before = len(all_samples[idx]["messages"])
+        after = len(cleaned["messages"])
+        total_msgs_before += before
+        total_msgs_after += after
 
-        valid = []
-        for m in s["messages"]:
-            content = m["content"]
-            if content.strip() in drop_msg_set:
-                continue
-            content = clean_content(content, args.remove, args.drop_line)
-            if content:
-                valid.append({
-                    "role": m["role"],
-                    "content": content,
-                    "timestamp": m.get("timestamp", 0),
-                })
+        if args.dry_run:
+            removed = before - after
+            if removed > 0:
+                print(f"  {all_samples[idx]['sample_id']}: {before} → {after} 条消息 (-{removed})")
+            else:
+                print(f"  {all_samples[idx]['sample_id']}: 无变化 ({before} 条)")
+        else:
+            all_samples[idx] = cleaned
 
-        all_samples[idx] = {
-            "sample_id": s["sample_id"],
-            "contact_wxid": s.get("contact_wxid", ""),
-            "contact_remark": s.get("contact_remark", ""),
-            "turn_count": len(valid),
-            "messages": valid,
-        }
-        total_msgs_after += len(valid)
+    if not args.dry_run:
+        with open(batch_path, "w", encoding="utf-8") as f:
+            for s in all_samples:
+                f.write(json.dumps(s, ensure_ascii=False) + "\n")
 
-    # 原地写回
-    with open(batch_path, "w", encoding="utf-8") as f:
-        for s in all_samples:
-            f.write(json.dumps(s, ensure_ascii=False) + "\n")
-
-    print(f"清洗完成: {len(target_indices)} 个样本, {total_msgs_before} → {total_msgs_after} 条消息 (原地: {batch_path})")
+    mode = " (预览模式，未修改文件)" if args.dry_run else f" (原地: {batch_path})"
+    print(f"清洗完成: {len(target_indices)} 个样本, {total_msgs_before} → {total_msgs_after} 条消息{mode}")
 
 
 if __name__ == "__main__":

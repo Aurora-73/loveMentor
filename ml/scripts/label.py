@@ -1,4 +1,12 @@
 #!/usr/bin/env python3
+"""
+⚠️ 已弃用 — 由 label_batches.py 替代。
+
+保留用于参考，标注新数据请使用:
+  python ml/scripts/label_batches.py --batch XXX --submit "分数"
+
+"""
+
 """对话行为标注脚本 — 批量标注 samples_phase0.jsonl。
 
 用法:

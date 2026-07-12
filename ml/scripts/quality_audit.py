@@ -6,7 +6,7 @@
   python ml/scripts/quality_audit.py
 
   # 方法 A + B（模型偏差验证，需先跑 batch_predict.py）
-  python ml/scripts/quality_audit.py --predictions data/ml_dataset/predictions.jsonl
+  python ml/scripts/quality_audit.py --predictions ml/dataset/annotations/predictions.jsonl
 
   # 输出到文件
   python ml/scripts/quality_audit.py --output quality_report.json
@@ -33,7 +33,7 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 BATCHES_DIR = PROJECT_ROOT / "ml" / "dataset" / "batches"
 CLEANED_DIR = BATCHES_DIR / "rerun" / "cleaned"
-ANN_DIR = PROJECT_ROOT / "data" / "ml_dataset"
+ANN_DIR = PROJECT_ROOT / "ml" / "dataset" / "annotations"
 
 LABELS = [
     "information_exchange", "opinion_expression", "emotion_positive",
@@ -639,14 +639,20 @@ def main():
         print("执行修复模式")
         print(f"{'=' * 80}")
 
-        # 找到每个 batch 对应的 annotation 文件
+        # 找到每个 batch 对应的 annotation 文件（按文件名约定映射）
         ann_file_for_batch = {}
-        for apath in get_annotation_files():
-            for ann in load_jsonl(apath):
-                sid = ann["sample_id"]
-                for bnum, batch_samples in samples.items():
-                    if any(s["sample_id"] == sid for s in batch_samples):
-                        ann_file_for_batch[bnum] = apath
+        for bnum in samples.keys():
+            candidate = ANN_DIR / f"annotations_{bnum}.jsonl"
+            if candidate.exists():
+                ann_file_for_batch[bnum] = candidate
+            else:
+                # fallback: 扫描所有文件找第一个包含该 batch 样本的
+                for apath in get_annotation_files():
+                    for ann in load_jsonl(apath):
+                        if ann["sample_id"] in {s["sample_id"] for s in samples[bnum]}:
+                            ann_file_for_batch[bnum] = apath
+                            break
+                    if bnum in ann_file_for_batch:
                         break
 
         total_moved = 0

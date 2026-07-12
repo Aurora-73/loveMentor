@@ -1,0 +1,14 @@
+# 缓存
+__pycache__/
+*.pyc
+
+# 脚本（在主仓库中）
+*.py
+
+# 旧清洗产物
+batches/rerun/
+
+# 生成训练集（可从 batch 文件 + annotations 重新生成）
+training_samples.jsonl
+training_annotations.jsonl
+training_config.json

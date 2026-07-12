@@ -89,10 +89,10 @@ text = "\n".join(m["content"] for m in messages)
 
 ## 五、训练数据
 
-- **来源：** `dataset/samples_phase0.jsonl`（315 个对话窗口，20 条消息/窗口）
+- **来源：** `ml/dataset/batches/batch_*.jsonl`（约 14000 个对话窗口，20 条消息/窗口）
 - **标注：** Claude Code 手动标注（2026-07-10），使用上述 0-9 标准
-- **标注文件：** `dataset/annotations_phase1.jsonl`
-- **训练集：** `dataset/training_set.jsonl`（315 条，含消息和标注）
+- **标注文件：** `ml/dataset/annotations/annotations_XXX.jsonl`（按 batch 分文件）
+- **训练集：** 由 `ml/scripts/train.py` 从标注文件动态构建
 
 ### 标签分布
 
@@ -141,24 +141,41 @@ text = "\n".join(m["content"] for m in messages)
 ```
 ml/
 ├── models/
-│   ├── macbert.onnx          # ONNX 模型（389 MB）
-│   ├── macbert_best.pt       # PyTorch 权重
-│   ├── labels.json           # 标签配置
-│   ├── config.json           # BERT 配置
-│   ├── vocab.txt             # 词表
-│   ├── tokenizer.json        # Tokenizer
-│   ├── tokenizer_config.json # Tokenizer 配置
-│   └── eval_report.json      # 评估报告
+│   ├── macbert.onnx              # ONNX 模型（389 MB）
+│   ├── macbert_best.pt           # PyTorch 权重
+│   ├── labels.json               # 标签配置
+│   ├── config.json               # BERT 配置
+│   ├── vocab.txt                 # 词表
+│   ├── tokenizer.json            # Tokenizer
+│   ├── tokenizer_config.json     # Tokenizer 配置
+│   └── eval_report.json          # 评估报告
 ├── dataset/
-│   ├── samples_phase0.jsonl      # 原始样本（315 条）
-│   ├── annotations_phase1.jsonl  # 标注结果（315 条，0-9）
-│   ├── training_set.jsonl        # 训练集
-│   ├── annotations_150_gold.jsonl # 其他 agent 标注（参考）
-│   └── annotations_50_gold.jsonl  # 其他 agent 标注（参考）
-└── scripts/
-    ├── phase1_annotate.py    # 标注脚本（已弃用，改手动）
-    ├── phase2_train.py       # 训练脚本
-    └── export_onnx.py        # ONNX 导出脚本
+│   ├── batches/                  # 原始 batch 文件（约 14000 条）
+│   │   ├── batch_001.jsonl
+│   │   ├── batch_002.jsonl
+│   │   ├── ...
+│   │   └── README.md
+│   └── annotations/              # 标注结果（按 batch 分文件）
+│       ├── annotations_001.jsonl
+│       ├── annotations_002.jsonl
+│       ├── ...
+│       └── predictions.jsonl     # 模型预测结果
+├── scripts/
+│   ├── label_batches.py          # 标注提交工具（当前使用）
+│   ├── clean_watermarks.py       # 全局水印清洗
+│   ├── clean_subset.py           # 特化清洗
+│   ├── read_for_label.py         # 未标注样本预览
+│   ├── batch_predict.py          # 批量推理
+│   ├── quality_audit.py          # 标注质量审计
+│   ├── phase2_train.py           # 训练脚本
+│   └── export_onnx.py            # ONNX 导出脚本
+├── rules/                        # 规则基线分类器
+│   ├── baseline_classifier.py
+│   └── lexicons/                 # YAML 词典
+├── LABELING_GUIDE.md             # 标注标准
+├── ANNOTATION_PROMPT.md          # LLM 标注指令
+├── ANNOTATION_GUIDE.md           # 标注工作流
+└── MODEL_USAGE.md                # 模型使用说明
 ```
 
 ---
