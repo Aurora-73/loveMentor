@@ -41,7 +41,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="读取未标注样本")
     parser.add_argument("--batch", required=True, help="批次号，如 001")
     parser.add_argument("--offset", type=int, default=0, help="从未标注列表起始的偏移")
-    parser.add_argument("--count", type=int, default=50, help="读取数量")
+    parser.add_argument("--count", type=int, default=20, help="读取数量")
     args = parser.parse_args()
 
     batch_path = BATCHES_DIR / f"batch_{args.batch}.jsonl"

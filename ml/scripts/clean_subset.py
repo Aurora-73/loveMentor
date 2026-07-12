@@ -62,7 +62,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="对样本子集进行字符串级原地清洗")
     parser.add_argument("--batch", required=True, help="批次号，如 001")
     parser.add_argument("--offset", type=int, default=0, help="从未标注列表起始的偏移")
-    parser.add_argument("--count", type=int, default=50, help="清洗数量")
+    parser.add_argument("--count", type=int, default=20, help="清洗数量")
     parser.add_argument("--remove", action="append", default=[], help="从内容中移除精确子串")
     parser.add_argument("--drop-msg", action="append", default=[], help="删除内容完全匹配的消息")
     parser.add_argument("--drop-line", action="append", default=[], help="删除包含此文本的行")
