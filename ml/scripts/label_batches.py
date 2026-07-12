@@ -11,11 +11,11 @@
   # 提交单条标注
   python ml/scripts/label_batches.py --batch 001 --submit "7|8|6|1|5|5|3|7|6|1"
 
-  # 放弃该样本（质量过低）
-  python ml/scripts/label_batches.py --batch 001 --submit "-1"
+  # 放弃该样本（必须写明理由）
+  python ml/scripts/label_batches.py --batch 001 --submit "-1:全是水印"
 
   # 批量提交多个标注（依次对应下一个未标注样本）
-  python ml/scripts/label_batches.py --batch 001 --submit "7|8|6|1|5|5|3|7|6|1" "3|8|1|6|0|1|2|0|5|1" "-1"
+  python ml/scripts/label_batches.py --batch 001 --submit "7|8|6|1|5|5|3|7|6|1" "3|8|1|6|0|1|2|0|5|1" "-1:旁白过多"
 
   # 查看标注进度
   python ml/scripts/label_batches.py --progress
@@ -95,14 +95,20 @@ def display_sample(sample: dict, index: int) -> None:
     print()
 
 
-def parse_scores(arg: str) -> list[int] | None:
-    """解析分数。返回 None 表示放弃该样本。"""
+def parse_scores(arg: str) -> tuple[list[int] | None, str]:
+    """解析分数。返回 (None, 理由) 表示放弃，(分数列表, "") 表示正常标注。"""
     arg = arg.strip()
-    if arg == "-1":
-        return None
+    if arg.startswith("-1"):
+        reason = ""
+        if ":" in arg:
+            reason = arg.split(":", 1)[1].strip()
+        if not reason:
+            print("错误：放弃样本必须写明理由，格式：-1:理由（如 -1:全是水印）")
+            sys.exit(1)
+        return None, reason
     parts = arg.split("|")
     if len(parts) != 10:
-        print(f"错误：需要 10 个分数或 -1（放弃），收到 {len(parts)} 个")
+        print(f"错误：需要 10 个分数或 -1:理由（放弃），收到 {len(parts)} 个")
         sys.exit(1)
     scores = []
     for i, p in enumerate(parts):
@@ -115,16 +121,18 @@ def parse_scores(arg: str) -> list[int] | None:
             print(f"错误：第 {i+1} 个值 {v} 不在 0-9 范围内")
             sys.exit(1)
         scores.append(v)
-    return scores
+    return scores, ""
 
 
-def append_annotation(sample_id: str, contact_wxid: str, scores: list[int] | None, batch_num: str, suffix: str = "") -> None:
+def append_annotation(sample_id: str, contact_wxid: str, scores: list[int] | None, batch_num: str, suffix: str = "", discard_reason: str = "") -> None:
     record = {
         "sample_id": sample_id,
         "contact_wxid": contact_wxid,
         "discard": scores is None,
         "labels": dict(zip(LABELS, scores)) if scores else {},
     }
+    if discard_reason:
+        record["discard_reason"] = discard_reason
     annotations_path = get_annotations_path(batch_num, suffix)
     annotations_path.parent.mkdir(parents=True, exist_ok=True)
     with open(annotations_path, "a", encoding="utf-8") as f:
@@ -224,6 +232,12 @@ def show_stats(batch_num: str, suffix: str = "") -> None:
     print(f"  正常: {ok_count}")
     print(f"  放弃: {discard_count}")
 
+    if discard_count > 0:
+        reasons = Counter(a.get("discard_reason", "未说明") for a in batch_anns if a.get("discard"))
+        print("  放弃理由:")
+        for reason, cnt in reasons.most_common():
+            print(f"    [{reason}] {cnt} 条")
+
     label_sums = Counter()
     label_counts = Counter()
     for ann in batch_anns:
@@ -249,7 +263,7 @@ def main() -> None:
         print("用法:")
         print("  查看样本: python label_batches.py --batch 001 [--count N] [--source cleaned]")
         print("  提交单条: python label_batches.py --batch 001 --submit \"分数\"")
-        print("  放弃样本: python label_batches.py --batch 001 --submit \"-1\"")
+        print("  放弃样本: python label_batches.py --batch 001 --submit \"-1:理由\"")
         print("  批量提交: python label_batches.py --batch 001 --submit \"分数1\" \"分数2\" ...")
         print("  进度统计: python label_batches.py --progress")
         print("  批次统计: python label_batches.py --batch 001 --stats")
@@ -294,10 +308,11 @@ def main() -> None:
             sys.exit(1)
 
         for sample, arg in zip(batch, score_args):
-            scores = parse_scores(arg)
-            append_annotation(sample["sample_id"], sample["contact_wxid"], scores, batch_num, ann_suffix)
-            status = "OK" if scores else "SKIP"
-            print(f"[{status}] {sample['sample_id']}: {arg}")
+            scores, discard_reason = parse_scores(arg)
+            append_annotation(sample["sample_id"], sample["contact_wxid"], scores, batch_num, ann_suffix, discard_reason)
+            status = "弃" if scores is None else "OK"
+            detail = f" - {discard_reason}" if discard_reason else ""
+            print(f"[{status}] {sample['sample_id']}: {arg}{detail}")
 
         new_done = len(done) + len(batch)
         total = sum(len(load_jsonl(source_dir / f"batch_{b}.jsonl")) for b in get_all_batches(source_dir))
@@ -322,7 +337,7 @@ def main() -> None:
         display_sample(sample, i)
     print(f"=== 批量结束 ===")
     print(f"提交: python label_batches.py --batch {batch_num} --submit \"分数\"")
-    print(f"放弃: python label_batches.py --batch {batch_num} --submit \"-1\"")
+    print(f"放弃: python label_batches.py --batch {batch_num} --submit \"-1:理由\"")
 
 
 if __name__ == "__main__":
