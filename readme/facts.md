@@ -66,16 +66,17 @@ created_at: 2026-01-15
 updated_at: 2026-06-12
 ---
 
-## notes
-- [2026-04-01] 她说喜欢猫
-- [2026-04-15] 在医院工作，白班很累
+## Notes
+- [2026-04-01 14:30] 她说喜欢猫
+- [2026-04-15 09:12] 在医院工作，白班很累
 
-## events
+## 关系时间线
 - [2026-04-10] DISCONNECT: 断联 10 天
 - [2026-04-20] RECONNECT: 恢复联系
 
-## dates
-- [2026-05-01] 湖边散步 | 评分: 4 | 备注: 气氛不错
+## Dates
+### 2026-05-01
+- 地点：湖边散步；评分：4/5
 
 ## evaluations
 - [2026-05-10] 回复变慢了，可能在忙
@@ -84,23 +85,35 @@ updated_at: 2026-06-12
 ### 关键函数
 
 ```python
-def get_person_archive_path(person: IdentityPerson) -> Path:
-    """生成档案文件路径。"""
+def get_person_archive_path(person: IdentityPerson, *, my_wxid: str = "") -> Path:
+    """生成档案文件路径。my_wxid 非空时，本人档案存到 facts/self/ 而非 facts/people/。"""
 
-def append_note(person: IdentityPerson, text: str) -> str:
-    """添加备注到 ## notes 段落。格式：- [日期] 内容"""
+def append_note(person: IdentityPerson, text: str, *, my_wxid: str = "") -> Path:
+    """添加备注到 ## Notes 段落。格式：- [YYYY-MM-DD HH:MM] 内容。返回写入路径。"""
 
-def append_event(person: IdentityPerson, text: str) -> str:
-    """添加事件到 ## events 段落。"""
+def append_event(
+    person: IdentityPerson, event_date: str, event_type: str, detail: str,
+    *, my_wxid: str = "",
+) -> tuple[Path, bool]:
+    """将事件写入 ## 关系时间线 段落。返回 (path, is_new)：is_new=False 表示重复跳过。"""
 
-def append_date_entry(person: IdentityPerson, date_str: str,
-                       location: str = "", rating: int = 0,
-                       notes: str = "") -> str:
-    """添加约会记录到 ## dates 段落。"""
+def append_date_entry(
+    person: IdentityPerson, *,
+    date_text: str | None, location: str | None, rating: int | None,
+    my_wxid: str = "",
+) -> Path:
+    """添加约会记录到 ## Dates 段落。"""
 
-def read_archive(person: IdentityPerson) -> dict:
-    """读取档案，返回 {frontmatter, notes, events, dates, evaluations, analysis}。"""
+def rename_person_archive(
+    person: IdentityPerson, new_display_name: str, *, my_wxid: str = "",
+) -> Path | None:
+    """重命名档案文件（display_name 变更时调用）。"""
+
+def ensure_people_archives_migrated(conn, my_wxid: str) -> None:
+    """从旧路径（data/wiki/people/）迁移档案到 data/facts/people/。"""
 ```
+
+> **注意**：`read_archive` 函数已不存在。读取档案由 `engine/agent/evidence.py` 中的 `agent_evidence` 直接读取文件内容实现。
 
 ### 段落管理
 
@@ -138,15 +151,19 @@ lessons:
 ### 关键函数
 
 ```python
-def save_failure(person: str, stage: str, signals: list[str],
-                 diagnosis: str, lessons: list[str]) -> Path:
-    """保存失败案例。"""
+def save_failure(case: FailureCase) -> Path:
+    """保存失败案例到 YAML 文件。返回文件路径。文件名：{date}_{person_slug}.yaml。"""
 
-def load_all_failures() -> list[dict]:
-    """加载所有失败案例。"""
+def load_all_failures() -> list[FailureCase]:
+    """加载所有失败案例，返回 FailureCase 对象列表。"""
 
-def find_similar_failures(stage: str = "", signals: list[str] = None) -> list[dict]:
-    """查找相似失败案例（按 stage 子串或 signal 重叠匹配）。"""
+def find_similar_failures(
+    current_stage: str, current_signals: list[str] = None,
+) -> list[FailureCase]:
+    """查找相似失败案例（按 stage 子串或 signal 重叠匹配）。返回 FailureCase 对象列表。"""
+
+def format_failures(cases: list[FailureCase]) -> str:
+    """格式化失败案例列表为 Markdown。"""
 ```
 
 ## 数据流

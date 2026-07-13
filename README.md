@@ -124,22 +124,29 @@ emotion_balance   = emotion_positive / emotion_negative 计数比
 
 互动模式分类：`lover` / `provider` / `neutral`
 
-### 语义分析（Phase 0-2 完成）
+### 语义分析（Phase 0-2 完成 + B2 双模型部署）
 
-10 个可观测行为标签的检测系统已完成三阶段演进，共标注 **15,867 条对话窗口**（每条约 20 轮聊天）：
+10 个可观测行为标签的检测系统已完成三阶段演进，共标注 **13,675 条对话窗口**（清洗去重后），并部署 B0'/B2 双模型架构：
 
 | 阶段 | 内容 | 数据量 | 状态 |
 |------|------|--------|------|
 | Phase 0 | 规则 baseline（10 个 YAML 词典，kappa 0.885） | — | ✅ 完成 |
 | Phase 1a | 人工标注真实微信对话（来自 core.db 私聊窗口） | 2,099 条 | ✅ 完成 |
-| Phase 1b | 恋爱教学案例批量标注（Tinder/恋爱案例/PUA 教学等，按批次 1000 条/组） | 13,768 条 | ✅ 完成 |
-| Phase 2 | MacBERT 训练 + ONNX 部署 + Layer 2 融合 | 15,867 条 | ✅ 完成 |
+| Phase 1b | 恋爱教学案例批量标注（Tinder/恋爱案例/PUA 教学等，按批次 1000 条/组） | 14,000 条原始 | ✅ 完成 |
+| Phase 2 | MacBERT 训练 + ONNX 部署 + Layer 2 融合 | 13,675 条（去重后） | ✅ 完成 |
+| B2 部署 | B0'/B2 双模型并行架构，behaviors() 默认 model="b2" | — | ✅ 完成 |
 
-**数据来源**：2,099 条来自用户真实微信聊天（core.db 私聊窗口），13,768 条来自恋爱教学案例库（完整聊天记录、100 套真实聊天案例、老吴越级狙击系列等 4000+ 文件清洗得到）。
+**数据来源**：2,083 条来自用户真实微信聊天（core.db 私聊窗口），11,592 条来自恋爱教学案例库（完整聊天记录、100 套真实聊天案例、老吴越级狙击系列等 4000+ 文件清洗得到，去重后）。
 
-**批量标注**：13,768 条外部数据分 14 批（每批 1000 条），使用 `ANNOTATION_PROMPT.md` 引导 LLM 标注，每条输出 10 个行为分数 + `quality_ok` 质量开关。低质量样本自动跳过。
+**批量标注**：14,000 条外部数据分 14 批（每批 1000 条），使用 `ANNOTATION_PROMPT.md` 引导 LLM 标注，每条输出 10 个行为分数 + `quality_ok` 质量开关。低质量样本自动跳过。去重后保留 11,592 条。
 
 **双参考机制**：`source="macbert"`（模型推理，慢但准确）和 `source="rule"`（词典匹配，快且可解释），两种结果可对比参考。
+
+**B2 双模型架构**：
+- **B0'**（roleless）：纯文本输入，生产基线/回退模型（`model="b0"`）
+- **B2**（role-aware）：含 `[TARGET]/[OTHER]` 角色前缀，默认生产模型（`model="b2"`）
+- `behaviors("姓名")` 默认走 B2 her-side，Agent 无感知切换
+- B2 me-side 只在 SELF/OTHER 对比分析中使用，不直接输出确定性结论
 
 **Layer 2 派生指标**：emotion_balance（情绪平衡）、interest_signal（兴趣信号）、friendzone_indicator（友谊区指标）、engagement_depth（互动深度）。
 
@@ -359,10 +366,13 @@ Conversation Window (20轮滑动窗口)
     ├────→ 人工标注 2099 条（Phase 1，✅ 完成）
     │       放弃 Qwen3，纯人工标注
     │
-    └────→ MacBERT 分类器（Phase 2，✅ 完成）
+    └────→ MacBERT ONNX 分类器（Phase 2 + B2 部署，✅ 完成）
             本地 1660Ti · ONNX 部署 · 双参考机制
                 │
-                ▼
+                ├─ B0' (roleless) ── 回退基线
+                └─ B2 (role-aware) ── 默认生产模型
+                     │
+                     ▼
     Layer 2 融合为关系指标 → 融入 composite → Agent
 ```
 
@@ -459,14 +469,16 @@ loveMentor/
 │   ├── tools_config.py             # 配置管理
 │   └── tests/                      # 集成测试
 │
-├── ml/                             # 语义分析（Phase 0-2 完成，15,867 条标注数据）
-│   ├── dataset/                    # 2099 条微信标注 + 13768 条外部数据（分 14 批）
-│   │   ├── samples_phase0.jsonl    # 微信对话样本（2099 条）
+├── ml/                             # 语义分析（Phase 0-2 + B2 部署完成，13,675 条标注数据）
+│   ├── dataset/                    # 2083 条微信标注 + 11592 条外部数据（去重后）
+│   │   ├── samples_phase0.jsonl    # 微信对话样本（2099 条原始）
 │   │   ├── batches/                # 外部数据批次（batch_001~014.jsonl，每批 1000 条）
-│   │   └── annotations_*.jsonl     # 标注结果
+│   │   └── annotations/            # 标注结果 + me_side_pilot_v1 候选集
 │   ├── lexicons/                   # 10 个 YAML 行为词典
-│   ├── rules/                      # 规则 baseline + MacBERT ONNX 推理
+│   ├── rules/                      # 规则 baseline + MacBERT ONNX 推理（B0'/B2 双实例）
 │   ├── models/                     # MacBERT 模型权重（.gitignored）
+│   │   ├── baseline_b0_prime/      #   B0' roleless 基线
+│   │   └── b2_role_balanced/       #   B2 role-aware 默认模型
 │   ├── evaluation/                 # 评估工具
 │   ├── scripts/                    # 标注/训练/推理/拆分脚本
 │   ├── LABELING_GUIDE.md           # 标注标准（10 个行为维度，0-9 评分）

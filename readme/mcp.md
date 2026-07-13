@@ -1,7 +1,7 @@
 # LoveMentor MCP 服务器
 
-> **状态**：已完工 — 50 个工具全部注册，全量验收通过，Claude Desktop / Claude Code 实测可用
-> **最后更新**：2026-07-02
+> **状态**：已完工 — 57 个工具全部注册，全量验收通过，Claude Desktop / Claude Code 实测可用
+> **最后更新**：2026-07-14（补充 wiki_context/weflow/config 工具到清单、更新分析工作流为 12 步、工具分类计数修正）
 
 ---
 
@@ -115,7 +115,7 @@ python -X utf8 -m mcp_server.server
 
 ---
 
-## 五、工具清单（50 个）
+## 五、工具清单（57 个）
 
 > **工具优先级**：Wiki 工具（`wiki_search`/`wiki_read`）是 Agent 推理的第一依据，方法论主轴；数据工具提供事实；公式工具仅作辅助参考视角。详见 `exchange/architecture/架构.md`。
 > **使用指南**：`guide` 工具提供 11 个主题的操作指南（分析流程/报告模板/方法论/权限规范等），Agent 不确定操作流程时调用。
@@ -133,21 +133,22 @@ python -X utf8 -m mcp_server.server
 | `person_note` | `name, content` | 添加人物备注到事实档案 | 写入 |
 | `person_date_record` | `name, date_text, location, rating` | 记录约会信息 | 写入 |
 
-### 5.2 Phase 2 P0 — 即时补齐（3 个）
+### 5.2 Phase 2 P0 — 即时补齐（4 个）
 
 | 工具名 | 说明 | 类型 |
 |--------|------|------|
-| `wiki_read` | **读取 Wiki 页面完整正文（Agent 推理的第一依据，方法论主轴）** | 只读 |
+| `wiki_read` | **读取 Wiki 页面完整正文（用于精确引用）** | 只读 |
+| `wiki_context` | **批量 Wiki 上下文检索（合并 wiki_search+wiki_read，分析工作流第二步核心工具）。接受最多 5 条查询，返回格式化知识框架** | 只读 |
 | `person_sync` | 增量同步单个人最新消息（几秒完成） | 写入 |
 | `person_save_analysis` | 保存分析结论，旧版本自动转为 previous | 写入 |
 
-### 5.3 Phase 2 P1 — 已实现工具（14 个）
+### 5.3 Phase 2 P1 — 已实现工具（16 个）
 
-**只读（8 个）：**
-`person_timeline`、`person_signals`、`person_evidence`、`person_stage`、`person_compare`、`weekly_report`、`person_moments_stats`、`maintain_list`
+**只读（11 个）：**
+`person_timeline`、`person_signals`、`person_evidence`、`person_stage`、`person_compare`、`weekly_report`、`person_moments_stats`、`maintain_list`、`events_scan`（只读检测）、`wcd_status`（WCD 后端状态检测）、`weflow_status`（WeFlow 后端状态检测）
 
 **写入（5 个）：**
-`events_scan`（只读检测）、`events_save`（检测写入）、`person_evaluate`（追加写入）、`system_sync`（全量/增量同步）、`wcd_status`（只读状态检测）、`wcd_start`（启动 WCD 后端进程）
+`events_save`（检测写入）、`person_evaluate`（追加写入）、`system_sync`（全量/增量同步）、`wcd_start`（启动 WCD 后端进程）、`weflow_start`（启动 WeFlow 后端进程）
 
 ### 5.4 Phase 2 P2 — 拆分工具（15 个）
 
@@ -177,7 +178,16 @@ python -X utf8 -m mcp_server.server
 |--------|------|------|------|
 | `guide` | `topic` | 获取使用指南和工作流文档。11 个主题：getting-started / workflow/analysis / report-template / methodology / rules/evidence / rules/permissions / rules/reply / workflow/maintain / reference/sync / reference/formula / reference/stickers。支持中文别名 | 只读 |
 
-### 5.7 永不暴露
+### 5.7 配置与导航工具（4 个）
+
+| 工具名 | 参数 | 说明 | 类型 |
+|--------|------|------|------|
+| `get_backend` | — | 查看当前数据后端配置（wcd/weflow） | 只读 |
+| `set_backend` | `backend, base_url, token` | 切换数据后端（wcd 或 weflow），写入 config.yaml 后即时生效 | 写入 |
+| `skill_map` | `tool_name` | 查询工具与 Skill 的双向映射，返回下一步建议（详见 §10.2） | 只读 |
+| `workflow_step` | `workflow, step` | 按步骤执行工作流，返回当前步骤详情和下一步指引（详见 §10.2） | 只读 |
+
+### 5.8 永不暴露
 
 | 函数 | 原因 |
 |------|------|
@@ -260,8 +270,8 @@ Layer 3: MCP 按需增量（person_sync，秒级完成）
 
 ### 验收结果
 
-- 50 个工具全部注册，全量验收测试通过
-- 工具分类：23 只读 + 18 写入 + 9 公式 = 50 个
+- 57 个工具全部注册（含 4 个配置与导航工具、2 个 WeFlow 后端工具）
+- 工具分类：29 只读 + 19 写入 + 9 公式 = 57 个
 - `fetch_keys` 安全隔离验证通过
 - 主项目 243 个单元测试通过 + 16 个 MCP 测试通过
 
@@ -303,28 +313,31 @@ Layer 3: MCP 按需增量（person_sync，秒级完成）
 
 | 工作流 | 名称 | 步骤数 | 适用场景 |
 |--------|------|--------|----------|
-| `analysis` | 人物分析完整流程 | 13 步 | "分析XX"、"帮我看看XX" |
+| `analysis` | 人物分析完整流程 | 12 步 | "分析XX"、"帮我看看XX" |
 | `emergency_reply` | 紧急回复流程 | 4 步 | "她发了XX怎么回" |
 | `weekly` | 周报流程 | 2 步 | "做周报" |
 | `maintain` | 维持关系流程 | 4 步 | "维持关系" |
 
 ### 10.4 分析工作流（analysis）详细步骤
 
+> 已合并 `wiki_search`+`wiki_read` 为 `wiki_context` 单步（传入多条查询一次返回格式化知识框架），流程从 13 步精简为 12 步。
+
 ```
-0: person_sync        → 同步最新消息
-1: person_brief       → 获取全局视图
-2: wiki_search        → 查阅知识库建立方法论框架
-3: wiki_read          → 读取 Wiki 页面全文
-4: person_chat        → 获取聊天记录
-5: person_metrics     → 获取指标数据
-6: person_signals     → 获取信号详情
-7: person_stage       → 关系阶段识别
-8: person_timeline    → 获取关系时间线
-9: person_evidence    → 查阅事实档案
-10: formula_get_params → 获取公式参数
-11: formula_calc_ivi   → 公式核验（辅助参考）
-12: save_from_markdown → 保存分析报告
+0:  person_sync         → 同步最新消息
+1:  person_brief        → 获取全局视图（含 recommended_wiki_queries）
+2:  wiki_context        → 构建 Wiki 知识框架（合并搜索+阅读，传入 brief 的 stage 和 recommended_wiki_queries）
+3:  person_chat         → 获取聊天记录
+4:  person_metrics      → 获取指标数据
+5:  person_signals      → 获取信号详情
+6:  person_stage        → 关系阶段识别
+7:  person_timeline     → 获取关系时间线
+8:  person_evidence     → 查阅事实档案
+9:  formula_get_params  → 获取公式参数
+10: formula_calc_ivi    → 公式核验（辅助参考）
+11: save_from_markdown  → 保存分析报告
 ```
+
+> `wiki_search`/`wiki_read` 仍保留为独立工具，用于钻取单个页面或精确引用；但作为工作流主路径已由 `wiki_context` 替代。
 
 ### 10.5 双向索引数据源
 
@@ -363,13 +376,15 @@ skill_map('person_brief')        # 查 person_brief 之后能调什么
 
 ### 10.7 工具描述增强
 
-所有核心工具的 description 中嵌入了下一步建议：
+所有核心工具的 description 中嵌入了下一步建议（与 `mcp_index.yaml` 的 `next_step` 一致）：
 
 | 工具 | 下一步建议 |
 |------|-----------|
-| `person_sync` | 调 `person_brief` 获取全局视图 |
-| `person_brief` | 看到信号后立即调 `wiki_search` |
-| `person_chat` | 看到聊天模式后调 `wiki_search` |
-| `person_metrics` | 看到数值后调 `wiki_search` |
-| `wiki_search` | 找到条目后用 `wiki_read` 读全文 |
-| `formula_get_params` | 接下来代入公式计算 |
+| `person_sync` | 调 `person_brief` 获取全局视图（含 `recommended_wiki_queries`） |
+| `person_brief` | 看到信号后立即调 `wiki_context` 构建知识框架 |
+| `person_chat` | 看到聊天模式后调 `wiki_context` 查策略 |
+| `person_metrics` | 看到数值后调 `wiki_context` 解读含义 |
+| `wiki_context` | 构建框架后回到 `person_chat`/`person_metrics`/`person_signals` 深入分析 |
+| `wiki_search` | 精确钻取单条目；建框架请用 `wiki_context` |
+| `wiki_read` | 读单页全文用于精确引用；批量建框架请用 `wiki_context` |
+| `formula_get_params` | 接下来代入 `formula_calc_ivi`/`spe`/`ews` 核验 |

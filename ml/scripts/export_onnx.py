@@ -39,6 +39,8 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(str(model_dir))
     # 模型架构从 HF 加载，然后用 fine-tuned 权重覆盖
     model = MacBERTRegressor(model_name="/home2/cme_code/convert/hf_cache/hfl_chinese-macbert-base")
+    # 确保 embedding 与 tokenizer 一致（训练时添加了 [TARGET]/[OTHER] 特殊 token）
+    model.bert.resize_token_embeddings(len(tokenizer))
     state_dict = torch.load(model_dir / "macbert_best.pt", map_location="cpu", weights_only=True)
     model.load_state_dict(state_dict)
     model.eval()
@@ -68,9 +70,23 @@ def main():
     with open(model_dir / "labels.json", "w", encoding="utf-8") as f:
         json.dump(label_config, f, ensure_ascii=False, indent=2)
 
+    # 保存模型元信息——从 tokenizer 自动判断是否 role-aware
+    has_special = "[TARGET]" in (tokenizer.additional_special_tokens or [])
+    metadata = {
+        "schema_version": "target_other_v1" if has_special else "roleless_v0",
+        "input_format": "target_other_v1" if has_special else "roleless (纯文本)",
+        "special_tokens": ["[TARGET]", "[OTHER]"] if has_special else [],
+        "labels": LABELS,
+        "num_labels": len(LABELS),
+        "value_range": "0-1 (normalized in ONNX, multiply by 9.0 for 0-9 scores)",
+    }
+    with open(model_dir / "model_metadata.json", "w", encoding="utf-8") as f:
+        json.dump(metadata, f, ensure_ascii=False, indent=2)
+
     tokenizer.save_pretrained(str(model_dir))
     print(f"ONNX exported: {output_path}")
     print(f"Labels saved: {model_dir / 'labels.json'}")
+    print(f"Metadata saved: {model_dir / 'model_metadata.json'}")
 
 
 if __name__ == "__main__":

@@ -61,14 +61,15 @@ class WikiIndex:
 ```python
 @dataclass
 class WikiPage:
-    title: str           # "IOI（兴趣指标）"
-    path: str            # "docs/wiki/wiki/entities/IOI（兴趣指标）.md"
-    page_type: str       # "entity" / "scenario" / "comparison" / "query"
-    tags: list[str]
-    keywords: list[str]
-    stages: list[str]
-    skills: list[str]
-    description: str
+    id: str                    # 页面唯一标识
+    title: str                 # "IOI（兴趣指标）"
+    path: str                  # 相对 Wiki 根目录的路径
+    page_type: str             # "entity" / "topic" / "synthesis" / "scenario"
+    summary: str               # 页面摘要
+    tags: list[str]            # frontmatter tags
+    keywords: list[str]        # frontmatter keywords
+    search_terms: list[str]    # 全文搜索词
+    scenarios: list[str]       # 适用场景
 ```
 
 ### 别名扩展
@@ -118,9 +119,13 @@ class WikiRetriever:
 class WikiSnippet:
     title: str
     path: str
-    content: str       # 裁剪后的内容
-    score: float       # 匹配分数
     page_type: str
+    summary: str              # 页面摘要
+    content: str              # 裁剪后的内容
+    tags: list[str]           # 页面标签
+    source_tier: list[str]    # 来源层级
+    confidence: str           # 置信度标注
+    score: float              # 匹配分数
 ```
 
 ## 格式化输出（wiki_context.py）

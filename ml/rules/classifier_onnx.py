@@ -1,7 +1,12 @@
 """ONNX-based behavior classifier — MacBERT ConversationBehaviorAnalyzer.
 
-Phase 2 部署产物：与 baseline_classifier.py 接口兼容，可作为双参考之一。
-模型只输出 10 个可观测行为标签的 0-9 分数（Layer 1），不做关系层推断。
+支持双模型：
+- B0'（默认，use_role_prefix=False）：roleless 纯文本输入，当前生产基线
+- B2（use_role_prefix=True）：target_other_v1 协议，带 [TARGET]/[OTHER] 前缀，角色感知
+
+输入协议：
+- use_role_prefix=False（B0'）：list[str] 或 list[dict]，提取 content 拼接
+- use_role_prefix=True（B2）：list[dict] 含 role + content，调用 format_behavior_input
 
 标签顺序（与 labels.json 一致）：
 1. information_exchange
@@ -43,27 +48,53 @@ LABELS = [
 class ONNXBehaviorClassifier:
     """MacBERT ONNX 推理器。
 
-    与 RuleClassifier 接口对齐：
-    - classify_window(messages) -> (labels_dict, scores_dict)
-
+    与 RuleClassifier 接口对齐：classify_window(messages) -> (labels_dict, scores_dict)
     模型输出值域 [0, 9]（ONNX 输出 sigmoid 后乘以 9.0）。
     binary 判定阈值默认 >= 3.0（较弱及以上算存在）。
+
+    双模型架构（通过 get_b0() / get_b2() 获取单例）：
+    - B0'（use_role_prefix=False）：纯文本输入，当前生产基线。
+      messages 可以是 list[str] 或 list[dict]（自动提取 content）。
+    - B2（use_role_prefix=True）：target_other_v1 协议。messages 必须含
+      role("me"/"her")+content，内部调用 format_behavior_input 添加 [TARGET]/[OTHER]。
     """
 
-    _instance: Optional["ONNXBehaviorClassifier"] = None
+    _b0_instance: Optional["ONNXBehaviorClassifier"] = None
+    _b2_instance: Optional["ONNXBehaviorClassifier"] = None
 
-    def __init__(self, model_dir: Path = MODEL_DIR, binary_threshold: float = 3.0):
+    def __init__(self, model_dir: Path = MODEL_DIR, binary_threshold: float = 3.0,
+                 use_role_prefix: bool = False):
         self.model_dir = Path(model_dir)
         self.binary_threshold = binary_threshold
+        self.use_role_prefix = use_role_prefix
         self._tokenizer = None
         self._session = None
         self._loaded = False
 
     @classmethod
     def get_instance(cls) -> "ONNXBehaviorClassifier":
-        if cls._instance is None:
-            cls._instance = cls()
-        return cls._instance
+        """(向后兼容) 等价于 get_b0()。"""
+        return cls.get_b0()
+
+    @classmethod
+    def get_b0(cls) -> "ONNXBehaviorClassifier":
+        """B0' roleless 模型（生产基线）。"""
+        if cls._b0_instance is None:
+            cls._b0_instance = cls(
+                model_dir=MODEL_DIR / "baseline_b0_prime",
+                use_role_prefix=False,
+            )
+        return cls._b0_instance
+
+    @classmethod
+    def get_b2(cls) -> "ONNXBehaviorClassifier":
+        """B2 角色感知模型。"""
+        if cls._b2_instance is None:
+            cls._b2_instance = cls(
+                model_dir=MODEL_DIR / "b2_role_balanced",
+                use_role_prefix=True,
+            )
+        return cls._b2_instance
 
     def _ensure_loaded(self):
         if self._loaded:
@@ -77,14 +108,57 @@ class ONNXBehaviorClassifier:
 
         self._tokenizer = AutoTokenizer.from_pretrained(str(self.model_dir))
         self._session = ort.InferenceSession(str(onnx_path))
-        self._loaded = True
-        logger.info("ONNXBehaviorClassifier 已加载: %s", onnx_path)
+        logger.info("ONNX 模型已加载: %s", onnx_path)
 
-    def predict_scores(self, messages: list[dict] | list[str]) -> dict[str, float]:
+        # 校验 model_metadata.json（校验通过后才标记 _loaded）
+        metadata_path = self.model_dir / "model_metadata.json"
+        if not metadata_path.exists():
+            logger.warning("model_metadata.json 不存在（跳过校验）: %s", metadata_path)
+            self._loaded = True
+            return
+        with open(metadata_path, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+
+        expected_schema = "target_other_v1" if self.use_role_prefix else "roleless_v0"
+        actual_schema = meta.get("schema_version", "")
+        if actual_schema != expected_schema:
+            self._loaded = False
+            self._session = None
+            self._tokenizer = None
+            raise RuntimeError(
+                f"模型 schema 不匹配: use_role_prefix={self.use_role_prefix} "
+                f"需要 '{expected_schema}' 但 model_metadata.json 为 '{actual_schema}' "
+                f"(模型目录: {self.model_dir})"
+            )
+
+        meta_labels = meta.get("labels", [])
+        if meta_labels and meta_labels != LABELS:
+            logger.warning(
+                "model_metadata.json labels 与代码 LABELS 不一致: "
+                "meta=%s, code=%s", meta_labels, LABELS
+            )
+
+        self._loaded = True
+        logger.info("model_metadata 校验通过: schema=%s, labels=%d", actual_schema, len(meta_labels))
+
+    def predict_scores(
+        self,
+        messages: list[dict] | list[str],
+        target_role: str = "her",
+    ) -> dict[str, float]:
         """对一组消息返回 10 个标签的 0-9 分数。
 
+        use_role_prefix=False（B0' 兼容模式）：
+            输入 list[str] 或 list[dict]，自动提取 content 做纯文本拼接。
+            不添加任何角色前缀。
+
+        use_role_prefix=True（B2 角色感知模式）：
+            输入 [{"role": "me"/"her", "content": "..."}, ...]，
+            调用 format_behavior_input 添加 [TARGET]/[OTHER] 前缀。
+
         Args:
-            messages: 消息列表，支持 [{"content": "..."}] 或 ["文本1", "文本2"]
+            messages: 消息列表（格式取决于 use_role_prefix）。
+            target_role: "her" 或 "me"。谁是 TARGET。仅在 role-aware 模式有效。
 
         Returns:
             {label_name: score_0_9, ...}
@@ -94,14 +168,15 @@ class ONNXBehaviorClassifier:
         if not messages:
             return {label: 0.0 for label in LABELS}
 
-        texts = []
-        for m in messages:
-            if isinstance(m, dict):
-                texts.append(m.get("content", ""))
-            else:
-                texts.append(str(m))
+        if self.use_role_prefix:
+            # B2 角色感知协议：必须含 role 字段
+            from ml.input_format import format_behavior_input
+            text = format_behavior_input(messages, target_role=target_role)  # type: ignore[arg-type]
+        else:
+            # B0' 纯文本兼容
+            texts = [str(m) if not isinstance(m, dict) else m.get("content", "") for m in messages]
+            text = "\n".join(texts)
 
-        text = "\n".join(texts)
         encoded = self._tokenizer(
             text,
             max_length=512,
@@ -117,15 +192,27 @@ class ONNXBehaviorClassifier:
 
         return {label: round(float(scores_raw[i]), 2) for i, label in enumerate(LABELS)}
 
-    def classify_window(self, messages: list[dict] | list[str]) -> tuple[dict[str, bool], dict[str, float]]:
+    def classify_window(
+        self,
+        messages: list[dict] | list[str],
+        target_role: str = "her",
+    ) -> tuple[dict[str, bool], dict[str, float]]:
         """与 RuleClassifier.classify_window 接口兼容。
+
+        输入格式由 self.use_role_prefix 决定：
+        - False（B0'）：自动提取 content，纯文本拼接
+        - True（B2）：调用 format_behavior_input 添加角色前缀
+
+        Args:
+            messages: 消息列表（同 predict_scores）。
+            target_role: 目标人物角色，仅在 role-aware 模式有效。
 
         Returns:
             (labels_pred, scores)
             - labels_pred: {label: bool}  分数 >= threshold 算存在
             - scores: {label: float}     0-9 分数
         """
-        scores = self.predict_scores(messages)
+        scores = self.predict_scores(messages, target_role=target_role)
         labels_pred = {label: score >= self.binary_threshold for label, score in scores.items()}
         return labels_pred, scores
 

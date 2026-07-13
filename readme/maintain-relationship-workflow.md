@@ -21,9 +21,10 @@ rank() → 筛选候选人 → metrics()/chat()/evidence() → 分析 → 输出
 | 条件 | 含义 |
 |------|------|
 | `recent > 3` | 最后消息超过 3 天前 |
-| `signal_level` 在"冷淡"及以上 | 有一定基础的关系 |
 | `trend < -0.005` | 周变化下降 |
 | 未被排除（非"非攻略对象"/"放弃"/"群友"） | 不是无关的人 |
+
+> 注：前置过滤已排除"无信号"等级，因此信号 1 可能包含"弱窗口"/"中窗口"/"强窗口"/"冷淡"任何非"无信号"等级。
 
 ### 信号 2：关系窗口但未推进
 
@@ -37,13 +38,12 @@ rank() → 筛选候选人 → metrics()/chat()/evidence() → 分析 → 输出
 
 | 条件 | 含义 |
 |------|------|
-| `qscore_personal > 0.5` | 她对你的 IOI 高 |
 | `neediness_penalty > 0.9` | 你投入正常（不是供养者） |
 | `recent > 2` | 你 2 天没联系 |
 
 ### 候选人数量控制
 
-每次最多输出 **3-5 人**，按优先级排序：
+工作流建议每次输出 **3-5 人**（手动调用时传 `max_people=5`），函数默认上限为 10。按优先级排序：
 1. 关系热度下降（信号 1）：优先级最高
 2. 关系窗口（信号 2）：次之
 3. 高潜力未投入（信号 3）：再次
@@ -143,7 +143,7 @@ Agent 根据数据判断：
 已实现两个工具函数（见 `engine/agent/maintain.py`）：
 
 ```python
-def maintain_candidates(max_people: int = 10) -> list[Candidate]:
+def maintain_candidates(max_people: int = 10) -> list[Candidate] | str:
     """筛选需要维持关系的候选人。
 
     逻辑：

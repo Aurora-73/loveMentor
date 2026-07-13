@@ -1,6 +1,6 @@
 """语义分析引擎 — Layer 2 关系解读融合。
 
-架构定位（见 plan/语义分析系统规划.md 2.2.5）：
+架构定位（见 readme/PROJECT.md #语义分析）：
     Layer 1: MacBERT/规则 → 10 个可观测行为标签（文本层面）
     Layer 2: 本模块 → 将观测结果融合为关系解读指标
 
@@ -179,13 +179,19 @@ def _query_recent_messages(
     return messages
 
 
-def _classify_window_onnx(window_turns: list[dict]) -> tuple[dict[str, float], dict[str, bool]]:
-    """用 MacBERT ONNX 对单个窗口做行为分析。"""
+def _classify_window_onnx(window_turns: list[dict], model: str = "b0",
+                           target_role: str = "her") -> tuple[dict[str, float], dict[str, bool]]:
+    """用 MacBERT ONNX 对单个窗口做行为分析。
+
+    Args:
+        window_turns: _build_turns 输出的窗口（含 role/content/ts 的 dict 列表）
+        model: "b0"（B0' roleless）| "b2"（B2 role-aware）
+        target_role: "her" | "me"。只在 model="b2" 时有效，B0' 忽略
+    """
     from ml.rules.classifier_onnx import ONNXBehaviorClassifier
 
-    clf = ONNXBehaviorClassifier.get_instance()
-    messages_content = [turn["content"] for turn in window_turns]
-    scores = clf.predict_scores(messages_content)
+    clf = ONNXBehaviorClassifier.get_b2() if model == "b2" else ONNXBehaviorClassifier.get_b0()
+    scores = clf.predict_scores(window_turns, target_role=target_role)
     labels = {label: score >= 3.0 for label, score in scores.items()}
     return scores, labels
 
@@ -269,6 +275,8 @@ def compute_semantic_metrics(
     *,
     window_days: int = 30,
     source: str = "macbert",
+    model: str = "b0",
+    target_role: str = "her",
 ) -> SemanticMetrics:
     """计算某人的语义指标。
 
@@ -278,6 +286,8 @@ def compute_semantic_metrics(
         person: 联系人
         window_days: 回溯天数
         source: 分析源 "macbert" | "rule" | "ensemble"
+        model: "b0"（B0' roleless）| "b2"（B2 role-aware）
+        target_role: "her" | "me"。B0' 忽略此参数
 
     Returns:
         SemanticMetrics
@@ -306,7 +316,7 @@ def compute_semantic_metrics(
         if source == "rule":
             scores, labels = _classify_window_rule(wt)
         else:
-            scores, labels = _classify_window_onnx(wt)
+            scores, labels = _classify_window_onnx(wt, model=model, target_role=target_role)
 
         windows.append(WindowBehavior(
             window_index=i,

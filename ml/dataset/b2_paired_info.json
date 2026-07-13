@@ -1,0 +1,45 @@
+{
+  "dataset": "b2_paired_train",
+  "description": "B2 成对监督训练数据 — 同一对话、双 target_role、双标签",
+  "source_her": "E:\\Code\\loveMentor\\ml\\dataset\\training_annotations.jsonl",
+  "source_me": "E:\\Code\\loveMentor\\ml\\dataset\\annotations\\annotations_meside_000.jsonl",
+  "total_paired_samples": 245,
+  "contacts": 124,
+  "total_records": 490,
+  "skipped": {
+    "canonical_val_contacts": 36,
+    "canonical_test_contacts": 28,
+    "missing_her_labels": 0
+  },
+  "label_means": {
+    "her": {
+      "information_exchange": 3.73,
+      "opinion_expression": 3.16,
+      "emotion_positive": 3.44,
+      "emotion_negative": 1.01,
+      "flirt": 4.27,
+      "question_asking": 3.48,
+      "self_disclosure": 3.14,
+      "invitation": 2.62,
+      "framing_boundary": 2.51,
+      "perfunctory": 1.24
+    },
+    "me": {
+      "information_exchange": 3.21,
+      "opinion_expression": 2.72,
+      "emotion_positive": 3.01,
+      "emotion_negative": 0.27,
+      "flirt": 3.88,
+      "question_asking": 2.32,
+      "self_disclosure": 2.83,
+      "invitation": 2.43,
+      "framing_boundary": 1.79,
+      "perfunctory": 1.13
+    }
+  },
+  "notes": [
+    "仅包含联系人属于 canonical train 的样本（不含 val/test 联系人，防止泄漏）",
+    "每条含一对记录：target_role='her' + her-side 标签 / target_role='me' + me-side 标签",
+    "训练时对同一 batch 随机选择 target_role，确保模型见到同一对话的双视角"
+  ]
+}

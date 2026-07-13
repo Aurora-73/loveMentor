@@ -503,7 +503,145 @@ def fetch_keys(wechat_install_path: str | None = None) -> str:
 
 # ── 语义行为分析（Layer 1 模型 + Layer 2 融合）──────────────────────
 
-def behaviors(name: str, *, window_days: int = 30, source: str = "macbert") -> str:
+def turn_stats(name: str, *, window_days: int = 30) -> str:
+    """互动轮次统计 — self/other 轮次分布、发起频率、回复延迟、会话分布。
+
+    基于 interaction_sequence.py 的 Turn/TurnPair 提取，纯描述性统计，
+    不含任何 ML 推断。输出 Markdown 供 Agent 直接读取分析。
+
+    Args:
+        name: 联系人名称
+        window_days: 回溯天数（默认30天）
+    """
+    from engine.analyzers.interaction_sequence import (
+        extract_turns, extract_turn_pairs, group_turns_by_session,
+    )
+    conn, config, person = _resolve(name)
+    try:
+        contact_wxid = next(
+            (acc.conversation_id or acc.wxid for acc in person.accounts
+             if acc.conversation_id or acc.wxid),
+            None,
+        )
+        if not contact_wxid:
+            return f"## {person.display_name} — 互动轮次统计\n\n未找到联系人 wxid。\n"
+
+        from datetime import datetime, timedelta
+        ref_date = datetime.now()
+        cutoff = int((ref_date - timedelta(days=window_days)).timestamp())
+
+        turns = extract_turns(conn, config.my_wxid, contact_wxid,
+                              window_days=window_days, ref_date=ref_date)
+        pairs = extract_turn_pairs(conn, config.my_wxid, contact_wxid,
+                                   window_days=window_days, ref_date=ref_date)
+        sessions = group_turns_by_session(turns)
+
+        if not turns:
+            return f"## {person.display_name} — 互动轮次统计\n\n{window_days} 天内无消息。\n"
+
+        # ── 基础统计 ──
+        self_turns = [t for t in turns if t.role == "self"]
+        other_turns = [t for t in turns if t.role == "other"]
+        total_turns = len(turns)
+        self_pct = len(self_turns) / total_turns * 100 if total_turns else 0
+
+        # 消息量
+        self_msgs = sum(t.raw_count for t in self_turns)
+        other_msgs = sum(t.raw_count for t in other_turns)
+
+        # 平均每条 turn 包含的消息数
+        self_msgs_per_turn = self_msgs / len(self_turns) if self_turns else 0
+        other_msgs_per_turn = other_msgs / len(other_turns) if other_turns else 0
+
+        # ── 会话发起 ──
+        session_starts_self = 0
+        session_starts_other = 0
+        for s in sessions:
+            if s and s[0].role == "self":
+                session_starts_self += 1
+            elif s:
+                session_starts_other += 1
+
+        # ── 回复延迟 ──
+        self_responses = [p for p in pairs
+                          if p.has_response and p.has_reliable_latency
+                          and p.response_role == "self"]
+        other_responses = [p for p in pairs
+                           if p.has_response and p.has_reliable_latency
+                           and p.response_role == "other"]
+
+        self_latency_avg = (sum(p.response_latency_sec for p in self_responses)
+                            / len(self_responses) if self_responses else None)
+        other_latency_avg = (sum(p.response_latency_sec for p in other_responses)
+                             / len(other_responses) if other_responses else None)
+
+        # 未响应 cue
+        missed_self_cues = [p for p in pairs
+                            if not p.has_response and p.cue_role == "self"]
+        missed_other_cues = [p for p in pairs
+                             if not p.has_response and p.cue_role == "other"]
+
+        def _fmt_sec(s: float) -> str:
+            if s < 60:
+                return f"{s:.0f}秒"
+            if s < 3600:
+                return f"{s / 60:.1f}分钟"
+            return f"{s / 3600:.1f}小时"
+
+        lines = [
+            f"## {person.display_name} — 互动轮次统计",
+            "",
+            f"> 数据窗口：最近 {window_days} 天 | {len(sessions)} 个会话 | {total_turns} 个轮次",
+            "",
+            "### 轮次分布",
+            f"| 角色 | 轮次数 | 占比 | 原始消息数 | 平均每条消息数 |",
+            f"|------|--------|------|-----------|---------------|",
+            f"| 我   | {len(self_turns)} | {self_pct:.0f}% | {self_msgs} | {self_msgs_per_turn:.1f} |",
+            f"| 对方 | {len(other_turns)} | {100-self_pct:.0f}% | {other_msgs} | {other_msgs_per_turn:.1f} |",
+            "",
+            "### 会话发起",
+            f"| 发起方 | 发起会话数 | 占比 |",
+            f"|--------|----------|------|",
+        ] + ([
+            f"| 我     | {session_starts_self} | {session_starts_self / len(sessions) * 100:.0f}% |",
+            f"| 对方   | {session_starts_other} | {session_starts_other / len(sessions) * 100:.0f}% |",
+        ] if sessions else [
+            "| 我     | 0 | 0% |",
+            "| 对方   | 0 | 0% |",
+        ]) + [
+            "",
+            "### 回复延迟（可审计的时间戳）",
+        ]
+
+        if self_responses:
+            lines.append(f"- **我回复对方**：{len(self_responses)} 次，平均 {_fmt_sec(self_latency_avg)}")
+        else:
+            lines.append("- **我回复对方**：无可靠数据")
+
+        if other_responses:
+            lines.append(f"- **对方回复我**：{len(other_responses)} 次，平均 {_fmt_sec(other_latency_avg)}")
+        else:
+            lines.append("- **对方回复我**：无可靠数据")
+
+        lines.append("")
+        lines.append("### 未响应轮次")
+        lines.append(
+            f"- 我未回复对方：{len(missed_self_cues)} 次（末尾 cue，会话未继续）"
+            if missed_self_cues else "- 我未回复对方：无"
+        )
+        lines.append(
+            f"- 对方未回复我：{len(missed_other_cues)} 次（末尾 cue，会话未继续）"
+            if missed_other_cues else "- 对方未回复我：无"
+        )
+
+        return "\n".join(lines)
+
+    finally:
+        conn.close()
+
+
+def behaviors(name: str, *, window_days: int = 30, source: str = "macbert",
+              model: str = "b2", target_role: str = "her") -> str:
     """语义行为分析报告 — 对话行为 10 维度 0-9 评分 + 派生指标。
 
     基于 MacBERT ONNX 模型（或规则 baseline）分析最近聊天记录，
@@ -513,27 +651,39 @@ def behaviors(name: str, *, window_days: int = 30, source: str = "macbert") -> s
         name: 联系人名称
         window_days: 回溯天数（默认30天）
         source: 分析源 "macbert"（默认）| "rule"（规则baseline）
+        model: "b2"（默认，B2 role-aware）| "b0"（B0' roleless 回退基线）
+        target_role: "her"（默认）| "me"。只在 model="b2" 时有效，B0' 忽略
     """
     from engine.analyzers.semantic import compute_semantic_metrics, format_semantic_report
     conn, config, person = _resolve(name)
     try:
         metrics = compute_semantic_metrics(conn, config, person,
-                                           window_days=window_days, source=source)
+                                           window_days=window_days, source=source,
+                                           model=model, target_role=target_role)
         return format_semantic_report(metrics, person.display_name)
     finally:
         conn.close()
 
 
-def behaviors_data(name: str, *, window_days: int = 30, source: str = "macbert") -> dict:
+def behaviors_data(name: str, *, window_days: int = 30, source: str = "macbert",
+                   model: str = "b2", target_role: str = "her") -> dict:
     """结构化语义行为分析 — 返回 dict 含行为分数和派生指标。
 
     与 behaviors() 的区别：返回结构化数据而非 Markdown，便于程序处理。
+
+    Args:
+        name: 联系人名称
+        window_days: 回溯天数（默认30天）
+        source: 分析源 "macbert"（默认）| "rule"（规则baseline）
+        model: "b2"（默认，B2 role-aware）| "b0"（B0' roleless 回退基线）
+        target_role: "her"（默认）| "me"。只在 model="b2" 时有效，B0' 忽略
     """
     from engine.analyzers.semantic import compute_semantic_metrics
     conn, config, person = _resolve(name)
     try:
         metrics = compute_semantic_metrics(conn, config, person,
-                                           window_days=window_days, source=source)
+                                           window_days=window_days, source=source,
+                                           model=model, target_role=target_role)
         return {
             "person_id": person.id,
             "display_name": person.display_name,
@@ -575,6 +725,8 @@ __all__ = [
     "brief_data", "chat_data", "message_context_data",
     "rank_data", "status_data", "wiki_search_data", "wiki_context_data",
     "timeline", "signals", "stage_data",
+    # 互动轮次统计
+    "turn_stats",
     # 语义行为分析
     "behaviors", "behaviors_data",
     # 写入

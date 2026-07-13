@@ -2,6 +2,12 @@
 """合并所有 batch 的样本和标注为统一训练集。
 输出到 ml/dataset/ 目录，A100 训练时通过 samba 直接读取。
 
+去重策略（不修改原始标注文件）：
+  原始标注文件（ml/dataset/annotations/annotations_*.jsonl）保留历史审计记录，
+  本脚本按 sample_id 去重：首次出现保留，后续重复跳过。
+  → training_samples.jsonl / training_annotations.jsonl 是唯一官方训练真源。
+  → 如需物理清理原始文件，脚本不负责，由审计工具另行处理。
+
 用法:
   # 输出到默认位置（ml/dataset/）
   python ml/scripts/prepare_training_data.py
@@ -24,6 +30,9 @@ LABELS = [
 
 BATCHES_DIR = Path(__file__).resolve().parent.parent / "dataset" / "batches"
 ANN_DIR = Path(__file__).resolve().parent.parent.parent / "ml" / "dataset" / "annotations"
+
+# 2099 原始洁净样本集（直接从微信数据库提取，无噪音）
+CLEAN_SAMPLES_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "ml_dataset" / "samples_phase0.jsonl"
 
 
 def load_jsonl(path: Path) -> list[dict]:
@@ -62,22 +71,43 @@ def main():
     for bpath in get_batch_paths():
         bnum = batch_num_from_path(bpath)
         for s in load_jsonl(bpath):
-            all_samples[s["sample_id"]] = s
-            sample_to_batch[s["sample_id"]] = bnum
+            sid = s["sample_id"]
+            if sid in all_samples:
+                print(f"⚠ 样本重复（仅保留首次）: batch_{bnum} → {sid}")
+            all_samples.setdefault(sid, s)
+            sample_to_batch.setdefault(sid, bnum)
 
-    # ── 加载所有标注（排除 discard）──
+    # ── 加载所有标注（排除 discard，去重）──
     all_annotations: list[dict] = []
+    seen_ann_ids: set[str] = set()
     ann_count = Counter()
     discard_count = Counter()
     for bpath in get_batch_paths():
         bnum = batch_num_from_path(bpath)
         apath = ANN_DIR / f"annotations_{bnum}.jsonl"
         for a in load_jsonl(apath):
+            sid = a["sample_id"]
             if a.get("discard") or not a.get("labels"):
                 discard_count[bnum] += 1
                 continue
+            if sid in seen_ann_ids:
+                print(f"⚠ 标注重复（仅保留首次）: batch_{bnum} → {sid}")
+                continue
+            seen_ann_ids.add(sid)
             all_annotations.append(a)
             ann_count[bnum] += 1
+
+    # ── 校验：annotation 必须对应有效样本 ──
+    missing_samples = [a["sample_id"] for a in all_annotations if a["sample_id"] not in all_samples]
+    if missing_samples:
+        print(f"错误: {len(missing_samples)} 条标注无对应样本（如: {missing_samples[:3]}）")
+        return
+
+    # ── 校验：无标注的样本（仅警告）──
+    annotated_ids = {a["sample_id"] for a in all_annotations}
+    orphan_samples = [sid for sid in all_samples if sid not in annotated_ids]
+    if orphan_samples:
+        print(f"⚠ {len(orphan_samples)} 个样本无对应标注（如: {orphan_samples[:3]}）")
 
     # ── 统计 ──
     unique_contacts = set()
@@ -96,7 +126,14 @@ def main():
             print(f"  batch_{bnum}: {ann_count[bnum]} 有效 / {discard_count[bnum]} 丢弃")
         return
 
-    # ── 生成训练样本文件 ──
+    # ── 加载 2099 原始洁净样本 ID ──
+    clean_sample_ids: set[str] = set()
+    if CLEAN_SAMPLES_PATH.exists():
+        for s in load_jsonl(CLEAN_SAMPLES_PATH):
+            clean_sample_ids.add(s["sample_id"])
+        print(f"加载 2099 原始样本 ID: {len(clean_sample_ids)} 个")
+
+    # ── 生成训练样本文件（含来源标记）──
     samples_out = output_dir / "training_samples.jsonl"
     with open(samples_out, "w", encoding="utf-8") as f:
         for a in all_annotations:
@@ -106,6 +143,7 @@ def main():
                 "contact_wxid": s.get("contact_wxid", ""),
                 "messages": s["messages"],
                 "turn_count": s.get("turn_count", len(s["messages"]) // 2),
+                "from_clean_set": a["sample_id"] in clean_sample_ids,
             }
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
     print(f"样本文件: {samples_out} ({len(all_annotations)} 条)")
@@ -122,6 +160,7 @@ def main():
     print(f"标注文件: {ann_out} ({len(all_annotations)} 条)")
 
     # ── 生成标签配置文件 ──
+    clean_count = sum(1 for a in all_annotations if a["sample_id"] in clean_sample_ids)
     config = {
         "labels": LABELS,
         "num_labels": len(LABELS),
@@ -129,13 +168,24 @@ def main():
         "normalize": True,
         "total_samples": len(all_annotations),
         "total_contacts": len(unique_contacts),
+        "source_groups": {
+            "clean_2099": clean_count,
+            "new_batch": len(all_annotations) - clean_count,
+        },
     }
     config_out = output_dir / "training_config.json"
     with open(config_out, "w", encoding="utf-8") as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
     print(f"配置文件: {config_out}")
 
-    print(f"\n完成: {len(all_annotations)} 条训练数据, {len(unique_contacts)} 个联系人")
+    # ── 最终校验：无重复 sample_id ──
+    out_sids = [a["sample_id"] for a in all_annotations]
+    if len(out_sids) != len(set(out_sids)):
+        dupes = [sid for sid, cnt in Counter(out_sids).items() if cnt > 1]
+        print(f"错误: 输出包含重复 sample_id: {dupes}")
+        sys.exit(1)
+
+    print(f"\n完成: {len(all_annotations)} 条训练数据, {len(unique_contacts)} 个联系人（校验通过）")
 
 
 if __name__ == "__main__":

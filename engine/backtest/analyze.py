@@ -19,6 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+from engine.backtest.load_cases import load_cases as _load_cases
 from engine.config import OUTPUTS_DIR
 
 
@@ -42,14 +43,8 @@ def load_collected_data():
 
 
 def load_cases_config():
-    cases_file = Path(__file__).parent / "config" / "cases.yaml"
-    if cases_file.exists():
-        import yaml
-        with open(cases_file, "r", encoding="utf-8") as f:
-            config = yaml.safe_load(f)
-            cases_list = config.get("cases", []) if isinstance(config, dict) else []
-            return {case["id"]: case for case in cases_list}
-    return {}
+    cases_list = _load_cases()
+    return {case["id"]: case for case in cases_list}
 
 
 def filter_high_confidence_slices(slices, min_messages=10):

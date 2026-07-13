@@ -46,10 +46,10 @@ class IdentityPerson:
 ```python
 @dataclass
 class ResolveResult:
-    found: bool
     person: IdentityPerson | None
     candidates: list[IdentityPerson]  # 模糊匹配时的候选列表
-    message: str
+    matched_by: str                   # 匹配方式（person_id/wxid/alias/alias_fuzzy）
+    too_many: bool                    # 候选过多，需用户缩小范围
 ```
 
 ## 数据库表

@@ -98,7 +98,7 @@ from engine.tools import brief_data, chat_data, message_context_data
 from engine.tools import note, date, evaluate, events, save_analysis
 from engine.tools import contact, exclude, failure, sticker
 from engine.tools import sync, sync_person, weekly
-from engine.tools import behaviors, behaviors_data  # 语义分析（MacBERT/规则双参考）
+from engine.tools import behaviors, behaviors_data  # 语义分析（B2 默认 model="b2" + MacBERT/规则双参考）
 ```
 
 详细签名见 `.claude/skills/mcp-tools.md` 工具速查表或 `readme/tools.md`。

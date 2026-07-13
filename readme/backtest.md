@@ -1,4 +1,4 @@
-﻿# 回测框架
+# 回测框架
 
 ## 概述
 
@@ -69,7 +69,7 @@
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
 │  Layer 1: 案例定义                                                       │
-│  engine/backtest/config/cases.yaml                                        │
+│  data/backtest/cases.yaml                                        │
 │         ↓                                                               │
 │  Layer 2: 数据采集                                                       │
 │  python -m engine.backtest.collect                                       │
@@ -122,8 +122,8 @@
 ├─────────────────────────────────────────────────────────────────┤
 │  Layer 1: 案例定义                                               │
 │  ┌──────────────────────────────────────────────────────────┐  │
-│  │ engine/backtest/config/cases.yaml (8个案例 + stage_labels)              │  │
-│  │ - outcome: failure/success/success_to_failure/friendzone  │  │
+│  │ data/backtest/cases.yaml (案例定义 + stage_labels)              │  │
+│  │ - outcome: failure/success/success_to_failure/friendzone/half_success/developing/...  │  │
 │  │ - stage_labels: stage/window_state/risk_state 切片级标签  │  │
 │  └──────────────────────────────────────────────────────────┘  │
 ├─────────────────────────────────────────────────────────────────┤
@@ -165,11 +165,19 @@
 
 | 文件 | 路径 | 功能 | 输出位置 |
 |------|------|------|---------|
-| 案例定义 | `engine/backtest/config/cases.yaml` | 定义回测案例及其切片级标签 | - |
+| 案例定义 | `data/backtest/cases.yaml` | 定义回测案例及其切片级标签 | - |
+| 案例加载 | `engine/backtest/load_cases.py` | 统一案例加载基础设施（被 validate/retrospective/timeseries 等导入） | - |
 | 数据采集 | `engine/backtest/collect.py` | Phase A/B 数据采集，事件对齐窗口，敏感性分析 | `outputs/backtest/{case_id}_phase_a.json` <br> `outputs/backtest/{case_id}_phase_b.json` |
-| 数据验证 | `engine/backtest/validate.py` | 采集数据完整性验证 | 控制台输出 |
+| 数据验证 | `engine/backtest/validate.py` | 测试 ref_date/to_ts 参数正确性（防止数据泄漏） | 控制台输出 |
 | 分析对比 | `engine/backtest/analyze.py` | 案例内时序分析，跨案例归纳，描述性统计报告 | `outputs/backtest/calibration_report.md` |
 | 校准闭环 | `engine/backtest/calibrate.py` | 留一验证，校准候选值，校准日志 | `outputs/backtest/calibration_log.yaml` |
+| 语义回测 | `engine/backtest/semantic_backtest.py` | B0'/B2 双模型三趟对比语义回测 | 控制台输出 |
+| 标注分析 | `engine/backtest/analyze_annotated.py` | 基于用户标注分析 v2 指标区分度 | 控制台输出 |
+| 时序分析 | `engine/backtest/timeseries.py` | composite 时间序列趋势分析 | 控制台输出 |
+| 回溯分析 | `engine/backtest/retrospective.py` | 时间点回溯分析 | 控制台输出 |
+| 全量扫描 | `engine/backtest/full_scan.py` | 全量联系人指标扫描 | 控制台输出 |
+| 扫描分析 | `engine/backtest/analyze_scan.py` | 全量扫描结果分析 | 控制台输出 |
+| 消息统计 | `engine/backtest/msg_count_stats.py` | 联系人消息数统计 | 控制台输出 |
 | 回测方案 | `plan/回测方案.md` | 框架设计文档（核心方法、标签体系、分析维度） | - |
 | 回测案例 | `plan/回测案例.md` | 案例分类定义（wxid 级别） | - |
 
@@ -177,11 +185,11 @@
 
 ### 第一步：准备案例定义
 
-确保 `engine/backtest/config/cases.yaml` 中所有案例都有完整的 `stage_labels`。
+确保 `data/backtest/cases.yaml` 中所有案例都有完整的 `stage_labels`。
 
 ```bash
 # 查看当前案例定义
-cat engine/backtest/config/cases.yaml
+cat data/backtest/cases.yaml
 ```
 
 ### 第二步：采集数据
@@ -215,7 +223,7 @@ python -m engine.backtest.collect --slice-days 7
 
 **round 说明**：
 - **default round**：使用 `formula_params` 返回的默认参数值
-- **truth round**：使用 `engine/backtest/config/cases.yaml` 中 `manual_truth` 字段指定的值（如果未配置，则与 default round 相同）
+- **truth round**：使用 `data/backtest/cases.yaml` 中 `manual_truth` 字段指定的值（如果未配置，则与 default round 相同。当前所有案例均未配置 manual_truth，truth round 结果与 default round 相同）
 
 **使用策略**：
 1. **先用默认值跑全量**：对所有案例运行 Phase B（不带 --sensitivity），获取 baseline
@@ -245,17 +253,13 @@ python -m engine.backtest.collect --phase B --case case_004 --sensitivity
 | 对比 manual 参数影响 | - | ✅ |
 | 参数敏感性分析 | - | ✅ |
 
-### 第三步：验证数据完整性
+### 第三步：验证时间切片正确性
 
 ```bash
 python -m engine.backtest.validate
 ```
 
-**功能**：检查采集数据的完整性，包括：
-- 是否所有案例都有 Phase A/B 数据
-- 是否所有切片都有必要字段
-- 是否存在异常值（如 msg_count < 10 的低置信度切片）
-- 是否所有案例的时间范围覆盖完整
+**功能**：测试 `ref_date` 和 `to_ts` 参数是否正确生效（防止"偷看未来"数据泄漏），对少量案例做实时 vs 历史时间切片的指标对比打印。
 
 ### 第四步：生成校准报告
 
@@ -295,7 +299,7 @@ python -m engine.backtest.calibrate --dry-run
 cases:
   - id: "case_004"
     display_name: "[REDACTED]"
-    outcome: "success_to_failure"  # failure/success/success_to_failure/friendzone
+    outcome: "success_to_failure"  # failure/success/success_to_failure/friendzone/half_success/developing/active_giveup/passive_giveup/awkward/topic_mismatch/lost_contact
     outcome_date: "2025-08-22"
     started: "2025-03-17"
     notes: "刚开始她主动，后期我暴露需求感太多"
@@ -323,7 +327,7 @@ cases:
 
 | 字段 | 取值 | 含义 |
 |------|------|------|
-| `stage` | 初识期/暧昧期/热恋期/稳定期/降温期/冷淡期/破裂前/友谊区 | 关系阶段 |
+| `stage` | 初识期/互动期/暧昧期/热恋期/稳定期/降温期/冷淡期/破裂前/分手前/友谊区 | 关系阶段 |
 | `window_state` | open/closing/closed | 关系窗口状态 |
 | `risk_state` | low/medium/high | 风险等级 |
 
@@ -364,7 +368,7 @@ cases:
 - 逐案例触发情况：哪些案例触发了惩罚，触发时的指标值
 - volume_ratio 分布：我的消息数/她的消息数的实际分布
 - initiation_ratio 分布：我发起/总发起的实际分布
-- 触发条件评估：当前阈值（volume_ratio > 2.0）是否合理
+- 触发条件评估：当前阈值（volume_ratio > 1.3）是否合理
 
 ### 维度4：跨案例模式归纳
 
@@ -435,7 +439,7 @@ cases:
 | **rank correlation** | 成功/失败阶段排序是否改善 | 校准前后，用 stage_label（好时期 vs 坏时期）检验 composite 排序一致性 | 当前：成功&失败 composite 重叠 | 校准后：分布拉开且不牺牲案例内趋势解释 |
 | **calibration delta** | 调参后 composite 分布拉开多少 | 校准前/后成功组 vs 失败组 composite 重叠比例的变化 | 当前重叠 ~95% | 重叠 < 70%（有可见区分） |
 
-**注意**：这些判据在当前 8 个案例上只能做初步估计。precision/recall 需要更多案例（尤其是失败案例）才能稳定。目标值标记为"期望方向"，具体数值需要在第一轮校准后根据实际改善幅度重新设定。
+**注意**：这些判据在当前案例数上只能做初步估计。precision/recall 需要更多案例（尤其是失败案例）才能稳定。目标值标记为"期望方向"，具体数值需要在第一轮校准后根据实际改善幅度重新设定。
 
 ## 结果解读指南
 
@@ -457,9 +461,9 @@ cases:
 | 触发率 | 0% | 阈值过高，需要下调 |
 | 触发率 | 5%-20% | 合理：惩罚只在极端情况触发 |
 | 触发率 | > 20% | 阈值过低，需要上调 |
-| volume_ratio > 1.3 | < 5% | 当前阈值 2.0 可能过高 |
-| volume_ratio > 1.3 | 5%-15% | 可考虑降至 1.3 |
-| initiation_ratio > 0.7 | 0% | 可考虑降至 0.6 |
+| volume_ratio > 1.3 | < 5% | 阈值 1.3 可能仍偏高 |
+| volume_ratio > 1.3 | 5%-15% | 阈值 1.3 合理 |
+| initiation_ratio > 0.6 | 0% | 可考虑降至 0.55 |
 
 ### 校准候选值解读
 
@@ -497,8 +501,8 @@ cases:
 
 | 参数 | 当前值 | 候选值来源 |
 |------|--------|-----------|
-| neediness_penalty.volume_ratio_threshold | >2.0 | volume_ratio 分布的 pct_gt_13/pct_gt_15 |
-| neediness_penalty.initiation_ratio_threshold | >0.7 | initiation_ratio 分布的 pct_gt_06/pct_gt_07 |
+| neediness_penalty.volume_ratio_threshold | >1.3 | volume_ratio 分布的 pct_gt_13/pct_gt_15 |
+| neediness_penalty.initiation_ratio_threshold | >0.6 | initiation_ratio 分布的 pct_gt_06/pct_gt_07 |
 | composite.signal_medium_threshold | >=0.50 | composite 分布的 p75 |
 
 ### 校准流程详解
@@ -553,27 +557,34 @@ cases:
 
 ```yaml
 - date: 2026-07-20
-  changes:
-    - param: neediness_penalty.volume_ratio_threshold
-      old: 2.0
-      new: 1.3
-    - param: composite.signal_medium_threshold
-      old: 0.50
-      new: 0.30
-  effects:
-    - metric: lead_time_avg
-      old: "N/A（原阈值从无预警）"
-      new: "18 天"
-    - metric: neediness_penalty.trigger_rate_in_failures
-      old: "0%"
-      new: "60%"
-    - metric: composite.overlap_ratio
-      old: "95%"
-      new: "72%"
+  timestamp: "2026-07-20T14:30:00"
+  cases_used: ["case_001", "case_002", "case_003", "case_004"]
+  total_slices: 48
+  baseline_metrics:
+    overlap_ratio: 0.95
+    risk_gap: 0.02
   loco_validation:
-    passes: 6/8
-    regressions: 1
-    regression_case: "[REDACTED]（成功案例被误判为预警）"
+    passes: 6
+    total: 8
+    results:
+      - case: "case_001"
+        passed: true
+      - case: "case_004"
+        passed: false
+  candidates:
+    - param: neediness_penalty.volume_ratio_threshold
+      current: ">=0.35"
+      candidate: 1.3
+      reason: "volume_ratio 分布显示 pct_gt_13=15%"
+      confidence: medium
+      loco_confidence: medium
+    - param: composite.signal_medium_threshold
+      current: ">=0.50"
+      candidate: 0.35
+      reason: "中窗口阈值 0.50 无切片达到"
+      confidence: low
+      loco_confidence: low
+  status: pending
 ```
 
 ## 敏感性分析
@@ -617,7 +628,7 @@ Agent 回放最严重的风险不是公式参数，而是**数据泄漏**——A
 **SQL 层面的泄漏**已在 Layer 2 通过 `ref_date` + `to_ts` 解决。
 
 **事实档案层面的泄漏**需要额外处理：`person_evidence` 返回的事实档案中，notes/events/dates 有写入时间（`[YYYY-MM-DD]` 前缀），evaluations 和 analysis 也有时间戳。Agent 回放切片 Ti 时，必须只看到 Ti 之前写入的事实。需要：
-- `engine/facts/people_archive.py` 的 `read_archive` 函数增加 `before_date` 参数，只返回该日期之前写入的内容
+- `engine/facts/people_archive.py` 的事实档案读取需要增加 `before_date` 参数，只返回该日期之前写入的内容
 - Agent 回放脚本调用 `person_evidence(name, before_date=Ti)`
 - **严禁** Agent 在回放中读取 `data/outputs/analysis/` 下的历史分析报告（那是事后写的）
 
@@ -652,7 +663,7 @@ engine/backtest/agent_replay.py 的数据组装流程：
 
 ### 实现状态
 
-**尚未实现**。Agent 回测是并行轨道，当前优先完成公式回测轨道。待公式回测稳定后，再开发 `agent_replay.py` 和 `read_archive` 的 `before_date` 参数。
+**尚未实现**。Agent 回测是并行轨道，当前优先完成公式回测轨道。待公式回测稳定后，再开发 `agent_replay.py` 和事实档案读取的 `before_date` 参数。
 
 ## 数据流程
 

@@ -1,6 +1,6 @@
 # LoveMentor 项目文档
 
-> 最后更新：2026-07-11
+> 最后更新：2026-07-13
 > 基于项目当前代码状态编写
 
 ---
@@ -248,9 +248,9 @@ data = moments_stats("小溪")
 # → engagement_summary: "她主动：她有 9 次互动，你 0 次"
 ```
 
-### 2.11 语义分析（Phase 0-2 完成）
+### 2.11 语义分析（Phase 0-2 完成 + B2 双模型部署）
 
-10 个可观测行为标签的双层检测系统，共标注 **15,867 条对话窗口**（每条约 20 轮聊天）：
+10 个可观测行为标签的双层检测系统，共标注 **13,675 条对话窗口**（每条约 20 轮聊天，清洗去重后），并部署 B0'/B2 双模型架构：
 
 **Layer 1 — 行为检测（模型/规则）**：
 
@@ -271,7 +271,14 @@ data = moments_stats("小溪")
 - `source="macbert"` — MacBERT ONNX 模型推理（约 0.5s/窗口，语义覆盖全面）
 - `source="rule"` — 规则词典匹配（约 0.02s/窗口，可解释性强）
 
-模型使用 **15,867 条对话窗口**（每条约 20 轮聊天）训练：2,099 条来自真实微信私聊（core.db），13,768 条来自恋爱教学案例库（完整聊天记录、Tinder 案例、PUA 教学系列，经 4000+ 原始文件清洗得到）。外部数据按 1000 条一批分 14 批，通过 LLM 批量标注（含 `quality_ok` 质量开关）。
+**B2 双模型架构**（2026-07-13 部署）：
+- **B0'**（roleless，`model="b0"`）：纯文本输入，生产基线/回退模型
+- **B2**（role-aware，`model="b2"`）：含 `[TARGET]/[OTHER]` 角色前缀，**默认生产模型**
+- `behaviors("姓名")` 默认走 B2 her-side，Agent 无感知切换
+- B2 me-side（`target_role="me"`）只在 SELF/OTHER 对比分析中使用，不直接输出确定性结论
+- 回滚策略：B2 加载失败时，调用侧 catch 异常后回退 `get_b0()`
+
+模型使用 **13,675 条对话窗口**（清洗去重后）训练：2,083 条来自真实微信私聊（core.db），11,592 条来自恋爱教学案例库（完整聊天记录、Tinder 案例、PUA 教学系列，经 4000+ 原始文件清洗得到）。外部数据按 1000 条一批分 14 批，通过 LLM 批量标注（含 `quality_ok` 质量开关），清洗去重后保留 11,592 条。
 
 **Layer 2 — 关系解读融合（engine/analyzers/semantic.py）**：
 
@@ -286,11 +293,39 @@ data = moments_stats("小溪")
 
 ```python
 from engine.tools import behaviors, behaviors_data
-report = behaviors("姓名", window_days=30, source="macbert")  # Markdown 报告
+report = behaviors("姓名", window_days=30, source="macbert")  # 默认 B2 her-side，Markdown 报告
 data = behaviors_data("姓名", source="rule")  # 结构化数据
+# 可选：model="b0" 回退基线，target_role="me" 切换视角
 ```
 
-### 2.12 回测框架
+### 2.12 互动序列分析（Phase 0 完成）
+
+三视角架构三层视角覆盖 SELF/OTHER/INTERACTION，Phase 0 已交付基础设施：
+
+**Phase 0 完成内容**：
+- `engine/analyzers/interaction_sequence.py` — Turn/TurnPair 数据结构、连续同人消息合并、会话分组、cue-response 配对
+- 29 个单元测试全部通过，38 个语义回归测试无副作用
+- `Turn.timestamp_reliability` 处理 missing/synthetic/unknown 时间戳
+- `TurnPair` 不携带推断结论（response_type 不属于此结构），严格区分证据与结论
+
+**新增工具 `turn_stats("姓名")`**：纯描述性统计，零模型依赖，输出 self/other 轮次分布、会话发起频率、回复延迟、未响应 cue 统计。立即可用于分析。
+
+**Phase 1/2 阻塞原因**：B2 me-side 方向一致率仅 38%（随机基线 35.5%），不足以支撑 SELF 语义画像和互动耦合分析。需更多配对训练数据（B2+）或降低精度要求。
+
+```
+Phase 0(完成) ──→ Phase 1(SELF/OTHER 画像) ──→ Phase 2(互动耦合)
+     │                    ↑                              ↑
+     │             阻塞：B2 me-side 38%             阻塞：Phase 1
+     │             需方向一致率 ≥ 70%              需 Phase 1 就绪
+     └── turn_stats() 已落地，零模型依赖
+```
+
+```python
+from engine.tools import turn_stats
+stats = turn_stats("姓名", window_days=30)  # Markdown，直接给 Agent 读
+```
+
+### 2.13 回测框架
 
 以已知结果的历史案例作为 ground truth，反向审判系统参数是否合理。详见 [backtest.md](backtest.md)。
 
@@ -379,8 +414,8 @@ data = behaviors_data("姓名", source="rule")  # 结构化数据
 | `wiki_search(query)` | 关键词 | str | 跨 Wiki/Analysis/KB 搜索 |
 | `wiki_show(path, max_chars=50000)` | 文件路径 | str | 安全读取材料文件全文 |
 | `moments_stats(name)` | 名字 | dict | 朋友圈互动统计（双向点赞/评论/比例） |
-| `behaviors(name, window_days=30, source="macbert")` | 名字+窗口+来源 | str | 语义行为分析报告（10维标签+派生指标） |
-| `behaviors_data(name, window_days=30, source="macbert")` | 名字+窗口+来源 | dict | 结构化语义数据（标签均值/派生指标/窗口序列） |
+| `behaviors(name, window_days=30, source="macbert", model="b2", target_role="her")` | 名字+窗口+来源+模型+视角 | str | 语义行为分析报告（10维标签+派生指标，默认 B2 her-side） |
+| `behaviors_data(name, window_days=30, source="macbert", model="b2", target_role="her")` | 名字+窗口+来源+模型+视角 | dict | 结构化语义数据（标签均值/派生指标/窗口序列） |
 
 ### 3.2 数据写入
 
@@ -617,7 +652,7 @@ loveMentor/
 │   │   ├── screenshot_parser.py #  截图解析
 │   │   └── screenshot_import.py # 截图导入管道
 │   ├── models/               #   数据模型（dataclass）
-├── ml/                       # 语义分析（15,867 条标注数据，MacBERT 模型）
+├── ml/                       # 语义分析（13,675 条标注数据，B0'/B2 双模型）
 ├── .claude/skills/           # Claude Code skills
 │   ├── love-mentor.md        #   统一入口（决策树+工具速查+路由表+指标体系）
 │   ├── person-info.md        #   人物信息管理
@@ -839,7 +874,24 @@ skill_map('person_brief')        # 查 person_brief 之后能调什么
 
 - **一级 repo（loveMentor/）**：代码 + 公开文档，可推远程。根 `.gitignore` 已忽略 `data/` 和 `docs/`。
 - **二级 repo（data/）**：隐私数据，只在本地有 git 历史，不推远程。
-- **二级 repo（docs/）**：知识库文件太多，独立 git 管理。
+
+---
+
+## 十、已归档规划（plan/ 已删除）
+
+以下规划文档已完成并从 `plan/` 删除，关键内容已整合到本文档和代码中：
+
+| 规划文件 | 内容摘要 | 整合位置 |
+|----------|----------|----------|
+| `b2_deployment.md` | B0'/B2 双模型部署、决策框架 | 本文档 2.11 节 |
+| `b1_experiment_protocol.md` | B1' 实验协议（失败 → B2 方案取代） | 本文档 2.11 节 |
+| `b1_smoke_run.md` | B1-smoke 运行记录 | 实验历史 |
+| `codex_建议.md` | 架构批判：从"她对我"到三视角 | 本文档 2.12 节 + `turn_stats()` |
+| `role_labeling_design.md` | 角色标注方案（target_other_v1 协议） | `ml/models/` + 训练脚本 |
+| `model_inference_mismatch.md` | 训练/推理格式不匹配（已修复） | `ml/input_format.py` |
+| `git-cleanup-plan.md` | 隐私文件清理 + .gitignore 更新 | `.gitignore` + 已执行 |
+| `目录重组方案.md` | 项目目录结构优化（tools/ 拆分5子目录、回测移入 engine/、stickers 重构为包） | 本文档工程结构 + `tools/README.md` |
+| `三层视角架构改造方案.md` | SELF/OTHER/INTERACTION 三视角设计（Phase 0 完成，Phase 1/2 阻塞） | 本文档 2.12 节 + `interaction_sequence.py` + `next_steps.md` |
 
 `data/.gitignore` 规则：
 
@@ -853,7 +905,7 @@ skill_map('person_brief')        # 查 person_brief 之后能调什么
 
 ---
 
-## 十、隐私规则
+## 十一、隐私规则
 
 - 禁止在任何非 `.gitignore` 文件中写入真实联系人信息，用假名代替
 - `data/raw/core.db`、`data/system/config.yaml`、`data/facts/people/` 均为私有本地数据
@@ -861,7 +913,7 @@ skill_map('person_brief')        # 查 person_brief 之后能调什么
 
 ---
 
-## 十一、外部依赖
+## 十二、外部依赖
 
 | 依赖                 | 用途                          | 必须？         |
 | -------------------- | ----------------------------- | -------------- |

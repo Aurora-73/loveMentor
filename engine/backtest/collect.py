@@ -23,11 +23,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-import yaml
 from engine.config import load_config, OUTPUTS_DIR
 from engine.importers.db_init import get_db
 from engine.identity import resolve_contact
 from engine.analyzers.metrics import compute_metrics_for_contact
+from engine.backtest.load_cases import load_cases as _load_cases
 from engine.formulas import (
     formula_params, formula_ivi, formula_spe, formula_ews,
     formula_action, formula_is, formula_gap_effect, formula_eev, formula_cs,
@@ -35,18 +35,10 @@ from engine.formulas import (
 
 
 BACKTEST_DIR = OUTPUTS_DIR / "backtest"
-CASES_FILE = Path(__file__).parent / "config" / "cases.yaml"
 
 
 def load_cases(case_filter=None):
-    if not CASES_FILE.exists():
-        print(f"案例文件不存在: {CASES_FILE}")
-        return []
-    
-    with open(CASES_FILE, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-    
-    cases = data.get("cases", [])
+    cases = _load_cases()
     if case_filter:
         cases = [c for c in cases if c["id"] == case_filter]
     return cases

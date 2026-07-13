@@ -107,11 +107,13 @@ def collect_samples() -> list[dict]:
 
 
 def tokenize_samples(
-    samples: list[dict], tokenizer, max_len: int = 512
+    samples: list[dict], tokenizer, max_len: int = 512,
 ) -> list[dict]:
     records = []
     for s in samples:
-        text = "\n".join(m["content"] for m in s["messages"])
+        messages = s.get("messages", [])
+        # 纯文本拼接（B0 roleless 兼容，有 role 字段时自动提取 content）
+        text = "\n".join(m["content"] if isinstance(m, dict) else str(m) for m in messages)
         encoded = tokenizer(
             text,
             max_length=max_len,
@@ -187,6 +189,8 @@ def main():
     print("Loading model...")
     tokenizer = AutoTokenizer.from_pretrained(str(model_dir))
     model = MacBERTRegressor(model_base_path)
+    # 扩展 embedding 层以容纳 [TARGET]/[OTHER] 特殊 token（训练时已添加）
+    model.bert.resize_token_embeddings(len(tokenizer))
     state_dict = torch.load(
         model_dir / "macbert_best.pt",
         map_location=device,

@@ -56,7 +56,7 @@ chat-skills 遗产公式（独立体系，经验启发值）
 | IS | 真实亲密度 | `[[亲密距离]]` | 经验值（待回测） | >0.5 高亲密度 |
 | Gap_Effect | 情绪落差 | `[[推拉]]` | 经验值（待回测） | >0 正向, <0 负向 |
 | EEV | 升温期望值 | — | 经验值（待回测） | >0.3 值得出击 |
-| CS | 矛盾状态 | — | 经验值（待回测） | >0 欲望占主导 |
+| CS | 矛盾状态 | — | 经验值（待回测） | >0.3 欲望占主导, >0 微弱倾向 |
 | action | 终极决策 | — | 经验值（待回测） | 基于 IVI+SPE+EWS |
 
 **阈值是参考，不是硬规则**。IVI=0.9 不一定比 IVI=1.1 差，要结合 Wiki 框架和上下文判断。
@@ -91,8 +91,8 @@ from engine.tools import formula_params, formula_ivi, formula_action
 
 # 第一步：自动参数（从 DB 指标推导）
 params = formula_params("小溪")
-# → auto: Sp/Fback/Rlatency/Ve/EV/S_cost/Noise/Exp/User_Investment/Scarcity_Loss
-# → manual: Pface/Ddepth/Backstage/Cp_Index（需 Agent 根据聊天判断）
+# → auto: Sp/Fback/Fback_quality/Rlatency/Ve/EV/S_cost/Noise/Exp/User_Investment/Scarcity_Loss
+# → manual: Pface/Ddepth/Target_Ddepth/Backstage/Cp_Index/Internal_D/External_R/Anx/Def/Sv/Rv/P_succ/P_fail（需 Agent 根据聊天判断）
 
 # 第二步：代入公式（用 auto 值 + Agent 判断的 manual 值）
 ivi = formula_ivi(sp=params["auto"]["Sp"], fback=params["auto"]["Fback"],
@@ -123,17 +123,18 @@ action = formula_action(ivi=ivi["ivi"], spe=1.0, ews=0.5)
 
 ## 自动参数推导
 
-`formula_params(name)` 从数据库指标推导：
+`formula_params(name, conn=None, ref_date=None, to_ts=None)` 从数据库指标推导。`conn`/`ref_date`/`to_ts` 为可选参数，用于注入数据库连接和指定参考时间窗口（回测时防止数据泄漏）。
 
 | auto 参数 | 推导逻辑 |
 |----------|---------|
-| `Sp` | max(0.1, qscore_personal × 1.5 + fback_quality × 0.3) |
+| `Sp` | max(0.1, min(1.0, qscore_personal × 1.5 + fback_quality × 0.3)) |
 | `Fback` | fback.normalized |
+| `Fback_quality` | fback_quality.normalized |
 | `Rlatency` | rlatency.normalized |
-| `User_Investment` | 1.0 - neediness_penalty |
-| `Scarcity_Loss` | (0.8-msg_vol_trend) × 0.3 + (0.8-latency_trend) × 0.2 |
+| `User_Investment` | max(0.1, 1.0 - neediness_penalty) |
+| `Scarcity_Loss` | 仅当 trend < 0.8 时累加：`(0.8-msg_vol_trend) × 0.3 + (0.8-latency_trend) × 0.2`，最终 min(0.5, result) |
 
-完整推导逻辑见 `engine/formulas.py` 源码。
+auto 参数共 11 个，manual 参数共 12 个。完整推导逻辑见 `engine/formulas.py` 源码。
 
 ---
 

@@ -98,6 +98,8 @@ tools/
 | `batch_zip_extract.py` | 批量解压 ZIP | 批量解压 ZIP 文件 |
 | `punctuate_check.py` | 标点检查 | 检查标点使用 |
 | `punctuate_docs.py` | 文档标点处理 | 处理文档标点 |
+| `test_slope.py` | composite_slope 指标验证 | 验证 composite_slope 计算正确性（依赖 engine.backtest.load_cases） |
+| `test_slope_window.py` | composite_slope 窗口区分力验证 | 验证不同窗口长度下 slope 的区分力 |
 
 ## 使用建议
 
