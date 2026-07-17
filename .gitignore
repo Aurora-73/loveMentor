@@ -17,6 +17,8 @@ data/
 docs
 # 备份目录
 backup/
+# git 历史篡改备份（含原始隐私数据，不可提交）
+.git.backup-*
 # 外部依赖/参考源码（独立 git 仓库）
 _reference
 *report.md
