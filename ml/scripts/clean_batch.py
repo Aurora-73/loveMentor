@@ -20,7 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from ml.cleaning_patterns import clean_message
 
-BATCHES_DIR = Path(__file__).resolve().parent.parent / "dataset" / "batches"
+BATCHES_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "ml_dataset" / "batches"
 CLEANED_DIR = BATCHES_DIR / "rerun" / "cleaned"
 
 

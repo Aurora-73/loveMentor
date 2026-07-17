@@ -61,8 +61,8 @@ LABELS = [
     "perfunctory",
 ]
 
-CANDIDATES_PATH = ROOT / "ml" / "dataset" / "annotations" / "me_side_pilot_v1_candidates.jsonl"
-ANN_PATH = ROOT / "ml" / "dataset" / "annotations" / "annotations_meside_000.jsonl"
+CANDIDATES_PATH = ROOT / "data" / "ml_dataset" / "annotations" / "me_side_pilot_v1_candidates.jsonl"
+ANN_PATH = ROOT / "data" / "ml_dataset" / "annotations" / "annotations_meside_000.jsonl"
 
 
 def load_jsonl(path: Path) -> list[dict]:

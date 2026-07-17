@@ -91,6 +91,7 @@ description: |
 | "约会中" | `person_brief` → `wiki_search("约会")` → 即时建议 |
 | "不知道下一步做什么" | `skill_map('当前工具名')` 或 `workflow_step('analysis', 当前步骤)` |
 | "她聊天态度怎么样" | `person_behaviors(name)` — 语义行为分析（10维标签+派生指标） |
+| "正在聊天/帮我盯着XX" | `live_monitor_start` → `live_chat_read` → `wiki_context` → `live_monitor_stop` |
 
 详细决策树见 `mcp-analysis.md`。
 

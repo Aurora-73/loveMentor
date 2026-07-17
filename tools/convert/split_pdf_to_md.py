@@ -22,7 +22,7 @@ import argparse
 import pymupdf4llm
 from pymupdf4llm.helpers.document_layout import OCRMode
 
-PDF_PATH = r"C:\Users\[REDACTED]\Desktop\山海鲸可视化产品白皮书.pdf"
+PDF_PATH = r"C:\Users\<username>\Desktop\山海鲸可视化产品白皮书.pdf"
 PDF_NAME = "山海鲸可视化产品白皮书"
 
 # ── 一级章节分割标记 ──

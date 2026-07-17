@@ -313,6 +313,32 @@ tools:
     next_step: []
     description: "获取使用指南。按需查询各主题"
 
+  live_monitor_start:
+    skill_ref: mcp-tools.md
+    next_step:
+      - live_chat_read
+      - wiki_context
+    description: "开始实时监听。之后用 live_chat_read 读取最新消息"
+
+  live_chat_read:
+    skill_ref: mcp-tools.md
+    next_step:
+      - wiki_context
+      - live_monitor_stop
+    description: "读取实时缓存的消息。比 person_sync+person_chat 快"
+
+  live_monitor_stop:
+    skill_ref: mcp-tools.md
+    next_step: []
+    description: "停止监听"
+
+  live_monitor_status:
+    skill_ref: mcp-tools.md
+    next_step:
+      - live_chat_read
+      - live_monitor_stop
+    description: "查看监听状态"
+
 workflows:
   analysis:
     name: 人物分析完整流程
@@ -499,3 +525,11 @@ scenarios:
       - maintain_list
       - person_brief
       - person_chat
+
+  "正在聊天/实时辅助":
+    workflow: null
+    tools:
+      - live_monitor_start
+      - live_chat_read
+      - wiki_context
+      - live_monitor_stop

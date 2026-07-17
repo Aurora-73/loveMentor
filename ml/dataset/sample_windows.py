@@ -1,7 +1,7 @@
 """Sample conversation windows for semantic analysis annotation.
 
 Phase 0: Generate window samples for baseline classification.
-Output: ml/dataset/samples_phase0.jsonl
+Output: data/ml_dataset/samples_phase0.jsonl
 
 Configuration:
 - window_size = 20 turns

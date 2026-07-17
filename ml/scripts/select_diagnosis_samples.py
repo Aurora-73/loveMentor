@@ -11,9 +11,9 @@
 
 用法：
   python ml/scripts/select_diagnosis_samples.py \
-      --samples ml/dataset/training_samples.jsonl \
-      --annotations ml/dataset/training_annotations.jsonl \
-      --output ml/dataset/diagnosis_candidates.jsonl \
+      --samples data/ml_dataset/training_samples.jsonl \
+      --annotations data/ml_dataset/training_annotations.jsonl \
+      --output data/ml_dataset/diagnosis_candidates.jsonl \
       --max-per-group 30
 """
 from __future__ import annotations
@@ -198,9 +198,9 @@ def match_dimension(
 
 def main():
     parser = argparse.ArgumentParser(description="角色诊断集选样")
-    parser.add_argument("--samples", default="ml/dataset/training_samples.jsonl")
-    parser.add_argument("--annotations", default="ml/dataset/training_annotations.jsonl")
-    parser.add_argument("--output", default="ml/dataset/diagnosis_candidates.jsonl")
+    parser.add_argument("--samples", default="data/ml_dataset/training_samples.jsonl")
+    parser.add_argument("--annotations", default="data/ml_dataset/training_annotations.jsonl")
+    parser.add_argument("--output", default="data/ml_dataset/diagnosis_candidates.jsonl")
     parser.add_argument("--max-per-group", type=int, default=30,
                         help="每组最多选多少个")
     parser.add_argument("--seed", type=int, default=42)
@@ -294,7 +294,7 @@ def main():
     print(f"\n建议抽检量: min(200, {total}) 条")
     print("查看方式: python -X utf8 -c \"")
     print("import json")
-    print("with open('ml/dataset/diagnosis_candidates.jsonl') as f:")
+    print("with open('data/ml_dataset/diagnosis_candidates.jsonl') as f:")
     print("    for i, line in enumerate(f):")
     print("        if i >= 10: break")
     print("        d = json.loads(line)")

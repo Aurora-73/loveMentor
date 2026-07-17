@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """合并所有 batch 的样本和标注为统一训练集。
-输出到 ml/dataset/ 目录，A100 训练时通过 samba 直接读取。
+输出到 data/ml_dataset/ 目录，A100 训练时通过 samba 直接读取。
 
 去重策略（不修改原始标注文件）：
-  原始标注文件（ml/dataset/annotations/annotations_*.jsonl）保留历史审计记录，
+  原始标注文件（data/ml_dataset/annotations/annotations_*.jsonl）保留历史审计记录，
   本脚本按 sample_id 去重：首次出现保留，后续重复跳过。
   → training_samples.jsonl / training_annotations.jsonl 是唯一官方训练真源。
   → 如需物理清理原始文件，脚本不负责，由审计工具另行处理。
 
 用法:
-  # 输出到默认位置（ml/dataset/）
+  # 输出到默认位置（data/ml_dataset/）
   python ml/scripts/prepare_training_data.py
 
   # 输出到指定目录（如 data/ml_dataset/ 兼容旧流程）
@@ -28,8 +28,8 @@ LABELS = [
     "invitation", "framing_boundary", "perfunctory",
 ]
 
-BATCHES_DIR = Path(__file__).resolve().parent.parent / "dataset" / "batches"
-ANN_DIR = Path(__file__).resolve().parent.parent.parent / "ml" / "dataset" / "annotations"
+BATCHES_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "ml_dataset" / "batches"
+ANN_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "ml_dataset" / "annotations"
 
 # 2099 原始洁净样本集（直接从微信数据库提取，无噪音）
 CLEAN_SAMPLES_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "ml_dataset" / "samples_phase0.jsonl"
@@ -53,7 +53,7 @@ def batch_num_from_path(path: Path) -> str:
 def main():
     parser = argparse.ArgumentParser(description="合并 batch 数据为训练集")
     parser.add_argument("--output-dir", default=None,
-                        help="输出目录（默认 ml/dataset/）")
+                        help="输出目录（默认 data/ml_dataset/）")
     parser.add_argument("--stats", action="store_true",
                         help="只输出统计信息，不生成文件")
     args = parser.parse_args()
@@ -61,7 +61,7 @@ def main():
     if args.output_dir:
         output_dir = Path(args.output_dir)
     else:
-        output_dir = Path(__file__).resolve().parent.parent / "dataset"
+        output_dir = Path(__file__).resolve().parent.parent.parent / "data" / "ml_dataset"
 
     output_dir.mkdir(parents=True, exist_ok=True)
 

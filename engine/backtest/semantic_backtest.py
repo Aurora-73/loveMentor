@@ -29,33 +29,34 @@ from engine.analyzers.semantic import (
 
 
 # 案例定义：wxid, 姓名, 结果, 分析起始, 分析结束, 备注
+# 注意：以下为脱敏测试数据，真实 wxid 和姓名已替换为通用占位符
 SEMANTIC_CASES = [
     # 成功案例：在一起前的互动期
-    ("[REDACTED]", "[REDACTED]", "success",
+    ("wxid_test_001", "测试联系人A", "success",
      datetime(2026, 4, 1), datetime(2026, 5, 10), "在一起前30天"),
-    ("[REDACTED]", "[REDACTED]", "success",
+    ("wxid_test_002", "测试联系人B", "success",
      datetime(2026, 5, 28), datetime(2026, 6, 26), "在一起前30天"),
-    ("[REDACTED]", "[REDACTED]", "success",
+    ("wxid_test_003", "测试联系人C", "success",
      datetime(2026, 3, 15), datetime(2026, 4, 14), "在一起前30天"),
 
     # 成功转失败：在一起前
-    ("[REDACTED]", "[REDACTED]", "success_to_failure",
+    ("wxid_test_004", "测试联系人D", "success_to_failure",
      datetime(2025, 10, 5), datetime(2025, 11, 4), "在一起前30天"),
 
     # 半步成功
-    ("wxid_ztmsqkphqjgp22", "biophilia", "half_success",
+    ("wxid_test_005", "测试联系人E", "half_success",
      datetime(2026, 3, 23), datetime(2026, 4, 22), "互动高峰期"),
 
     # 发展中
-    ("[REDACTED]", "[REDACTED]", "developing",
+    ("wxid_test_006", "测试联系人F", "developing",
      datetime(2026, 6, 8), datetime(2026, 7, 8), "最近30天"),
 
     # 异常失败：composite 上升但失败
-    ("[REDACTED]", "[REDACTED]", "failure",
+    ("wxid_test_007", "测试联系人G", "failure",
      datetime(2026, 1, 1), datetime(2026, 3, 20), "composite上升期(异常)"),
 
     # 友谊区
-    ("[REDACTED]", "[REDACTED]", "friendzone",
+    ("wxid_test_008", "测试联系人H", "friendzone",
      datetime(2025, 12, 1), datetime(2026, 1, 30), "友谊区互动期"),
 ]
 
@@ -347,13 +348,13 @@ def main():
         print(f"{r['name']:<12} {outcome_names.get(r['outcome'], r['outcome']):<14} "
               f"{b2h_avg:<12.3f} {b2m_avg:<12.3f} {d:<+12.3f} {direction}")
 
-    # ── 7. 熹微异常分析（三趟对比视角）──────────────────────────────
+    # ── 7. 异常案例分析（三趟对比视角）──────────────────────────────
     print("\n" + "=" * 160)
-    print("【表7】熹微异常分析（composite 上升但失败）— 三趟对比")
+    print("【表7】异常案例分析（composite 上升但失败）— 三趟对比")
     print("=" * 160)
-    xiwei = next((r for r in results if r["name"] == "[REDACTED]"), None)
+    xiwei = next((r for r in results if r["name"] == "测试联系人G"), None)
     if xiwei:
-        print(f"\n熹微的三趟画像（10 维标签）：")
+        print(f"\n该案例的三趟画像（10 维标签）：")
         print(f"  {'标签':<24} {'B0′her':<10} {'B2her':<10} {'B2me':<10} {'Δher':<10} {'Δme-her':<10}")
         print("  " + "-" * 80)
         for label in LABELS:

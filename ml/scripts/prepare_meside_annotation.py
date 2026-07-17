@@ -11,7 +11,7 @@
   messages, her_scores (已有), me_labels (待标), annotation_status
 
 输出文件：
-  ml/dataset/annotations/me_side_pilot_v1_candidates.jsonl
+  data/ml_dataset/annotations/me_side_pilot_v1_candidates.jsonl
 
 联系人预切分（70/30）在标注前完成，held_out 在标注期间不接触。
 
@@ -35,9 +35,9 @@ LABELS = [
     "invitation", "framing_boundary", "perfunctory",
 ]
 
-OUTPUT_PATH = ROOT / "ml" / "dataset" / "annotations" / "me_side_pilot_v1_candidates.jsonl"
-SAMPLES_PATH = ROOT / "ml" / "dataset" / "training_samples.jsonl"
-ANNOTATIONS_PATH = ROOT / "ml" / "dataset" / "training_annotations.jsonl"
+OUTPUT_PATH = ROOT / "data" / "ml_dataset" / "annotations" / "me_side_pilot_v1_candidates.jsonl"
+SAMPLES_PATH = ROOT / "data" / "ml_dataset" / "training_samples.jsonl"
+ANNOTATIONS_PATH = ROOT / "data" / "ml_dataset" / "training_annotations.jsonl"
 
 random.seed(42)
 

@@ -120,7 +120,7 @@ def append_annotation(sample_id: str, contact_wxid: str, scores: list[int] | Non
 def main() -> None:
     if not SAMPLES_PATH.exists():
         print(f"错误：找不到样本文件 {SAMPLES_PATH}")
-        print("请先运行 ml/dataset/sample_windows.py 生成样本到 data/ml_dataset/")
+        print("请先运行 data/ml_dataset/sample_windows.py 生成样本到 data/ml_dataset/")
         sys.exit(1)
 
     samples = load_jsonl(SAMPLES_PATH)

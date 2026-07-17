@@ -3,7 +3,7 @@
 
 用法:
   python ml/scripts/predict.py "她：你咋私聊" "我：我问一下wiki" "她：屎一样"
-  python ml/scripts/predict.py --file ml/dataset/samples_phase0.jsonl
+  python ml/scripts/predict.py --file data/ml_dataset/samples_phase0.jsonl
   python ml/scripts/predict.py --sample s_001262
   python ml/scripts/predict.py --json "她：你咋私聊" "我：我问一下wiki"
 """

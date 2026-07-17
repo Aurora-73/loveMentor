@@ -4,7 +4,7 @@
 用法:
   python ml/scripts/batch_predict.py [--model-base PATH] [--batch-size 64] [--output preds.jsonl]
 
-默认将预测结果保存到 ml/dataset/annotations/predictions.jsonl。
+默认将预测结果保存到 data/ml_dataset/annotations/predictions.jsonl。
 每行格式: {"sample_id": "s_001000", "scores": [0.5, 0.3, ...]}
 
 在 A100 GPU 上运行:
@@ -68,8 +68,8 @@ class InferenceDataset(Dataset):
 # ── 加载数据 ──
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-BATCHES_DIR = PROJECT_ROOT / "ml" / "dataset" / "batches"
-ANN_DIR = PROJECT_ROOT / "ml" / "dataset" / "annotations"
+BATCHES_DIR = PROJECT_ROOT / "data" / "ml_dataset" / "batches"
+ANN_DIR = PROJECT_ROOT / "data" / "ml_dataset" / "annotations"
 
 
 def collect_samples() -> list[dict]:
@@ -155,7 +155,7 @@ def main():
                         help="模型权重目录（含 macbert_best.pt）")
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--output", default=None,
-                        help="输出路径（默认 ml/dataset/annotations/predictions.jsonl）")
+                        help="输出路径（默认 data/ml_dataset/annotations/predictions.jsonl）")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

@@ -31,8 +31,8 @@ import json
 import sys
 from pathlib import Path
 
-BATCHES_DIR = Path(__file__).resolve().parent.parent / "dataset" / "batches"
-ANNOTATIONS_DIR = Path(__file__).resolve().parent.parent / "dataset" / "annotations"
+BATCHES_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "ml_dataset" / "batches"
+ANNOTATIONS_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "ml_dataset" / "annotations"
 
 
 def load_jsonl(path: Path) -> list[dict]:

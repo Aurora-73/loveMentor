@@ -6,7 +6,7 @@
   python ml/scripts/quality_audit.py
 
   # 方法 A + B（模型偏差验证，需先跑 batch_predict.py）
-  python ml/scripts/quality_audit.py --predictions ml/dataset/annotations/predictions.jsonl
+  python ml/scripts/quality_audit.py --predictions data/ml_dataset/annotations/predictions.jsonl
 
   # 输出到文件
   python ml/scripts/quality_audit.py --output quality_report.json
@@ -31,9 +31,9 @@ import numpy as np
 # ── 路径 ──
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-BATCHES_DIR = PROJECT_ROOT / "ml" / "dataset" / "batches"
+BATCHES_DIR = PROJECT_ROOT / "data" / "ml_dataset" / "batches"
 CLEANED_DIR = BATCHES_DIR / "rerun" / "cleaned"
-ANN_DIR = PROJECT_ROOT / "ml" / "dataset" / "annotations"
+ANN_DIR = PROJECT_ROOT / "data" / "ml_dataset" / "annotations"
 
 LABELS = [
     "information_exchange", "opinion_expression", "emotion_positive",

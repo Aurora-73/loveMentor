@@ -29,9 +29,9 @@ LABELS = [
 
 BASE = Path(__file__).resolve().parent.parent  # ml/
 
-HER_SAMPLES = BASE / "dataset/training_samples.jsonl"
-HER_ANNOTATIONS = BASE / "dataset/training_annotations.jsonl"
-ME_ANNOTATIONS = BASE / "dataset/annotations/annotations_meside_000.jsonl"
+HER_SAMPLES = BASE.parent / "data/ml_dataset/training_samples.jsonl"
+HER_ANNOTATIONS = BASE.parent / "data/ml_dataset/training_annotations.jsonl"
+ME_ANNOTATIONS = BASE.parent / "data/ml_dataset/annotations/annotations_meside_000.jsonl"
 
 OUT_DIR = BASE / "outputs/blind_audit_50"
 OUT_SAMPLES = OUT_DIR / "samples.jsonl"

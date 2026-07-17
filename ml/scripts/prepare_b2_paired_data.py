@@ -29,13 +29,13 @@ LABELS = [
 ]
 
 BASE = Path(__file__).resolve().parent.parent  # ml/
-CANDIDATES = BASE / "dataset/annotations/me_side_pilot_v1_candidates.jsonl"
-ME_ANNOTATIONS = BASE / "dataset/annotations/annotations_meside_000.jsonl"
-HER_ANNOTATIONS = BASE / "dataset/training_annotations.jsonl"
+CANDIDATES = BASE.parent / "data/ml_dataset/annotations/me_side_pilot_v1_candidates.jsonl"
+ME_ANNOTATIONS = BASE.parent / "data/ml_dataset/annotations/annotations_meside_000.jsonl"
+HER_ANNOTATIONS = BASE.parent / "data/ml_dataset/training_annotations.jsonl"
 MANIFEST = BASE / "models/canonical_manifest.json"
 
-OUTPUT = BASE / "dataset/b2_paired_train.jsonl"
-INFO = BASE / "dataset/b2_paired_info.json"
+OUTPUT = BASE.parent / "data/ml_dataset/b2_paired_train.jsonl"
+INFO = BASE.parent / "data/ml_dataset/b2_paired_info.json"
 
 
 def main():

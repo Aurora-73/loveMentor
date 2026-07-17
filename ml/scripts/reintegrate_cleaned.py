@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-BATCHES_DIR = Path(__file__).resolve().parent.parent / "dataset" / "batches"
+BATCHES_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "ml_dataset" / "batches"
 CLEANED_DIR = BATCHES_DIR / "rerun" / "cleaned"
 ANNOTATIONS_BASE = Path(__file__).resolve().parent.parent.parent / "data" / "ml_dataset"
 

@@ -23,7 +23,7 @@
   # 查看某批的标注结果统计
   python ml/scripts/label_batches.py --batch 001 --stats
 
-标注文件: ml/dataset/annotations/annotations_XXX.jsonl
+标注文件: data/ml_dataset/annotations/annotations_XXX.jsonl
 """
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ import sys
 from pathlib import Path
 from collections import Counter
 
-BATCHES_DIR = Path(__file__).resolve().parent.parent / "dataset" / "batches"
+BATCHES_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "ml_dataset" / "batches"
 LABELS = [
     "information_exchange",
     "opinion_expression",
@@ -48,7 +48,7 @@ LABELS = [
 
 
 def get_annotations_path(batch_num: str, suffix: str = "") -> Path:
-    base = Path(__file__).resolve().parent.parent.parent / "ml" / "dataset" / "annotations"
+    base = Path(__file__).resolve().parent.parent.parent / "data" / "ml_dataset" / "annotations"
     tag = f"_{suffix}" if suffix else ""
     return base / f"annotations_{batch_num}{tag}.jsonl"
 

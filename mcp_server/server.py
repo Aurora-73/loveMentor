@@ -20,7 +20,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 from fastmcp import FastMCP
 
-from mcp_server import tools_read, tools_write, tools_formula, tools_guide, tools_config, tools_workflow
+from mcp_server import tools_read, tools_write, tools_formula, tools_guide, tools_config, tools_workflow, tools_live
 
 mcp = FastMCP("LoveMentor")
 
@@ -274,6 +274,27 @@ mcp.tool(
     description="启动 WeFlow 后端进程（D:\\WeFlow\\WeFlow.exe）并等待健康检查通过。如果 WeFlow 已在运行则直接返回成功。默认等待 60s",
 )(tools_read.weflow_start)
 
+# ── WeChat 进程管理 ──────────────────────────────────────────
+
+mcp.tool(
+    name="wechat_status",
+    description="检查微信（Weixin.exe）是否在运行。WCD 后端需要微信已登录才能工作，同步前建议先检查微信状态",
+    annotations={"readOnlyHint": True},
+)(tools_read.wechat_status)
+
+mcp.tool(
+    name="wechat_start",
+    description="启动微信（D:\\Weixin\\Weixin.exe）。如果微信已在运行则直接返回成功。"
+               "启动后自动点击登录按钮（click_login=True，默认启用），只需扫码即可登录。"
+               "参数 click_login=False 可禁用自动点击",
+)(tools_read.wechat_start)
+
+mcp.tool(
+    name="wechat_stop",
+    description="关闭微信（Weixin.exe）进程。force=False（默认）优雅关闭，force=True 强制终止。"
+               "配合 wechat_start 可实现重启：wechat_stop → wechat_start",
+)(tools_read.wechat_stop)
+
 # ── Phase 2 P2: 只读工具拆分 ─────────────────────────────────
 
 mcp.tool(
@@ -434,5 +455,43 @@ mcp.tool(
     annotations={"readOnlyHint": True},
 )(tools_formula.formula_calc_action)
 
+# ── 注册实时监听工具 ──────────────────────────────────────────
+
+mcp.tool(
+    name="live_monitor_start",
+    description="【实时聊天场景】开始监听联系人的最新消息。"
+               "自动拉取最近30分钟消息，然后按 poll_interval 秒轮询刷新（默认10s）。"
+               "监听期间用 live_chat_read 读取最新消息，无需每次手动 person_sync。"
+               "场景：正在和对方聊天，需要 agent 实时辅助回复。"
+               "结束后用 live_monitor_stop 停止。"
+               "参数：poll_interval=10（轮询间隔秒），fetch_limit=500，include_brief=False，"
+               "auto_stop=600（无读取自动停止秒数，默认10分钟，0=禁用）",
+)(tools_live.live_monitor_start)
+
+mcp.tool(
+    name="live_monitor_stop",
+    description="停止实时监听。传入 name 停止指定联系人，不传则停止所有监听。",
+)(tools_live.live_monitor_stop)
+
+mcp.tool(
+    name="live_monitor_status",
+    description="查看当前监听状态（正在监听哪些联系人、未读消息数、轮询间隔等）。",
+    annotations={"readOnlyHint": True},
+)(tools_live.live_monitor_status)
+
+mcp.tool(
+    name="live_chat_read",
+    description="【实时聊天场景】读取实时监听缓存的消息。"
+               "比 person_sync + person_chat 快得多，适合聊天中频繁调用。"
+               "必须在 live_monitor_start 之后使用。"
+               "参数：recent=0（返回最后N条，0=全部），since_last_read=False（增量模式，只返回上次读取后的新消息）",
+    annotations={"readOnlyHint": True},
+)(tools_live.live_chat_read)
+
 if __name__ == "__main__":
-    mcp.run()
+    try:
+        mcp.run()
+    finally:
+        # MCP Server 退出时自动停止所有实时监听
+        from engine.live_monitor import get_manager
+        get_manager().stop()

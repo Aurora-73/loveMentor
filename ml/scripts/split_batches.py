@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """将 samples_chat_records.jsonl 拆分为 1000 条一批的文件。
 
-输出到 ml/dataset/batches/batch_XXX.jsonl
+输出到 data/ml_dataset/batches/batch_XXX.jsonl
 
 用法:
   python ml/scripts/split_batches.py
@@ -13,7 +13,7 @@ from pathlib import Path
 
 BATCH_SIZE = 1000
 INPUT = Path(__file__).resolve().parent.parent.parent / "data" / "ml_dataset" / "samples_chat_records.jsonl"
-OUTPUT_DIR = Path(__file__).resolve().parent.parent / "dataset" / "batches"
+OUTPUT_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "ml_dataset" / "batches"
 
 
 def main():

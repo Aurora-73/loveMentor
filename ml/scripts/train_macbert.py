@@ -83,8 +83,8 @@ DEFAULT_MODEL = "/home2/cme_code/convert/hf_cache/hfl_chinese-macbert-base"
 
 # ── 默认数据路径（相对于项目根目录）──
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_SAMPLES = PROJECT_ROOT / "dataset" / "training_samples.jsonl"
-DEFAULT_ANNOTATIONS = PROJECT_ROOT / "dataset" / "training_annotations.jsonl"
+DEFAULT_SAMPLES = PROJECT_ROOT.parent / "data" / "ml_dataset" / "training_samples.jsonl"
+DEFAULT_ANNOTATIONS = PROJECT_ROOT.parent / "data" / "ml_dataset" / "training_annotations.jsonl"
 DEFAULT_OUTPUT = PROJECT_ROOT / "models"
 
 # ═══════════════════════════════════════════

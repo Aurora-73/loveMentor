@@ -22,7 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from ml.cleaning_patterns import clean_message
 
-RERUN_DIR = Path(__file__).resolve().parent.parent / "dataset" / "batches" / "rerun"
+RERUN_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "ml_dataset" / "batches" / "rerun"
 OUTPUT_DIR = RERUN_DIR / "cleaned"
 MIN_VALID_TURNS = 10  # 清洗后至少要有 10 轮有效对话（含同人合并，阈值高于普通清洗）
 

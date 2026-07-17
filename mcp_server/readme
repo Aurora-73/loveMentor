@@ -19,7 +19,7 @@ Claude Desktop (claude.json / .claude.json)
 
     "QuantSystem": {
       "type": "stdio",
-      "command": "C:\\Users\\[REDACTED]\\AppData\\Local\\Programs\\Python\\Python313\\python.exe",
+      "command": "C:\\Users\\<username>\\AppData\\Local\\Programs\\Python\\Python313\\python.exe",
       "args": ["-m", "mcp_server.server"],
       "env": {
         "PYTHONPATH": "E:\\Code\\loveMentor"

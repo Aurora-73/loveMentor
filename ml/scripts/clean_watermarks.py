@@ -23,7 +23,7 @@ import re
 import sys
 from pathlib import Path
 
-BATCHES_DIR = Path(__file__).resolve().parent.parent / "dataset" / "batches"
+BATCHES_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "ml_dataset" / "batches"
 
 # ── 水印正则（逐个按序清除）──
 

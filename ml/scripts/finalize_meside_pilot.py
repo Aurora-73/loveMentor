@@ -2,7 +2,7 @@
 
 1. 去重标注文件（454 行 → 453 唯一样本）
 2. 按 candidates 的 contact-based split 划分 train/held_out
-3. 输出到 ml/dataset/annotations/me_side_pilot_v1/
+3. 输出到 data/ml_dataset/annotations/me_side_pilot_v1/
 
 输出:
   me_side_pilot_v1/train.jsonl      — 309 条 pilot-train
@@ -13,9 +13,9 @@ import json
 from collections import Counter
 from pathlib import Path
 
-ANNOTATIONS = Path("ml/dataset/annotations/annotations_meside_000.jsonl")
-CANDIDATES = Path("ml/dataset/annotations/me_side_pilot_v1_candidates.jsonl")
-OUT_DIR = Path("ml/dataset/annotations/me_side_pilot_v1")
+ANNOTATIONS = Path("data/ml_dataset/annotations/annotations_meside_000.jsonl")
+CANDIDATES = Path("data/ml_dataset/annotations/me_side_pilot_v1_candidates.jsonl")
+OUT_DIR = Path("data/ml_dataset/annotations/me_side_pilot_v1")
 
 
 def main():

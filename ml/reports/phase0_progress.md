@@ -74,7 +74,7 @@
 ### 4.2 Baseline 精度评估（150 样本 × 10 标签）
 - 目的：评估三种 baseline 方法的实际精度
 - 标签：全部 10 个语义标签
-- 模板：[ml/outputs/annotation_template_150.md](file:///E:/Code/loveMentor/ml/outputs/annotation_template_150.md)
+- 模板：[data/ml_outputs/annotation_template_150.md](file:///E:/Code/loveMentor/data/ml_outputs/annotation_template_150.md)
 - 产出：各方法 precision/recall/F1/kappa
 
 ### 4.3 标注规范
@@ -85,7 +85,7 @@
 ## 五、文件清单
 
 ### 核心模块
-- [ml/dataset/data_loader.py](file:///E:/Code/loveMentor/ml/dataset/data_loader.py) — 数据加载与窗口构建
+- [data/ml_dataset/data_loader.py](file:///E:/Code/loveMentor/data/ml_dataset/data_loader.py) — 数据加载与窗口构建
 - [ml/rules/baseline_classifier.py](file:///E:/Code/loveMentor/ml/rules/baseline_classifier.py) — 规则基线分类器
 - [ml/embedding/embedder.py](file:///E:/Code/loveMentor/ml/embedding/embedder.py) — Embedding 封装
 - [ml/embedding/embedding_classifier.py](file:///E:/Code/loveMentor/ml/embedding/embedding_classifier.py) — Zero-Shot 分类器
@@ -96,10 +96,10 @@
 - [ml/lexicons/](file:///E:/Code/loveMentor/ml/lexicons/) 目录下 10 个 .yaml 文件
 
 ### 数据产出
-- [ml/dataset/samples_5000.jsonl](file:///E:/Code/loveMentor/ml/dataset/samples_5000.jsonl) — 910 个样本
-- [ml/outputs/baseline_results.jsonl](file:///E:/Code/loveMentor/ml/outputs/baseline_results.jsonl) — 规则预测
-- [ml/outputs/embedding_results.jsonl](file:///E:/Code/loveMentor/ml/outputs/embedding_results.jsonl) — Embedding 预测
-- [ml/outputs/weak_supervised_results.jsonl](file:///E:/Code/loveMentor/ml/outputs/weak_supervised_results.jsonl) — 弱监督预测
+- [data/ml_dataset/samples_5000.jsonl](file:///E:/Code/loveMentor/data/ml_dataset/samples_5000.jsonl) — 910 个样本
+- [data/ml_outputs/baseline_results.jsonl](file:///E:/Code/loveMentor/data/ml_outputs/baseline_results.jsonl) — 规则预测
+- [data/ml_outputs/embedding_results.jsonl](file:///E:/Code/loveMentor/data/ml_outputs/embedding_results.jsonl) — Embedding 预测
+- [data/ml_outputs/weak_supervised_results.jsonl](file:///E:/Code/loveMentor/data/ml_outputs/weak_supervised_results.jsonl) — 弱监督预测
 
 ---
 
@@ -112,16 +112,16 @@
 2. **运行评估**（标注完成后）
    ```bash
    # 1. 把填好的模板转成 JSONL
-   python ml/evaluation/evaluate.py convert --template ml/outputs/annotation_template_150.md --output ml/outputs/gold_150.jsonl
+   python ml/evaluation/evaluate.py convert --template data/ml_outputs/annotation_template_150.md --output data/ml_outputs/gold_150.jsonl
 
    # 2. 评估规则基线
-   python ml/evaluation/evaluate.py evaluate --pred ml/outputs/baseline_results.jsonl --gold ml/outputs/gold_150.jsonl
+   python ml/evaluation/evaluate.py evaluate --pred data/ml_outputs/baseline_results.jsonl --gold data/ml_outputs/gold_150.jsonl
 
    # 3. 评估 embedding
-   python ml/evaluation/evaluate.py evaluate --pred ml/outputs/embedding_results.jsonl --gold ml/outputs/gold_150.jsonl
+   python ml/evaluation/evaluate.py evaluate --pred data/ml_outputs/embedding_results.jsonl --gold data/ml_outputs/gold_150.jsonl
 
    # 4. 评估弱监督
-   python ml/evaluation/evaluate.py evaluate --pred ml/outputs/weak_supervised_results.jsonl --gold ml/outputs/gold_150.jsonl
+   python ml/evaluation/evaluate.py evaluate --pred data/ml_outputs/weak_supervised_results.jsonl --gold data/ml_outputs/gold_150.jsonl
    ```
 
 3. **生成最终报告**

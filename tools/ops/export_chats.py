@@ -1,4 +1,4 @@
-﻿"""导出指定联系人的聊天记录到文件，供深度分析。
+"""导出指定联系人的聊天记录到文件，供深度分析。
 
 Usage:
     python tools/ops/export_chats.py [names...]
@@ -35,7 +35,7 @@ else:
 
 if not targets:
     print("请提供联系人姓名或使用 --all 参数")
-    print("示例: python tools/ops/export_chats.py [REDACTED] [REDACTED]")
+    print("示例: python tools/ops/export_chats.py 测试联系人A 测试联系人B")
     sys.exit(1)
 
 out_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "outputs", "chat_analysis")
