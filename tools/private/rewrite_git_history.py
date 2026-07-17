@@ -34,6 +34,19 @@ DICT_PATH = PRIVATE_DIR / "dictionary.yaml"
 
 REPLACEMENT_TEXT = "[REDACTED]"
 
+# 排除列表：这些词虽然是字典库中的 nickname，但替换会破坏代码
+# （纯数字批次号、常见短词、代码常量、微信内置账号等）
+EXCLUDE_TERMS = {
+    "001", "414", "ooo",  # 纯数字/字母短词（批次号、sample_id）
+    "Blink", "SEVEN",  # 代码常量（BlinkMacSystemFont, 7-Zip）
+    "weixin",  # 路径（D:/Weixin）
+    "filehelper", "exmail_tool", "shhtinns",  # 微信内置账号
+    "微信支付", "微信运动",  # 微信内置账号
+    "[REDACTED]", "[REDACTED]", "[REDACTED]", "[REDACTED]",  # 聊天内容短语
+    "[REDACTED]", "[REDACTED]", "[REDACTED]",  # annotations 中的非字典联系人
+    "大众点评",  # 公众号名（聊天中出现）
+}
+
 
 def load_search_terms(dict_path: Path, min_len: int = 2) -> list[str]:
     """从字典库加载所有隐私词条（只返回字符串列表）。"""
@@ -75,8 +88,8 @@ def load_search_terms(dict_path: Path, min_len: int = 2) -> list[str]:
                 if len(v) >= min_len:
                     terms.append(v)
 
-    # 去重，按长度降序（先替换长词避免部分匹配）
-    unique = sorted(set(terms), key=len, reverse=True)
+    # 去重，排除已知误报词，按长度降序（先替换长词避免部分匹配）
+    unique = sorted(set(terms) - EXCLUDE_TERMS, key=len, reverse=True)
     return unique
 
 
@@ -84,7 +97,7 @@ def check_filter_repo() -> bool:
     """检查 git filter-repo 是否可用。"""
     try:
         result = subprocess.run(
-            ["git", "filter-repo", "--help"],
+            ["git", "filter-repo", "--version"],
             capture_output=True, timeout=10,
         )
         return result.returncode == 0
