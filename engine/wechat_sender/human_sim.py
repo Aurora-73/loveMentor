@@ -46,10 +46,51 @@ MOUSEEVENTF_LEFTUP = 0x0004
 
 # 键盘事件常量
 KEYEVENTF_KEYUP = 0x0002
+KEYEVENTF_UNICODE = 0x0004
+KEYEVENTF_SCANCODE = 0x0008
+INPUT_KEYBOARD = 1
 VK_CONTROL = 0x11
+VK_MENU = 0x12  # Alt 键
 VK_A = 0x41
 VK_V = 0x56
+VK_F = 0x46
 VK_END = 0x23  # End 键，用于把光标移到末尾
+VK_ESCAPE = 0x1B
+
+# WM_IME_CHAR 消息（用于绕过剪贴板模拟 IME 输入中文）
+WM_IME_CHAR = 0x0286
+
+
+# ── SendInput 结构体定义（64 位兼容）─────────────────────────────
+class _KEYBDINPUT(ctypes.Structure):
+    _fields_ = [
+        ("wVk", wintypes.WORD),
+        ("wScan", wintypes.WORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ctypes.POINTER(wintypes.ULONG)),
+    ]
+
+
+class _INPUT_UNION(ctypes.Union):
+    _fields_ = [("ki", _KEYBDINPUT)]
+
+
+class INPUT(ctypes.Structure):
+    _anonymous_ = ("ii",)
+    _fields_ = [
+        ("type", wintypes.DWORD),
+        ("ii", _INPUT_UNION),
+    ]
+
+
+# SendInput 函数原型（64 位兼容）
+user32.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int]
+user32.SendInput.restype = wintypes.UINT
+user32.MapVirtualKeyW.argtypes = [wintypes.UINT, wintypes.UINT]
+user32.MapVirtualKeyW.restype = wintypes.UINT
+user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+user32.PostMessageW.restype = wintypes.BOOL
 
 
 # ── 防封号参数（可在 config.py 中覆盖）─────────────────────────
@@ -76,10 +117,46 @@ CLIPBOARD_WAIT_MIN, CLIPBOARD_WAIT_MAX = 0.15, 0.3
 # 前台切换后等待（秒）
 FOREGROUND_WAIT_MIN, FOREGROUND_WAIT_MAX = 0.2, 0.4
 
+# 逐字输入参数（短消息用 SendInput 逐字输入）
+CHAR_GAP_MIN, CHAR_GAP_MAX = 0.05, 0.15   # 每个字符的输入间隔（秒）
+# 中文 IME 输入参数（用 WM_IME_CHAR 绕过剪贴板）
+IME_CHAR_GAP_MIN, IME_CHAR_GAP_MAX = 0.08, 0.25  # 中文字符间隔（更长，模拟 IME 候选词选择）
+
+# 是否启用 WM_IME_CHAR 输入中文（默认 False，需测试有效后再开启）
+# 测试方法：运行 scripts/test_ime_char.py 验证微信编辑框是否响应 WM_IME_CHAR
+USE_IME_CHAR_FOR_CHINESE = False
+
 
 def _human_sleep(min_s, max_s):
     """随机睡眠 [min_s, max_s] 秒。"""
     time.sleep(random.uniform(min_s, max_s))
+
+
+# 偶发长停顿参数（模拟人类走神/思考）
+OCCASIONAL_PAUSE_PROBABILITY = 0.05  # 5% 概率触发长停顿
+OCCASIONAL_PAUSE_MIN = 1.0           # 长停顿最小 1 秒
+OCCASIONAL_PAUSE_MAX = 3.0           # 长停顿最大 3 秒
+
+
+def _human_sleep_with_pause(min_s, max_s, allow_pause=True):
+    """随机睡眠，偶发引入长停顿模拟人类走神。
+
+    在常规随机间隔基础上，有 OCCASIONAL_PAUSE_PROBABILITY 概率
+    触发长停顿（1-3 秒），模拟人类操作中的走神/思考。
+
+    用于阶段切换、段间停顿等关键位置，避免机械化节奏。
+
+    Args:
+        min_s, max_s: 常规随机间隔范围（秒）
+        allow_pause: 是否允许触发长停顿（False=纯随机间隔）
+    """
+    if allow_pause and random.random() < OCCASIONAL_PAUSE_PROBABILITY:
+        # 偶发长停顿
+        pause = random.uniform(OCCASIONAL_PAUSE_MIN, OCCASIONAL_PAUSE_MAX)
+        logger.info(f"   [人类模拟] 偶发停顿 {pause:.2f}s（模拟走神）")
+        time.sleep(pause)
+    else:
+        time.sleep(random.uniform(min_s, max_s))
 
 
 def _jitter_point(x, y, radius=DEFAULT_JITTER_RADIUS):
@@ -94,15 +171,129 @@ def _jitter_point(x, y, radius=DEFAULT_JITTER_RADIUS):
     return int(round(x + r * math.cos(angle))), int(round(y + r * math.sin(angle)))
 
 
-def _press_key_combo(hold_vk, press_vk):
-    """模拟 Ctrl+X 之类的组合键：按住 hold_vk，按一下 press_vk，再松开 hold_vk。"""
-    user32.keybd_event(hold_vk, 0, 0, 0)                  # Ctrl down
+def _send_input_keyboard(wVk, wScan, dwFlags):
+    """用 SendInput 发送一个键盘事件（更接近真实硬件事件，带扫描码）。
+
+    相比 keybd_event：
+    1. 支持扫描码（KEYEVENTF_SCANCODE），与真实键盘事件一致
+    2. SendInput 是更底层的 API，不被其他钩子拦截
+    3. 64 位兼容，参数原型已设置
+
+    Args:
+        wVk: 虚拟键码（用 KEYEVENTF_UNICODE 时传 0）
+        wScan: 扫描码或 Unicode 字符码
+        dwFlags: 标志位（KEYEVENTF_SCANCODE / KEYEVENTF_UNICODE / KEYEVENTF_KEYUP）
+
+    Returns:
+        bool: 是否成功发送
+    """
+    inp = INPUT()
+    inp.type = INPUT_KEYBOARD
+    inp.ii.ki.wVk = wVk
+    inp.ii.ki.wScan = wScan
+    inp.ii.ki.dwFlags = dwFlags
+    inp.ii.ki.time = 0
+    inp.ii.ki.dwExtraInfo = ctypes.pointer(wintypes.ULONG(0))
+    result = user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+    if result == 0:
+        logger.warning(f"   ⚠️ SendInput 失败 (wVk={wVk}, wScan={wScan}, flags={dwFlags})")
+        return False
+    return True
+
+
+def _send_key_press(vk, with_scan=True):
+    """用 SendInput 按下并抬起一个键（带扫描码）。
+
+    Args:
+        vk: 虚拟键码
+        with_scan: 是否带扫描码（True=扫描码，False=纯虚拟键码）
+    """
+    flags_down = KEYEVENTF_SCANCODE if with_scan else 0
+    flags_up = flags_down | KEYEVENTF_KEYUP
+    scan = user32.MapVirtualKeyW(vk, 0) if with_scan else 0  # MAPVK_VK_TO_VSC
+    _send_input_keyboard(0, scan, flags_down)
+    _human_sleep(0.03, 0.07)
+    _send_input_keyboard(0, scan, flags_up)
+
+
+def _send_key_combo_si(hold_vk, press_vk):
+    """用 SendInput 模拟 Ctrl+X 组合键（带扫描码，更接近真实硬件事件）。
+
+    替代 _press_key_combo，使用 SendInput 而非 keybd_event。
+    """
+    scan_hold = user32.MapVirtualKeyW(hold_vk, 0)  # MAPVK_VK_TO_VSC
+    scan_press = user32.MapVirtualKeyW(press_vk, 0)
+
+    # Ctrl down
+    _send_input_keyboard(0, scan_hold, KEYEVENTF_SCANCODE)
     _human_sleep(0.04, 0.08)
-    user32.keybd_event(press_vk, 0, 0, 0)                 # X down
+    # X down
+    _send_input_keyboard(0, scan_press, KEYEVENTF_SCANCODE)
     _human_sleep(0.03, 0.07)
-    user32.keybd_event(press_vk, 0, KEYEVENTF_KEYUP, 0)   # X up
+    # X up
+    _send_input_keyboard(0, scan_press, KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP)
     _human_sleep(0.03, 0.07)
-    user32.keybd_event(hold_vk, 0, KEYEVENTF_KEYUP, 0)    # Ctrl up
+    # Ctrl up
+    _send_input_keyboard(0, scan_hold, KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP)
+
+
+def _type_char_unicode(char):
+    """用 SendInput + KEYEVENTF_UNICODE 逐字输入一个字符。
+
+    适用于英文/数字/符号（ASCII 字符），绕过键盘布局和 IME。
+    发送的是 WM_CHAR 消息，微信编辑框响应良好。
+
+    Args:
+        char: 单个字符（ASCII）
+    """
+    code = ord(char)
+    # 按下（KEYEVENTF_UNICODE）
+    _send_input_keyboard(0, code, KEYEVENTF_UNICODE)
+    _human_sleep(0.02, 0.05)
+    # 抬起
+    _send_input_keyboard(0, code, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP)
+
+
+def _type_ime_char(hwnd, char):
+    """用 WM_IME_CHAR 消息输入一个中文字符（绕过剪贴板）。
+
+    通过 PostMessageW 直接向目标窗口发送 WM_IME_CHAR 消息，
+    模拟 IME 输入法输入中文字符，不经过剪贴板。
+
+    ⚠️ 注意：此方法依赖于微信编辑框响应 WM_IME_CHAR 消息。
+    测试方法：运行 scripts/test_ime_char.py 验证。
+    如果不响应，请保持 USE_IME_CHAR_FOR_CHINESE = False，使用剪贴板粘贴。
+
+    Args:
+        hwnd: 目标窗口句柄
+        char: 单个中文字符
+
+    Returns:
+        bool: PostMessageW 是否成功发送（不代表窗口已处理）
+    """
+    code = ord(char)
+    # PostMessageW 是异步的，不阻塞
+    # lParam 高字=扫描码（0），低字=重复次数（1）
+    lparam = 1
+    result = user32.PostMessageW(hwnd, WM_IME_CHAR, code, lparam)
+    return bool(result)
+
+
+def _press_key_combo(hold_vk, press_vk):
+    """模拟 Ctrl+X 之类的组合键：按住 hold_vk，按一下 press_vk，再松开 hold_vk。
+
+    已升级为使用 SendInput（带扫描码），替代旧的 keybd_event。
+    保留原函数名以兼容调用方。
+    """
+    _send_key_combo_si(hold_vk, press_vk)
+
+
+def _press_single_key(vk):
+    """按下并抬起单个键（如 Esc），用 SendInput 带扫描码。
+
+    替代 keybd_event 单键操作，统一输入方式。
+    """
+    _send_key_press(vk, with_scan=True)
 
 
 def _set_clipboard_text(text):
@@ -211,25 +402,84 @@ def _split_text(text):
     return [text[i:i + seg_len] for i in range(0, len(text), seg_len)]
 
 
-def human_input_text(hwnd, text):
-    """分段随机间隔输入文字，模拟人类打字。
+def _is_ascii_char(ch):
+    """判断字符是否为 ASCII（英文/数字/常见符号）。
 
-    相比 input_text_via_clipboard：
-    1. 把消息切成若干段（段长随机）。
-    2. 第一段用 Ctrl+A 全选 + Ctrl+V 粘贴（替换已有内容）。
-    3. 后续段直接 Ctrl+V 粘贴（追加到光标位置）。
-    4. 段间随机间隔 0.2~0.8 秒，模拟人类打字停顿。
-    5. 每段内的按键操作也有随机间隔。
+    ASCII 字符用 SendInput + KEYEVENTF_UNICODE 逐字输入，
+    非 ASCII（如中文）用 WM_IME_CHAR 或剪贴板粘贴。
+    """
+    return ord(ch) < 128
+
+
+def _has_chinese(text):
+    """判断文本是否包含非 ASCII 字符（如中文）。"""
+    return any(not _is_ascii_char(ch) for ch in text)
+
+
+def _type_short_message(hwnd, text):
+    """短消息（≤ SHORT_MSG_THRESHOLD）逐字输入，绕过剪贴板。
+
+    输入策略：
+    1. 纯 ASCII：逐字 SendInput + KEYEVENTF_UNICODE（绕过剪贴板和 IME）
+    2. 含中文 + USE_IME_CHAR_FOR_CHINESE=True：
+       - ASCII 部分用 SendInput Unicode
+       - 中文部分用 WM_IME_CHAR（绕过剪贴板）
+    3. 含中文 + USE_IME_CHAR_FOR_CHINESE=False：
+       - fallback 到剪贴板粘贴（Ctrl+A + Ctrl+V）
 
     Args:
-        hwnd: 目标窗口句柄（需在前台才能接收 keybd_event）
+        hwnd: 目标窗口句柄
+        text: 短消息文本（≤ SHORT_MSG_THRESHOLD 字符）
+
+    Returns:
+        bool: 是否成功
+    """
+    has_chinese = _has_chinese(text)
+
+    # 策略3：含中文且未启用 IME_CHAR，fallback 到剪贴板粘贴
+    if has_chinese and not USE_IME_CHAR_FOR_CHINESE:
+        logger.info(f"   [人类模拟] 短消息含中文(IME_CHAR 未启用)，走剪贴板路径: {text!r}")
+        return _type_via_clipboard(hwnd, text)
+
+    # 策略1/2：纯 ASCII 或启用了 IME_CHAR
+    # 先 Ctrl+A 清空已有内容
+    user32.SetForegroundWindow(hwnd)
+    _human_sleep(FOREGROUND_WAIT_MIN, FOREGROUND_WAIT_MAX)
+    _press_key_combo(VK_CONTROL, VK_A)
+    _human_sleep(0.08, 0.18)
+
+    if has_chinese:
+        logger.info(f"   [人类模拟] 短消息逐字输入(IME_CHAR): {text!r}")
+    else:
+        logger.info(f"   [人类模拟] 短消息逐字输入(Unicode): {text!r}")
+
+    # 逐字输入
+    for ch in text:
+        if _is_ascii_char(ch):
+            _type_char_unicode(ch)
+            _human_sleep(CHAR_GAP_MIN, CHAR_GAP_MAX)
+        else:
+            # 中文用 WM_IME_CHAR
+            _type_ime_char(hwnd, ch)
+            _human_sleep(IME_CHAR_GAP_MIN, IME_CHAR_GAP_MAX)
+
+    logger.info(f"   [人类模拟] 逐字输入完成: {text}")
+    return True
+
+
+def _type_via_clipboard(hwnd, text):
+    """用剪贴板粘贴输入文本（分段或整段）。
+
+    用于长消息或 IME_CHAR 未启用时的中文消息。
+
+    Args:
+        hwnd: 目标窗口句柄
         text: 要输入的文本
 
     Returns:
         bool: 是否成功
     """
     segments = _split_text(text)
-    logger.info(f"   [人类模拟] 输入 {text!r}（{len(segments)} 段，总 {len(text)} 字符）")
 
     # 写入第一段到剪贴板
     if not _set_clipboard_text(segments[0]):
@@ -249,7 +499,7 @@ def human_input_text(hwnd, text):
 
     # 后续段：Ctrl+V 追加（光标应在上次粘贴的末尾）
     for idx, seg in enumerate(segments[1:], start=2):
-        _human_sleep(SEG_GAP_MIN, SEG_GAP_MAX)  # 段间停顿，模拟人类打字
+        _human_sleep_with_pause(SEG_GAP_MIN, SEG_GAP_MAX)  # 段间停顿，偶发长停顿
         if not _set_clipboard_text(seg):
             logger.warning(f"   ⚠️ 第 {idx} 段剪贴板设置失败")
             return False
@@ -257,13 +507,49 @@ def human_input_text(hwnd, text):
         _press_key_combo(VK_CONTROL, VK_V)
         _human_sleep(PASTE_WAIT_MIN, PASTE_WAIT_MAX)
 
-    logger.info(f"   [人类模拟] 输入完成: {text}")
     return True
+
+
+def human_input_text(hwnd, text):
+    """人类模拟输入文字，自动选择最佳输入策略。
+
+    输入策略（自动选择）：
+    1. 短消息（≤ SHORT_MSG_THRESHOLD 字符）：
+       - 纯 ASCII：逐字 SendInput + KEYEVENTF_UNICODE（绕过剪贴板和 IME）
+       - 含中文 + USE_IME_CHAR_FOR_CHINESE=True：ASCII 用 Unicode，中文用 WM_IME_CHAR
+       - 含中文 + USE_IME_CHAR_FOR_CHINESE=False：剪贴板粘贴（fallback）
+    2. 长消息（> SHORT_MSG_THRESHOLD 字符）：分段剪贴板粘贴
+
+    所有按键操作使用 SendInput（带扫描码），替代 keybd_event。
+
+    Args:
+        hwnd: 目标窗口句柄（需在前台才能接收输入）
+        text: 要输入的文本
+
+    Returns:
+        bool: 是否成功
+    """
+    if not text:
+        return True
+
+    logger.info(f"   [人类模拟] 输入 {text!r}（{len(text)} 字符）")
+
+    # 短消息：逐字输入（更隐蔽）
+    if len(text) <= SHORT_MSG_THRESHOLD:
+        return _type_short_message(hwnd, text)
+
+    # 长消息：分段剪贴板粘贴
+    logger.info(f"   [人类模拟] 长消息走分段粘贴路径（{len(text)} > {SHORT_MSG_THRESHOLD}）")
+    success = _type_via_clipboard(hwnd, text)
+    if success:
+        logger.info(f"   [人类模拟] 输入完成: {text}")
+    return success
 
 
 def random_operation_gap(min_s=0.3, max_s=0.8):
     """在两个独立操作之间加入随机间隔（如搜索→点击头像之间）。
 
     用于在阶段切换时插入更长的随机停顿，模拟人类思考/反应时间。
+    偶发引入长停顿（5% 概率 1-3 秒），模拟人类走神。
     """
-    _human_sleep(min_s, max_s)
+    _human_sleep_with_pause(min_s, max_s, allow_pause=True)

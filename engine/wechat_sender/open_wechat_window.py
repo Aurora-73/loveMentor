@@ -338,11 +338,9 @@ def open_wechat_window_robust(timeout=10.0):
     logger.info("   单击未生效，尝试双击...")
 
     # 第二次尝试：双击
-    # 先关闭可能出现的气泡（按 Esc）
-    VK_ESCAPE = 0x1B
-    user32.keybd_event(VK_ESCAPE, 0, 0, 0)
-    time.sleep(0.05)
-    user32.keybd_event(VK_ESCAPE, 0, 0x0002, 0)
+    # 先关闭可能出现的气泡（按 Esc，已升级为 SendInput 带扫描码）
+    from human_sim import _press_single_key, VK_ESCAPE
+    _press_single_key(VK_ESCAPE)
     time.sleep(0.3)
 
     if open_wechat_window(timeout=timeout, try_double_click=True):

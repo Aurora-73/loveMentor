@@ -217,14 +217,11 @@ def rollback_wechat_state():
     3. 点击聊天输入框区域清除焦点
     """
     logger.info("\n[回滚] 清理微信残留状态...")
-    KEYEVENTF_KEYUP = 0x0002
-    VK_ESCAPE = 0x1B
+    from human_sim import _press_single_key, VK_ESCAPE
 
-    # 连按3次 Esc，关闭搜索候选框和清除搜索栏
+    # 连按3次 Esc，关闭搜索候选框和清除搜索栏（已升级为 SendInput 带扫描码）
     for i in range(3):
-        user32.keybd_event(VK_ESCAPE, 0, 0, 0)
-        time.sleep(0.05)
-        user32.keybd_event(VK_ESCAPE, 0, KEYEVENTF_KEYUP, 0)
+        _press_single_key(VK_ESCAPE)
         time.sleep(0.1)
     logger.info("    [回滚] 已按 Esc 清理搜索栏/候选框")
     time.sleep(0.3)
@@ -332,11 +329,9 @@ def _refresh_avatar_and_maybe_retry(contact_name, template_path, message):
 
         if attempt > 1:
             logger.info("\n[重试预备] 清理搜索栏残留状态 + 滚动+点击...")
-            KEYEVENTF_KEYUP = 0x0002
+            from human_sim import _press_single_key, VK_ESCAPE
             for _ in range(2):
-                user32.keybd_event(0x1B, 0, 0, 0)
-                time.sleep(0.05)
-                user32.keybd_event(0x1B, 0, KEYEVENTF_KEYUP, 0)
+                _press_single_key(VK_ESCAPE)
                 time.sleep(0.1)
             time.sleep(0.3)
             scroll_in_main_middle_column()
@@ -443,13 +438,10 @@ def run_e2e(message, contact_name, template_path):
 
         if attempt > 1:
             logger.info("\n[重试预备] 清理搜索栏残留状态 + 滚动+点击...")
-            # 先按 Esc 关闭可能残留的搜索候选框和搜索栏
-            # VK_ESCAPE = 0x1B，连按两次确保关闭搜索栏
-            KEYEVENTF_KEYUP = 0x0002
+            # 先按 Esc 关闭可能残留的搜索候选框和搜索栏（已升级为 SendInput 带扫描码）
+            from human_sim import _press_single_key, VK_ESCAPE
             for _ in range(2):
-                user32.keybd_event(0x1B, 0, 0, 0)
-                time.sleep(0.05)
-                user32.keybd_event(0x1B, 0, KEYEVENTF_KEYUP, 0)
+                _press_single_key(VK_ESCAPE)
                 time.sleep(0.1)
             time.sleep(0.3)
             scroll_in_main_middle_column()

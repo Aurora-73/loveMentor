@@ -227,8 +227,7 @@ def safe_set_foreground_window(hwnd, max_retries=3):
     Returns:
         bool: 是否成功
     """
-    KEYEVENTF_KEYUP = 0x0002
-    VK_MENU = 0x12  # Alt 键
+    KEYEVENTF_KEYUP = 0x0002  # 保留，可能被其他地方引用
 
     # 获取当前前台窗口和线程
     foreground_hwnd = user32.GetForegroundWindow()
@@ -246,11 +245,10 @@ def safe_set_foreground_window(hwnd, max_retries=3):
             if user32.AttachThreadInput(current_thread_id, foreground_thread_id, True):
                 attached = True
 
-        # 方法2: Alt 键 trick（模拟用户活动）
+        # 方法2: Alt 键 trick（模拟用户活动，已升级为 SendInput 带扫描码）
         if i > 0 or not attached:
-            user32.keybd_event(VK_MENU, 0, 0, 0)
-            time.sleep(0.05)
-            user32.keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0)
+            from human_sim import _send_key_press, VK_MENU
+            _send_key_press(VK_MENU, with_scan=True)
             time.sleep(0.1)
 
         # 尝试多种方式激活窗口

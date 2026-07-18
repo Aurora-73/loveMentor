@@ -523,13 +523,9 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
         time.sleep(0.3)
 
         # 用 Ctrl+F 快捷键打开搜索栏（比点击更可靠，不依赖精确位置）
-        KEYEVENTF_KEYUP = 0x0002
-        user32.keybd_event(VK_CONTROL, 0, 0, 0)
-        time.sleep(0.05)
-        user32.keybd_event(0x46, 0, 0, 0)  # 'F' 键
-        time.sleep(0.05)
-        user32.keybd_event(0x46, 0, KEYEVENTF_KEYUP, 0)
-        user32.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)
+        # 已升级为 SendInput 带扫描码（通过 human_sim._press_key_combo）
+        from human_sim import _press_key_combo, VK_CONTROL, VK_F
+        _press_key_combo(VK_CONTROL, VK_F)
         time.sleep(0.8)
 
         # 输入联系人名
