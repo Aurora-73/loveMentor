@@ -422,6 +422,11 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
         contact_name: 联系人昵称（用于搜索栏输入），默认 CONTACT_NAME
         template_path: 联系人头像模板路径，默认 TEMPLATE_PATH
     """
+    # 修复 VK_CONTROL 作用域：在函数顶部统一定义，避免 if/else 分支作用域冲突
+    # （原 if 分支内局部赋值会导致 Python 将整个函数的 VK_CONTROL 视为局部变量，
+    #  else 分支使用时触发 "cannot access local variable" 错误）
+    VK_CONTROL = 0x11
+
     logger.info(f"\n{'=' * 20} 第 {attempt_idx}/{max_attempts} 次尝试 {'=' * 20}")
 
     # ========== 阶段 A：点击前窗口数 ==========
@@ -478,9 +483,8 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
         WM_KEYUP = 0x0101
         WM_CHAR = 0x0102
         MK_LBUTTON = 0x0001
-        VK_CONTROL = 0x11
-        VK_A = 0x41
-        VK_DELETE = 0x2E
+        # VK_CONTROL 已在函数顶部统一定义（避免作用域冲突）
+        VK_BACK = 0x08
 
         # 1. PostMessage 点击搜索栏（客户区坐标），激活搜索框
         click_lparam = (client_y << 16) | (client_x & 0xFFFF)
@@ -490,7 +494,6 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
         time.sleep(0.5)
 
         # 2. 清空搜索框（用 Backspace 删除，不用 Ctrl+A 因为 Qt 会把 A 当普通字符输入）
-        VK_BACK = 0x08
         for _ in range(50):  # 最多删除 50 个字符
             user32.PostMessageW(hwnd_main, WM_KEYDOWN, VK_BACK, 0)
             time.sleep(0.01)
