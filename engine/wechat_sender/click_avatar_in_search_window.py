@@ -567,6 +567,14 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
     print(f"    选中(距搜索框最近): ({target[0]}, {target[1]}) "
           f"conf={target[2]:.3f} scale={target[3]}px")
 
+    # 头像模板有效性检查：低置信度提示模板可能过期
+    TEMPLATE_WARNING_THRESHOLD = 0.75
+    if target[2] < TEMPLATE_WARNING_THRESHOLD:
+        print(f"    ⚠️ 匹配置信度较低（{target[2]:.3f} < {TEMPLATE_WARNING_THRESHOLD}）")
+        print(f"    可能原因：联系人更换了头像，模板 {os.path.basename(template_path)} 已过期")
+        print(f"    建议：重新截取联系人头像并更新模板文件")
+        # 不 return False，因为低置信度仍可能正确（只是提示警告）
+
     match_vis = draw_match_result(search_img, points, target, s_box_x, s_box_y)
     match_path = os.path.join(OUTPUT_DIR, f"stage_d_match_result_{attempt_idx}.png")
     cv2.imwrite(match_path, match_vis)
