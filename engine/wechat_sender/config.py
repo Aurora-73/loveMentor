@@ -30,13 +30,13 @@ SEARCH_FALLBACK_Y_RATIO = 0.05
 # ── 头像模板匹配 ──────────────────────────────────────────────
 
 # 模板匹配阈值（低于此值视为不匹配）
-MATCH_THRESHOLD = 0.6
+MATCH_THRESHOLD = 0.7
 
 # 多尺度匹配的模板尺寸列表（像素）
-TEMPLATE_SCALES = [36, 40, 44, 48, 52, 56, 60]
+TEMPLATE_SCALES = (20, 30, 40, 45, 50, 60, 70, 80)
 
 # 非极大值抑制最小距离
-NMS_MIN_DIST = 10
+NMS_MIN_DIST = 20
 
 # 匹配点选择的最低置信度（低于此值回退到选最近）
 MIN_CONFIDENCE_FOR_SELECTION = 0.7
@@ -58,7 +58,7 @@ BELOW_SEARCH_BOX_BONUS = 0.2
 GREEN_RING_BGR = (112, 172, 21)
 
 # 绿色环颜色容差
-GREEN_RING_TOLERANCE = 50
+GREEN_RING_TOLERANCE = 30
 
 # 绿色像素占比阈值（达到此值视为绿色环存在）
 GREEN_RING_MIN_RATIO = 0.4

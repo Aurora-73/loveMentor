@@ -170,6 +170,11 @@ def _ensure_wechat_window(max_wait: float = 15.0) -> dict:
     }
 
 
+# ── 并发锁（修复 P1-4：防止 wechat_send / wechat_ocr 并发执行互相干扰）──
+import threading
+_wechat_op_lock = threading.Lock()
+
+
 # ── 联系人解析（name → 微信号 alias）────────────────────────────
 
 def _resolve_contact(name: str) -> dict:
@@ -395,6 +400,7 @@ def wechat_send(name: str, message: str) -> dict:
             "matches": list|None,  # 多匹配时的联系人列表（仅 MULTIPLE_MATCHES 时有值）
         }
     """
+    _wechat_op_lock.acquire()
     try:
         # ── 步骤 1: 解析联系人，获取微信号 ──
         resolution = _resolve_contact(name)
@@ -526,6 +532,8 @@ def wechat_send(name: str, message: str) -> dict:
             "window_restored": False,
             "matches": None,
         }
+    finally:
+        _wechat_op_lock.release()
 
 
 # ── 工具2: wechat_ocr ───────────────────────────────────────────
@@ -563,6 +571,7 @@ def wechat_ocr(region: str = "full", use_cache: bool = False) -> dict:
             "center": [x, y],          # 中心坐标
         }
     """
+    _wechat_op_lock.acquire()
     try:
         import ctypes
         import time
@@ -717,3 +726,5 @@ def wechat_ocr(region: str = "full", use_cache: bool = False) -> dict:
             "screenshot_path": "",
             "error": f"RUNTIME_ERROR: {traceback.format_exc()}",
         }
+    finally:
+        _wechat_op_lock.release()

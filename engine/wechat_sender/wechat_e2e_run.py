@@ -38,7 +38,7 @@ from click_avatar_in_search_window import (  # noqa: E402
 )
 from send_message_run import run_send_message  # noqa: E402
 from test_current_wechat import screencap_window  # noqa: E402
-from click_search_and_input import client_to_screen, physical_click, safe_set_foreground_window  # noqa: E402
+from click_search_and_input import client_to_screen, physical_click, safe_set_foreground_window, get_client_offset  # noqa: E402
 
 user32 = ctypes.windll.user32
 
@@ -80,10 +80,8 @@ def cleanup_old_screenshots():
         if to_delete:
             print(f"    [清理] 删除 {len(to_delete)} 个旧截图（{dir_path}）")
 
-# 阶段二多尺度匹配参数（与阶段一一致）
-TEMPLATE_SCALES = (20, 30, 40, 45, 50, 60, 70, 80)
-MATCH_THRESHOLD = 0.6
-NMS_MIN_DIST = 20
+# 修复 P1-1/P1-3：从 config.py 导入统一配置，删除重复定义
+from config import MATCH_THRESHOLD, TEMPLATE_SCALES, NMS_MIN_DIST
 
 # 鼠标事件常量
 MOUSEEVENTF_LEFTDOWN = 0x0002
@@ -245,9 +243,17 @@ def handle_stage_2_history_window(attempt_idx, template_path):
     for i, (x, y, s, sc) in enumerate(points):
         print(f"      #{i}: ({x}, {y}) conf={s:.3f} scale={sc}px")
 
-    target = max(points, key=lambda p: p[2])
-    print(f"    选中(置信度最高): ({target[0]}, {target[1]}) "
-          f"conf={target[2]:.3f} scale={target[3]}px")
+    # 修复 P1-5：阶段二选点逻辑与阶段一统一，先过滤低置信度点
+    high_conf_points = [p for p in points if p[2] >= MATCH_THRESHOLD]
+    if high_conf_points:
+        target = max(high_conf_points, key=lambda p: p[2])
+        print(f"    选中(置信度最高, >= {MATCH_THRESHOLD}): ({target[0]}, {target[1]}) "
+              f"conf={target[2]:.3f} scale={target[3]}px")
+    else:
+        print(f"    ⚠️ 所有匹配点置信度 < {MATCH_THRESHOLD}，回退到最高置信度")
+        target = max(points, key=lambda p: p[2])
+        print(f"    选中(回退-置信度最高): ({target[0]}, {target[1]}) "
+              f"conf={target[2]:.3f} scale={target[3]}px")
 
     # 画匹配结果图
     out = img.copy()
@@ -261,8 +267,9 @@ def handle_stage_2_history_window(attempt_idx, template_path):
     cv2.imwrite(match_path, out)
     print(f"    匹配结果图: {match_path}")
 
-    # 双击头像（屏幕坐标）
-    screen_x, screen_y = client_to_screen(hwnd_history, target[0], target[1])
+    # 双击头像（屏幕坐标）— 修复 P0-4：减去客户区偏移
+    offset_x, offset_y = get_client_offset(hwnd_history)
+    screen_x, screen_y = client_to_screen(hwnd_history, target[0] - offset_x, target[1] - offset_y)
     print(f"    双击屏幕坐标: ({screen_x}, {screen_y})")
     if not safe_set_foreground_window(hwnd_history):
         print(f"    ⚠️ 无法将历史聊天窗口设为前台，继续尝试双击")

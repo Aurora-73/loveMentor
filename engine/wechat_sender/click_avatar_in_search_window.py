@@ -63,13 +63,14 @@ TEMPLATE_PATH = os.path.join(_PROJECT_ROOT, "data", "avatars", "[REDACTED].jpg")
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
 CONTACT_NAME = "[REDACTED]"
 
-TEMPLATE_SCALES = (20, 30, 40, 45, 50, 60, 70, 80)
-MATCH_THRESHOLD = 0.6
-NMS_MIN_DIST = 20
-
-# 绿色环验证（talk.md：21, 172, 112 → BGR 112, 172, 21）
-GREEN_RING_BGR = (112, 172, 21)
-GREEN_RING_TOLERANCE = 30
+# 修复 P1-1/P1-3：从 config.py 导入统一配置，删除重复定义
+from config import (
+    MATCH_THRESHOLD,
+    TEMPLATE_SCALES,
+    NMS_MIN_DIST,
+    GREEN_RING_BGR,
+    GREEN_RING_TOLERANCE,
+)
 
 # 重试参数（按 talk.md：失败可以重试，最多重试 3 次）
 MAX_RETRIES = 3
@@ -357,8 +358,19 @@ def find_green_ring(image, avatar_cx, avatar_cy, avatar_size,
                 (x1, max(0, y1 - 8)),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2, cv2.LINE_AA)
 
-    # 判定：占比达标即通过，霍夫圆作为额外信心指标
-    return green_ratio >= min_ratio, green_ratio, debug
+    # 判定（修复 P0-5：实现真正的双重验证，原代码 circles_found 是死代码）
+    # - 占比 ≥ 0.5：高置信，直接通过
+    # - 占比 ≥ 0.35 且检测到圆：中等置信，霍夫圆补充验证
+    # - 其他：不通过
+    high_ratio = 0.5
+    mid_ratio = 0.35
+    if green_ratio >= high_ratio:
+        passed = True
+    elif green_ratio >= mid_ratio and circles_found:
+        passed = True
+    else:
+        passed = False
+    return passed, green_ratio, debug
 
 
 def count_wechat_windows():
@@ -716,7 +728,9 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
     print(f"    偏移: dx={client_origin_x - search_win['rect'][0]}, "
           f"dy={client_origin_y - search_win['rect'][1]}")
 
-    click_screen_x, click_screen_y = client_to_screen(hwnd_search, target[0], target[1])
+    # 修复 P0-4：截图坐标需减去客户区偏移再传给 client_to_screen
+    offset_x, offset_y = get_client_offset(hwnd_search)
+    click_screen_x, click_screen_y = client_to_screen(hwnd_search, target[0] - offset_x, target[1] - offset_y)
     print(f"    点击屏幕坐标: ({click_screen_x}, {click_screen_y})")
 
     pre_click_img = screencap_window(hwnd_search)

@@ -402,8 +402,7 @@ def run_send_message(message, do_send=True):
     else:
         print("    ⚠️ 消息验证失败：未在聊天记录中找到发送的消息")
         print("    （可能消息已发送但 OCR 未能识别，或消息位置在可视区域外）")
-        # 不 return False，因为消息可能已发送只是 OCR 没识别到
-        # 保留警告让调用方判断
+        return False
 
     print("\n" + "=" * 60)
     print("  阶段三完成")
@@ -447,7 +446,8 @@ def verify_message_sent(image, message, session_right):
         for r in results:
             text_clean = r.text.replace(' ', '').replace('\n', '')
             # 完全匹配或消息内容包含在 OCR 文字中
-            if text_clean == message_clean or message_clean in text_clean or text_clean in message_clean:
+            # 注意：不使用 text_clean in message_clean，避免短文本误匹配长消息
+            if text_clean == message_clean or message_clean in text_clean:
                 print(f"    [OCR] 找到匹配: {r.text!r} (center=({r.center_x + session_right}, {r.center_y}), conf={r.confidence:.3f})")
                 return True
 
