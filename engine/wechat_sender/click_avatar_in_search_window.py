@@ -574,6 +574,23 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
     print(f"    搜索候选框截图: {search_img_path} "
           f"({search_img.shape[1]}x{search_img.shape[0]})")
 
+    # OCR 验证候选框内容包含联系人名（防止误识别其他窗口）
+    try:
+        from engine.importers.ocr_engine import ocr_image_array
+        ocr_results = ocr_image_array(search_img, use_cache=False)
+        ocr_text_all = ''.join(r.text for r in ocr_results)
+        # 去空格比较（OCR 可能多识别或少识别空格）
+        contact_clean = contact_name.replace(' ', '')
+        ocr_clean = ocr_text_all.replace(' ', '')
+        if contact_clean in ocr_clean:
+            print(f"    ✅ [OCR] 候选框内容包含联系人名 '{contact_name}'")
+        else:
+            print(f"    ⚠️ [OCR] 候选框内容未包含联系人名 '{contact_name}'")
+            print(f"    [OCR] 识别到的文字: {ocr_text_all[:100]}")
+            # 不 return False，因为 OCR 可能漏识别，继续用头像匹配验证
+    except Exception as e:
+        print(f"    ⚠️ [OCR] 候选框内容验证异常: {e}")
+
     s_box_x, s_box_y = find_search_box_in_candidate(search_img)
     print(f"    搜索框位置(候选框内): ({s_box_x}, {s_box_y})")
 
