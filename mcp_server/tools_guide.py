@@ -47,6 +47,7 @@ GUIDES: dict[str, str] = {
 - guide("reference/sync") → 同步策略速查
 - guide("reference/formula") → 公式使用指南
 - guide("reference/stickers") → 贴纸系统说明
+- guide("reference/wechat") → 微信发消息工具（wechat_send / open_wechat_window）
 """,
     "workflow/analysis": """# 人物分析完整流程
 
@@ -441,6 +442,82 @@ formula_ivi 返回 IVI=0.5（中性区间）
 2. sticker_list(unlabeled=True) → 查看未标注的贴纸
 3. sticker_label(md5, label=..., emotion=..., content_type=...) → 标注贴纸
 """,
+    "reference/wechat": """# 微信发消息工具
+
+## ⚠️ 重要提醒：会抢鼠标
+wechat_send 工具通过模拟物理鼠标点击和键盘输入操作微信 PC 客户端，
+执行期间会**移动鼠标并占用键鼠**，用户在此期间请勿操作鼠标键盘，
+否则会导致点击位置错乱或输入错误。调用前 Agent 应当口头提醒用户：
+"即将发送微信消息，执行期间请勿操作鼠标键盘，预计耗时数秒到十几秒。"
+此提醒**不需要阻塞等待用户确认**，只需说出来即可，然后直接调用工具。
+
+## 工具列表
+| 工具 | 作用 | 关键参数 |
+|------|------|---------|
+| wechat_send(name, message) | 给联系人发消息 | name 支持微信号/wxid/昵称/备注名 |
+| open_wechat_window(timeout) | 唤醒被关闭的微信窗口 | timeout=10.0 |
+| wechat_ocr(region, use_cache) | 截图+OCR 识别微信界面文字 | region=full/chat/session |
+
+## wechat_send 使用流程
+
+### 前置条件
+1. 微信 PC 客户端（Weixin.exe）已运行并登录
+2. 联系人头像模板已存在：`data/avatars/<display_name>.jpg`
+   - 如无模板，先调 person_avatar(name) 下载头像
+3. 联系人在 `data/raw/core.db` 中有记录
+
+### 调用方式
+```python
+wechat_send(name="[REDACTED]", message="你好，最近怎么样？")
+```
+
+### name 参数解析（自动）
+工具内部按以下顺序精确匹配（非模糊搜索）：
+1. 精确匹配微信号（alias）→ 用微信号搜索（唯一）
+2. 精确匹配 wxid → 用对应微信号搜索
+3. 精确匹配 display_name / nickname / remark
+   - 若匹配到多个联系人 → 拒绝发送，返回匹配列表让 Agent 决策
+
+### 执行流程（端到端，全自动）
+1. 解析 name → 获取微信号和 display_name
+2. 定位头像模板 `data/avatars/<display_name>.jpg`
+3. 确保微信窗口可见（不可见则自动唤醒）
+4. 阶段一：搜索栏输入微信号 → 匹配头像 → 点击头像 → 验证绿色环
+5. 阶段二：如出现"搜索聊天记录"窗口（2 窗口情况），双击头像进入聊天
+6. 阶段三：输入消息 → 找绿色发送按钮 → 点击发送 → OCR 验证
+
+### 返回结果
+```
+成功：{success: true, message: "消息已成功发送给 XXX", contact, search_term, ...}
+失败：{success: false, error: "E2E_FLOW_FAILED" / "TEMPLATE_NOT_FOUND" / ..., message}
+```
+
+### 常见错误
+| error | 原因 | 解决方案 |
+|-------|------|---------|
+| CONTACT_NOT_FOUND | 数据库无此联系人 | 调 system_sync(meta_only=True) 同步联系人 |
+| MULTIPLE_MATCHES | 昵称匹配到多人 | 改用微信号或 wxid 调用 |
+| TEMPLATE_NOT_FOUND | 头像模板不存在 | 先调 person_avatar(name) 下载头像 |
+| WINDOW_NOT_AVAILABLE | 微信窗口不可用 | 调 open_wechat_window() 唤醒 |
+| E2E_FLOW_FAILED | 端到端流程失败 | 查看日志，可能是头像变化/界面变化 |
+
+## 防封号机制（内置，无需配置）
+wechat_send 已内置人类行为模拟，降低被封号风险：
+1. **分段随机输入**：消息切成若干段（段长 3~15 字符随机），段间随机间隔 0.2~0.8 秒
+2. **点击位置抖动**：在识别到的目标区域内随机抖动 2~3 像素
+3. **点击间隔随机化**：按下/抬起间隔 0.04~0.15 秒随机
+4. **托盘点击抖动**：唤醒微信窗口时托盘图标点击抖动 2 像素
+
+## open_wechat_window 使用场景
+- wechat_send 失败提示"微信窗口未打开"时
+- 微信被用户手动关闭窗口后
+- 自动化流程中预防性调用，确保窗口可用
+
+```python
+open_wechat_window(timeout=10.0)
+# 返回：{success, action: "already_visible"/"tray_click"/"failed", window, elapsed}
+```
+""",
 }
 
 TOPIC_ALIASES: dict[str, str] = {
@@ -477,6 +554,10 @@ TOPIC_ALIASES: dict[str, str] = {
     "sync": "reference/sync",
     "formula": "reference/formula",
     "sticker": "reference/stickers",
+    "微信": "reference/wechat",
+    "发消息": "reference/wechat",
+    "wechat": "reference/wechat",
+    "微信发消息": "reference/wechat",
 }
 
 
@@ -495,6 +576,7 @@ def _list_topics() -> str:
         ("reference/sync", "同步策略速查 — 三种场景 + 范围限制"),
         ("reference/formula", "公式使用指南 — 含义 + 阈值 + 核验示例"),
         ("reference/stickers", "贴纸系统 — 镜像检测 + 标注体系"),
+        ("reference/wechat", "微信发消息工具 — wechat_send/open_wechat_window/wechat_ocr"),
     ]:
         lines.append(f"- `{key}` — {name}")
     lines.append("")
