@@ -668,10 +668,12 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
     # ========== 阶段 E：点击头像 ==========
     logger.info(f"\n[E] 点击头像 ({target[0]}, {target[1]})")
     client_origin_x, client_origin_y = client_to_screen(hwnd_search, 0, 0)
-    logger.info(f"    搜索候选框窗口 rect: {search_win['rect']}")
+    # 修复 P1-2：wechat_window_utils 返回的字段是 left/top/right/bottom，不是 rect
+    search_win_rect = (search_win['left'], search_win['top'], search_win['right'], search_win['bottom'])
+    logger.info(f"    搜索候选框窗口 rect: {search_win_rect}")
     logger.info(f"    ClientToScreen(0, 0) = ({client_origin_x}, {client_origin_y})")
-    logger.info(f"    偏移: dx={client_origin_x - search_win['rect'][0]}, "
-          f"dy={client_origin_y - search_win['rect'][1]}")
+    logger.info(f"    偏移: dx={client_origin_x - search_win_rect[0]}, "
+          f"dy={client_origin_y - search_win_rect[1]}")
 
     # 修复 P0-4：截图坐标需减去客户区偏移再传给 client_to_screen
     offset_x, offset_y = get_client_offset(hwnd_search)
