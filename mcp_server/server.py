@@ -493,11 +493,13 @@ mcp.tool(
 mcp.tool(
     name="wechat_send",
     description="【微信自动发消息】向微信联系人自动发送消息（通过视觉识别操作微信 PC 客户端）。"
-               "前置条件：微信已运行并登录，联系人头像模板已存放在 data/avatars/<name>.jpg。"
-               "参数：name（微信联系人昵称，需与头像模板文件名一致），message（要发送的消息内容）。"
-               "流程：搜索联系人 → 点击头像 → 输入消息 → 点击发送。"
+               "前置条件：微信已运行并登录，联系人头像模板已存放在 data/avatars/<display_name>.jpg。"
+               "参数：name（联系人标识符：微信号/wxid/昵称/备注名 均可），message（要发送的消息内容）。"
+               "联系人解析：name 会先在数据库中查找对应的微信号（alias），用微信号搜索（唯一，避免重名）。"
+               "若按昵称匹配到多个联系人 → 拒绝发送，返回 matches 列表，需用微信号或 wxid 重新调用。"
+               "流程：解析联系人→搜索微信号→点击头像→输入消息→点击发送。"
                "如果微信在后台运行但窗口不可见，会自动恢复窗口。"
-               "示例：wechat_send('[REDACTED]', '你好') → 自动搜索 [REDACTED] 并发送消息",
+               "示例：wechat_send('[REDACTED]', '你好') → 数据库查找微信号 → 用微信号搜索并发送",
 )(tools_wechat.wechat_send)
 
 mcp.tool(

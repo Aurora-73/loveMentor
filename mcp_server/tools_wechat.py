@@ -170,43 +170,260 @@ def _ensure_wechat_window(max_wait: float = 15.0) -> dict:
     }
 
 
+# ── 联系人解析（name → 微信号 alias）────────────────────────────
+
+def _resolve_contact(name: str) -> dict:
+    """解析联系人标识符，返回唯一的微信号（alias）用于搜索。
+
+    微信号的唯一性保证搜索结果准确，避免按昵称搜索时出现重名（如 'h'、'Y' 等）。
+
+    查找顺序（逐步精确匹配，非模糊搜索）：
+    1. 精确匹配 alias（微信号）—— 微信号唯一，直接使用
+    2. 精确匹配 id（wxid）—— wxid 唯一，取该记录的 alias
+    3. 精确匹配 display_name / nickname / remark —— 可能重名
+
+    匹配规则：
+    - 若第 1/2 步命中：直接返回（唯一）
+    - 若第 3 步命中且仅 1 条：返回该记录
+    - 若第 3 步命中多条：拒绝发送，返回所有匹配项供 Agent 决策
+    - 若全部未命中：返回 CONTACT_NOT_FOUND
+
+    Args:
+        name: 联系人标识符（微信号 / wxid / 昵称 / 备注名 均可）
+
+    Returns:
+        dict: {
+            "success": bool,
+            "search_term": str,       # 用于微信搜索的关键词（优先 alias）
+            "display_name": str,      # 用于头像模板查找的名称
+            "alias": str|None,        # 微信号（可能为空）
+            "id": str,                # wxid
+            "matches": list[dict],    # 匹配的联系人列表（多匹配时用于错误信息）
+            "match_count": int,       # 匹配数量
+            "error": str|None,        # 错误类型
+            "message": str,           # 描述信息
+        }
+    """
+    import sqlite3
+
+    DB_PATH = os.path.join(_PROJECT_ROOT, "data", "raw", "core.db")
+    if not os.path.exists(DB_PATH):
+        return {
+            "success": False,
+            "search_term": name,
+            "display_name": name,
+            "alias": None,
+            "id": "",
+            "matches": [],
+            "match_count": 0,
+            "error": "DATABASE_NOT_FOUND",
+            "message": f"联系人数据库不存在: {DB_PATH}",
+        }
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+
+    try:
+        # 步骤 1: 精确匹配 alias（微信号）
+        cur.execute(
+            "SELECT id, nickname, remark, alias, display_name FROM contacts "
+            "WHERE alias = ?",
+            (name,),
+        )
+        rows = cur.fetchall()
+        if len(rows) == 1:
+            row = rows[0]
+            alias = row["alias"]
+            display_name = row["display_name"] or row["nickname"] or name
+            return {
+                "success": True,
+                "search_term": alias,  # 用微信号搜索
+                "display_name": display_name,
+                "alias": alias,
+                "id": row["id"],
+                "matches": [],
+                "match_count": 1,
+                "error": None,
+                "message": f"通过微信号匹配到联系人: {display_name}",
+            }
+        if len(rows) > 1:
+            # 微信号重复（极罕见），也拒绝
+            matches = [
+                {"id": r["id"], "display_name": r["display_name"],
+                 "alias": r["alias"], "nickname": r["nickname"]}
+                for r in rows
+            ]
+            return {
+                "success": False,
+                "search_term": name,
+                "display_name": name,
+                "alias": None,
+                "id": "",
+                "matches": matches,
+                "match_count": len(matches),
+                "error": "MULTIPLE_MATCHES",
+                "message": f"微信号 {name!r} 匹配到 {len(matches)} 个联系人（微信号重复），拒绝发送",
+            }
+
+        # 步骤 2: 精确匹配 id（wxid）
+        cur.execute(
+            "SELECT id, nickname, remark, alias, display_name FROM contacts "
+            "WHERE id = ?",
+            (name,),
+        )
+        rows = cur.fetchall()
+        if len(rows) == 1:
+            row = rows[0]
+            alias = row["alias"]
+            display_name = row["display_name"] or row["nickname"] or name
+            # 如果有微信号，用微信号搜索；否则用 display_name
+            search_term = alias if alias else display_name
+            return {
+                "success": True,
+                "search_term": search_term,
+                "display_name": display_name,
+                "alias": alias if alias else None,
+                "id": row["id"],
+                "matches": [],
+                "match_count": 1,
+                "error": None,
+                "message": (
+                    f"通过 wxid 匹配到联系人: {display_name}"
+                    + (f"（使用微信号 {alias} 搜索）" if alias else "（无微信号，使用昵称搜索）")
+                ),
+            }
+
+        # 步骤 3: 精确匹配 display_name / nickname / remark
+        cur.execute(
+            "SELECT id, nickname, remark, alias, display_name FROM contacts "
+            "WHERE display_name = ? OR nickname = ? OR remark = ?",
+            (name, name, name),
+        )
+        rows = cur.fetchall()
+        if len(rows) == 0:
+            return {
+                "success": False,
+                "search_term": name,
+                "display_name": name,
+                "alias": None,
+                "id": "",
+                "matches": [],
+                "match_count": 0,
+                "error": "CONTACT_NOT_FOUND",
+                "message": f"在数据库中未找到匹配 {name!r} 的联系人",
+            }
+        if len(rows) == 1:
+            row = rows[0]
+            alias = row["alias"]
+            display_name = row["display_name"] or row["nickname"] or name
+            search_term = alias if alias else display_name
+            return {
+                "success": True,
+                "search_term": search_term,
+                "display_name": display_name,
+                "alias": alias if alias else None,
+                "id": row["id"],
+                "matches": [],
+                "match_count": 1,
+                "error": None,
+                "message": (
+                    f"通过昵称匹配到联系人: {display_name}"
+                    + (f"（使用微信号 {alias} 搜索）" if alias else "（无微信号，使用昵称搜索）")
+                ),
+            }
+        # 多匹配：拒绝发送
+        matches = [
+            {"id": r["id"], "display_name": r["display_name"],
+             "alias": r["alias"], "nickname": r["nickname"]}
+            for r in rows
+        ]
+        return {
+            "success": False,
+            "search_term": name,
+            "display_name": name,
+            "alias": None,
+            "id": "",
+            "matches": matches,
+            "match_count": len(matches),
+            "error": "MULTIPLE_MATCHES",
+            "message": (
+                f"昵称 {name!r} 匹配到 {len(matches)} 个联系人，"
+                f"无法确定发送对象，拒绝发送。"
+                f"请使用微信号（alias）或 wxid 重新调用。"
+                f"匹配列表: {', '.join(m['display_name'] + '(' + (m['alias'] or m['id']) + ')' for m in matches)}"
+            ),
+        }
+    finally:
+        conn.close()
+
+
 # ── 工具1: wechat_send ──────────────────────────────────────────
 
 def wechat_send(name: str, message: str) -> dict:
     """向微信联系人自动发送消息。
 
     通过视觉识别自动化操作微信 PC 客户端：
-    1. 搜索联系人（需 data/avatars/<name>.jpg 头像模板）
-    2. 点击头像进入聊天界面
-    3. 输入消息并点击发送
+    1. 解析联系人标识符 → 微信号（alias）用于搜索（微信号唯一，避免重名）
+    2. 搜索联系人（需 data/avatars/<display_name>.jpg 头像模板）
+    3. 点击头像进入聊天界面
+    4. 输入消息并点击发送
 
     如果微信进程在运行但主窗口不可见（最小化到托盘），
     会自动启动新 Weixin.exe 进程触发已运行实例显示主窗口。
 
+    联系人解析逻辑（保证搜索唯一性）：
+    - name 可以是：微信号(alias)、wxid、昵称、备注名
+    - 优先用微信号搜索（唯一），无微信号时回退到昵称搜索
+    - 若按昵称匹配到多个联系人 → 拒绝发送，返回匹配列表
+    - 示例：wechat_send('[REDACTED]', '你好') → 数据库查找 [REDACTED] 的微信号 → 用微信号搜索
+
     Args:
-        name: 微信联系人昵称（需与 data/avatars/<name>.jpg 文件名一致）
+        name: 微信联系人标识符（微信号 / wxid / 昵称 / 备注名 均可）
         message: 要发送的消息内容
 
     Returns:
         dict: {
             "success": bool,
             "message": str,        # 结果描述
-            "contact": str,        # 联系人名
+            "contact": str,        # 联系人显示名
+            "search_term": str,    # 实际用于搜索的关键词（微信号或昵称）
             "template": str,       # 模板路径
             "attempts": int,       # 尝试次数（成功时）
             "error": str|None,     # 失败原因
             "window_restored": bool,  # 是否触发了窗口恢复
+            "matches": list|None,  # 多匹配时的联系人列表（仅 MULTIPLE_MATCHES 时有值）
         }
     """
     try:
-        # 定位头像模板（支持 emoji 等特殊字符的安全文件名回退）
+        # ── 步骤 1: 解析联系人，获取微信号 ──
+        resolution = _resolve_contact(name)
+        if not resolution["success"]:
+            # 匹配失败（未找到 / 多匹配），拒绝发送
+            return {
+                "success": False,
+                "message": resolution["message"],
+                "contact": name,
+                "search_term": name,
+                "template": "",
+                "attempts": 0,
+                "error": resolution["error"],
+                "window_restored": False,
+                "matches": resolution["matches"] if resolution["match_count"] > 1 else None,
+            }
+
+        search_term = resolution["search_term"]   # 微信号（用于搜索）
+        display_name = resolution["display_name"]  # 显示名（用于头像模板）
+        alias = resolution["alias"]
+
+        # ── 步骤 2: 定位头像模板（用 display_name 查找）──
         avatars_dir = os.path.join(_PROJECT_ROOT, "data", "avatars")
-        template_path = os.path.join(avatars_dir, f"{name}.jpg")
+        template_path = os.path.join(avatars_dir, f"{display_name}.jpg")
 
         # 如果原始名找不到，尝试安全文件名（emoji 等特殊字符被替换为 _）
         if not os.path.exists(template_path):
             safe_name = "".join(
-                c if c.isalnum() or c in "._-" else "_" for c in name
+                c if c.isalnum() or c in "._-" else "_" for c in display_name
             )[:50]
             safe_path = os.path.join(avatars_dir, f"{safe_name}.jpg")
             if os.path.exists(safe_path):
@@ -215,12 +432,14 @@ def wechat_send(name: str, message: str) -> dict:
         if not os.path.exists(template_path):
             return {
                 "success": False,
-                "message": f"头像模板不存在: data/avatars/{name}.jpg",
-                "contact": name,
+                "message": f"头像模板不存在: data/avatars/{display_name}.jpg",
+                "contact": display_name,
+                "search_term": search_term,
                 "template": template_path,
                 "attempts": 0,
                 "error": "TEMPLATE_NOT_FOUND",
                 "window_restored": False,
+                "matches": None,
             }
 
         # 设置 DPI 感知
@@ -238,41 +457,49 @@ def wechat_send(name: str, message: str) -> dict:
             return {
                 "success": False,
                 "message": f"微信窗口不可用: {window_result['message']}",
-                "contact": name,
+                "contact": display_name,
+                "search_term": search_term,
                 "template": template_path,
                 "attempts": 0,
                 "error": "WINDOW_NOT_AVAILABLE",
                 "window_restored": window_restored,
+                "matches": None,
             }
 
         # 导入端到端流程
         from engine.wechat_sender.wechat_e2e_run import run_e2e
 
-        # 执行端到端发送
-        success = run_e2e(message, name, template_path)
+        # 执行端到端发送（用微信号 search_term 搜索，用 template_path 匹配头像）
+        success = run_e2e(message, search_term, template_path)
 
         if success:
-            msg = f"消息已成功发送给 {name}"
+            msg = f"消息已成功发送给 {display_name}"
+            if alias:
+                msg += f"（微信号: {alias}）"
             if window_restored:
                 msg += "（已自动恢复微信窗口）"
             return {
                 "success": True,
                 "message": msg,
-                "contact": name,
+                "contact": display_name,
+                "search_term": search_term,
                 "template": template_path,
                 "attempts": 1,
                 "error": None,
                 "window_restored": window_restored,
+                "matches": None,
             }
         else:
             return {
                 "success": False,
                 "message": f"发送失败（端到端流程未成功，详见日志）",
-                "contact": name,
+                "contact": display_name,
+                "search_term": search_term,
                 "template": template_path,
                 "attempts": 4,
                 "error": "E2E_FLOW_FAILED",
                 "window_restored": window_restored,
+                "matches": None,
             }
 
     except ImportError as e:
@@ -280,20 +507,24 @@ def wechat_send(name: str, message: str) -> dict:
             "success": False,
             "message": f"依赖模块导入失败: {e}",
             "contact": name,
+            "search_term": name,
             "template": "",
             "attempts": 0,
             "error": "IMPORT_ERROR",
             "window_restored": False,
+            "matches": None,
         }
     except Exception as e:
         return {
             "success": False,
             "message": f"运行异常: {e}",
             "contact": name,
+            "search_term": name,
             "template": "",
             "attempts": 0,
             "error": f"RUNTIME_ERROR: {traceback.format_exc()}",
             "window_restored": False,
+            "matches": None,
         }
 
 
