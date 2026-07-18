@@ -282,7 +282,12 @@ def draw_match_result(image, points, target, search_x, search_y):
 def find_green_ring(image, avatar_cx, avatar_cy, avatar_size,
                     target_bgr=GREEN_RING_BGR, tolerance=GREEN_RING_TOLERANCE,
                     min_ratio=0.4):
-    """绿色环检测（以头像为中心，1.2 倍宽度方形区域）"""
+    """绿色环检测（以头像为中心，1.2 倍宽度方形区域）。
+
+    双重验证：
+    1. 绿色像素占比 >= min_ratio
+    2. 霍夫圆变换检测到圆环形状（加分项，非必须）
+    """
     h, w = image.shape[:2]
     outer_size = int(avatar_size * 1.2)
     inner_size = int(avatar_size)
@@ -311,6 +316,34 @@ def find_green_ring(image, avatar_cx, avatar_cy, avatar_size,
     ring_total = int(np.count_nonzero(mask))
     green_pixels = int(np.count_nonzero(green_mask))
     green_ratio = green_pixels / ring_total if ring_total > 0 else 0.0
+
+    # 霍夫圆变换验证形状（加分项）
+    # 将绿色掩码转为灰度图用于霍夫圆检测
+    circles_found = False
+    try:
+        # 高斯模糊降低噪声
+        green_blur = cv2.GaussianBlur(green_mask, (5, 5), 0)
+        # 霍夫圆检测：半径范围 [inner_size//2 - 5, outer_size//2 + 5]
+        min_radius = max(inner_size // 2 - 5, 5)
+        max_radius = outer_size // 2 + 5
+        circles = cv2.HoughCircles(
+            green_blur, cv2.HOUGH_GRADIENT, dp=1, minDist=outer_size,
+            param1=50, param2=15,
+            minRadius=min_radius, maxRadius=max_radius,
+        )
+        if circles is not None:
+            # 检查是否有圆心在头像附近
+            for c in circles[0]:
+                cx_local, cy_local, r = int(c[0]), int(c[1]), int(c[2])
+                dist_to_center = ((cx_local - half_outer) ** 2 + (cy_local - half_outer) ** 2) ** 0.5
+                if dist_to_center < outer_size * 0.3:  # 圆心在头像附近
+                    circles_found = True
+                    cv2.circle(debug, (x1 + cx_local, y1 + cy_local), r, (255, 0, 0), 2)
+                    cv2.circle(debug, (x1 + cx_local, y1 + cy_local), 2, (255, 0, 0), 3)
+                    break
+    except Exception:
+        pass  # 霍夫圆失败不影响主判断
+
     mask_bgr = np.zeros_like(outer)
     mask_bgr[green_mask > 0] = (0, 0, 255)
     debug[y1:y2, x1:x2] = cv2.addWeighted(outer, 0.7, mask_bgr, 0.3, 0)
@@ -318,9 +351,13 @@ def find_green_ring(image, avatar_cx, avatar_cy, avatar_size,
     cv2.rectangle(debug, (avatar_cx - half_inner, avatar_cy - half_inner),
                   (avatar_cx + half_inner, avatar_cy + half_inner),
                   (255, 0, 255), 2)
-    cv2.putText(debug, f"ratio={green_ratio:.3f} ({green_pixels}/{ring_total})",
+    # 显示双重验证结果
+    shape_info = "+圆" if circles_found else ""
+    cv2.putText(debug, f"ratio={green_ratio:.3f}{shape_info} ({green_pixels}/{ring_total})",
                 (x1, max(0, y1 - 8)),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2, cv2.LINE_AA)
+
+    # 判定：占比达标即通过，霍夫圆作为额外信心指标
     return green_ratio >= min_ratio, green_ratio, debug
 
 
