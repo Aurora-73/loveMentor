@@ -316,6 +316,18 @@ def _refresh_avatar_and_maybe_retry(contact_name, template_path, message):
     retry_count_after = 0
 
     for attempt in range(1, MAX_ATTEMPTS + 1):
+        # 每次尝试前确保微信窗口存在
+        from wechat_window_utils import find_wechat_window as _find_wx
+        if not _find_wx():
+            logger.info(f"\n[头像更新后-窗口唤醒] 微信窗口不存在，尝试唤醒...")
+            try:
+                from open_wechat_window import open_wechat_window_robust
+                if open_wechat_window_robust(timeout=10.0):
+                    logger.info(f"   ✅ 微信窗口已唤醒")
+                    time.sleep(0.5)
+            except Exception as e:
+                logger.warning(f"   ⚠️ 窗口唤醒异常: {e}")
+
         if attempt > 1:
             logger.info("\n[重试预备] 清理搜索栏残留状态 + 滚动+点击...")
             KEYEVENTF_KEYUP = 0x0002
@@ -404,6 +416,21 @@ def run_e2e(message, contact_name, template_path):
 
     for attempt in range(1, MAX_ATTEMPTS + 1):
         attempt_idx = attempt
+
+        # 每次尝试前确保微信窗口存在，不存在则通过托盘图标唤醒
+        from wechat_window_utils import find_wechat_window
+        if not find_wechat_window():
+            logger.info(f"\n[窗口唤醒] 微信窗口不存在，尝试通过托盘图标唤醒...")
+            try:
+                from open_wechat_window import open_wechat_window_robust
+                if open_wechat_window_robust(timeout=10.0):
+                    logger.info(f"   ✅ 微信窗口已唤醒")
+                    time.sleep(0.5)
+                else:
+                    logger.warning(f"   ⚠️ 微信窗口唤醒失败，继续尝试（可能 PrintWindow 仍能工作）")
+            except Exception as e:
+                logger.warning(f"   ⚠️ 微信窗口唤醒异常: {e}")
+
         if attempt > 1:
             logger.info("\n[重试预备] 清理搜索栏残留状态 + 滚动+点击...")
             # 先按 Esc 关闭可能残留的搜索候选框和搜索栏
