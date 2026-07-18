@@ -85,3 +85,9 @@ engine/wechat_sender/screenshots/
 
 # 临时验证脚本
 tools/private/_verify_copy_temp.py
+
+# wechat_data 临时文件和 DLL（不提交到 git）
+engine/wechat_data/dll/
+engine/wechat_data/_db_key.tmp
+engine/wechat_data/_get_key_output.txt
+engine/wechat_data/_get_key_error.txt
