@@ -119,6 +119,80 @@ def _ocr_chunk(engine, image_path: str, y_offset: int = 0) -> list[OCRResult]:
 
 _MAX_DIM = 30000  # OpenCV SHRT_MAX=32767，留余量
 
+# OCR 引擎单例缓存（避免每次调用都重新加载模型）
+_ocr_engine_instance = None
+
+
+def get_ocr_engine():
+    """获取 OCR 引擎单例（懒加载，首次调用时初始化）。
+
+    Returns:
+        RapidOCR 实例
+    """
+    global _ocr_engine_instance
+    if _ocr_engine_instance is None:
+        try:
+            from rapidocr_onnxruntime import RapidOCR
+        except ImportError:
+            raise ImportError(
+                "rapidocr-onnxruntime 未安装。请运行: pip install rapidocr-onnxruntime"
+            )
+        _ocr_engine_instance = RapidOCR()
+    return _ocr_engine_instance
+
+
+def ocr_image_array(img_array, use_cache: bool = False) -> list[OCRResult]:
+    """对 numpy 数组进行 OCR 识别（避免临时文件）。
+
+    Args:
+        img_array: numpy 数组（BGR 或 RGB，HxWxC）
+        use_cache: 是否使用缓存（默认 False，因为数组无法哈希）
+
+    Returns:
+        OCRResult 列表，按 y 坐标排序（从上到下）
+    """
+    import numpy as np
+
+    engine = get_ocr_engine()
+
+    h = img_array.shape[0]
+    ocr_results: list[OCRResult] = []
+
+    if h <= _MAX_DIM:
+        raw_result, _ = engine(img_array)
+        if raw_result:
+            for line in raw_result:
+                bbox_raw = line[0]
+                bbox = [(int(p[0]), int(p[1])) for p in bbox_raw]
+                text = line[1]
+                confidence = float(line[2])
+                ocr_results.append(OCRResult(
+                    text=text,
+                    bbox=bbox,
+                    confidence=confidence,
+                ))
+    else:
+        # 分片处理
+        chunk_h = _MAX_DIM
+        for y_start in range(0, h, chunk_h):
+            y_end = min(y_start + chunk_h, h)
+            chunk = img_array[y_start:y_end]
+            raw_result, _ = engine(chunk)
+            if raw_result:
+                for line in raw_result:
+                    bbox_raw = line[0]
+                    bbox = [(int(p[0]), int(p[1]) + y_start) for p in bbox_raw]
+                    text = line[1]
+                    confidence = float(line[2])
+                    ocr_results.append(OCRResult(
+                        text=text,
+                        bbox=bbox,
+                        confidence=confidence,
+                    ))
+
+    ocr_results.sort(key=lambda r: r.center_y)
+    return ocr_results
+
 
 def ocr_image(image_path: str | Path, use_cache: bool = True) -> list[OCRResult]:
     """对单张图片进行 OCR 识别。超长图片自动分片处理。
@@ -141,15 +215,8 @@ def ocr_image(image_path: str | Path, use_cache: bool = True) -> list[OCRResult]
         if cached is not None:
             return cached
 
-    # 初始化 OCR 引擎
-    try:
-        from rapidocr_onnxruntime import RapidOCR
-    except ImportError:
-        raise ImportError(
-            "rapidocr-onnxruntime 未安装。请运行: pip install rapidocr-onnxruntime"
-        )
-
-    engine = RapidOCR()
+    # 初始化 OCR 引擎（使用单例）
+    engine = get_ocr_engine()
 
     # 检查图片尺寸，超长则分片
     from PIL import Image

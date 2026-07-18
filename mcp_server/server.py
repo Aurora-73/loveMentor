@@ -20,7 +20,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 from fastmcp import FastMCP
 
-from mcp_server import tools_read, tools_write, tools_formula, tools_guide, tools_config, tools_workflow, tools_live
+from mcp_server import tools_read, tools_write, tools_formula, tools_guide, tools_config, tools_workflow, tools_live, tools_wechat
 
 mcp = FastMCP("LoveMentor")
 
@@ -487,6 +487,30 @@ mcp.tool(
                "参数：recent=0（返回最后N条，0=全部），since_last_read=False（增量模式，只返回上次读取后的新消息）",
     annotations={"readOnlyHint": True},
 )(tools_live.live_chat_read)
+
+# ── 注册微信自动发消息工具 ────────────────────────────────────
+
+mcp.tool(
+    name="wechat_send",
+    description="【微信自动发消息】向微信联系人自动发送消息（通过视觉识别操作微信 PC 客户端）。"
+               "前置条件：微信已运行并登录，联系人头像模板已存放在 data/avatars/<name>.jpg。"
+               "参数：name（微信联系人昵称，需与头像模板文件名一致），message（要发送的消息内容）。"
+               "流程：搜索联系人 → 点击头像 → 输入消息 → 点击发送。"
+               "如果微信在后台运行但窗口不可见，会自动恢复窗口。"
+               "示例：wechat_send('[REDACTED]', '你好') → 自动搜索 [REDACTED] 并发送消息",
+)(tools_wechat.wechat_send)
+
+mcp.tool(
+    name="wechat_ocr",
+    description="【微信截图OCR】截图微信窗口并进行 OCR 文字识别，返回带位置信息的文字列表。"
+               "适用于：读取聊天界面文字、提取联系人信息、识别界面元素等场景。"
+               "参数：region（截图区域，full=整个窗口/chat=聊天区域/session=会话列表，默认full），"
+               "use_cache（是否使用缓存，默认false因为界面内容会变化）。"
+               "前置条件：微信已运行并登录。如果窗口不可见会自动恢复。"
+               "返回：texts（文字列表含bbox/confidence/center）、full_text（拼接文字）、screenshot_path。"
+               "示例：wechat_ocr('chat') → 截图聊天区域并返回识别到的文字",
+    annotations={"readOnlyHint": True},
+)(tools_wechat.wechat_ocr)
 
 if __name__ == "__main__":
     try:

@@ -49,7 +49,7 @@ ml/models/
 *.sqlite
 
 # ===================== 环境与密钥 =====================
-
+Agent/
 .env
 .env.*
 !.env.example
@@ -74,3 +74,14 @@ selected.json
 .mcp.json
 # 对话日志
 log.log
+
+# ===================== 微信自动化运行时产物 =====================
+# 原始 send_message 目录（已迁移到 engine/wechat_sender/）
+send_message/
+# 截图和输出目录（运行时生成，不入库）
+engine/wechat_sender/outputs/
+engine/wechat_sender/screenshots/
+# 头像模板（隐私数据，在 data/avatars/ 下，已被 data/ 忽略）
+
+# 临时验证脚本
+tools/private/_verify_copy_temp.py
