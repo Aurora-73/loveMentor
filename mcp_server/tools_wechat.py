@@ -61,6 +61,7 @@ def _ensure_wechat_window(max_wait: float = 15.0) -> dict:
         }
     """
     import ctypes
+    import ctypes.wintypes as wintypes
     import time
 
     try:
@@ -68,11 +69,13 @@ def _ensure_wechat_window(max_wait: float = 15.0) -> dict:
     except Exception:
         pass
 
+    user32 = ctypes.windll.user32
+
     from engine.wechat_sender.test_current_wechat import find_wechat_window
 
-    # 1. 检查主窗口是否已可见
+    # 1. 检查主窗口是否已可见（必须 >= 500x400 才算主窗口）
     window = find_wechat_window()
-    if window:
+    if window and window["width"] >= 500 and window["height"] >= 400:
         return {
             "success": True,
             "window_visible": True,
@@ -90,8 +93,10 @@ def _ensure_wechat_window(max_wait: float = 15.0) -> dict:
             "message": "微信进程未运行，请先调用 wechat_start 启动微信",
         }
 
-    # 3. 进程在运行但窗口不可见，启动新 Weixin.exe 触发已运行实例显示窗口
+    # 3. 进程在运行但窗口不可见，尝试多种方法恢复
     import subprocess
+
+    # 方法 A: 启动新 Weixin.exe 触发已运行实例显示窗口
     try:
         subprocess.Popen(
             [WEIXIN_EXE],
@@ -106,12 +111,49 @@ def _ensure_wechat_window(max_wait: float = 15.0) -> dict:
             "message": f"启动 Weixin.exe 失败: {e}",
         }
 
-    # 4. 轮询等待窗口出现
+    # 短暂等待方法 A 生效
+    time.sleep(2.0)
+    window = find_wechat_window()
+    if window and window["width"] >= 500 and window["height"] >= 400:
+        return {
+            "success": True,
+            "window_visible": True,
+            "action": "restored",
+            "message": f"微信主窗口已恢复可见 ({window['width']}x{window['height']}，方法A:启动新进程)",
+        }
+
+    # 方法 B: 点击任务栏微信图标
+    try:
+        from engine.wechat_sender.click_search_and_input import click_taskbar_wechat
+        click_taskbar_wechat(max_wait=3.0)
+    except Exception as e:
+        pass
+
+    # 方法 C: 用 ShowWindow 恢复最小化的窗口
+    try:
+        SW_RESTORE = 9
+        SW_SHOW = 5
+        # 遍历所有微信窗口，尝试恢复
+        def _try_restore(hwnd, lparam):
+            length = user32.GetWindowTextLengthW(hwnd) + 1
+            if length > 1:
+                buf = ctypes.create_unicode_buffer(length)
+                user32.GetWindowTextW(hwnd, buf, length)
+                if "微信" in buf.value:
+                    user32.ShowWindow(hwnd, SW_RESTORE)
+                    user32.ShowWindow(hwnd, SW_SHOW)
+            return True
+        callback = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)(_try_restore)
+        user32.EnumWindows(callback, 0)
+    except Exception:
+        pass
+
+    # 4. 轮询等待窗口出现（必须 >= 500x400 才算主窗口恢复）
     start_time = time.time()
     while time.time() - start_time < max_wait:
         time.sleep(1.0)
         window = find_wechat_window()
-        if window:
+        if window and window["width"] >= 500 and window["height"] >= 400:
             elapsed = time.time() - start_time
             return {
                 "success": True,
@@ -157,9 +199,18 @@ def wechat_send(name: str, message: str) -> dict:
         }
     """
     try:
-        # 定位头像模板
+        # 定位头像模板（支持 emoji 等特殊字符的安全文件名回退）
         avatars_dir = os.path.join(_PROJECT_ROOT, "data", "avatars")
         template_path = os.path.join(avatars_dir, f"{name}.jpg")
+
+        # 如果原始名找不到，尝试安全文件名（emoji 等特殊字符被替换为 _）
+        if not os.path.exists(template_path):
+            safe_name = "".join(
+                c if c.isalnum() or c in "._-" else "_" for c in name
+            )[:50]
+            safe_path = os.path.join(avatars_dir, f"{safe_name}.jpg")
+            if os.path.exists(safe_path):
+                template_path = safe_path
 
         if not os.path.exists(template_path):
             return {

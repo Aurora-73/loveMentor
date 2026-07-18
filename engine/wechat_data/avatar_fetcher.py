@@ -55,6 +55,12 @@ _CDN_HEADERS = {
 
 _DOWNLOAD_TIMEOUT = 15
 
+# 头像文件格式（.jpg 兼容 wechat_send 模板匹配）
+_AVATAR_EXT = ".jpg"
+
+# 头像元数据文件（记录 URL → 用于变化检测）
+_META_FILE = AVATARS_DIR / ".avatar_meta.json"
+
 
 # ── 工具函数 ──────────────────────────────────────────────────────────
 
@@ -70,34 +76,120 @@ def _avatar_local_path(identifier: str, wxid: str = "") -> Path:
     优先用 wxid（唯一），其次用 identifier。
     """
     if wxid:
-        return AVATARS_DIR / f"{_safe_filename(wxid)}.png"
-    return AVATARS_DIR / f"{_safe_filename(identifier)}.png"
+        return AVATARS_DIR / f"{_safe_filename(wxid)}{_AVATAR_EXT}"
+    return AVATARS_DIR / f"{_safe_filename(identifier)}{_AVATAR_EXT}"
 
 
 def _find_cached_avatar(identifier: str, wxid: str = "") -> Path | None:
-    """在本地缓存中查找头像，支持多种命名。
+    """在本地缓存中查找头像，支持多种命名和格式（.jpg 优先，.png 兼容）。
 
-    查找顺序：wxid.png → identifier.png → identifier 模糊匹配
+    查找顺序：wxid.jpg → identifier.jpg → wxid.png → identifier.png → 模糊匹配
     """
-    # 按 wxid 查找
+    # 优先查找 .jpg 格式（wechat_send 需要）
     if wxid:
-        p = _avatar_local_path("", wxid)
-        if p.exists():
-            return p
+        for ext in (_AVATAR_EXT, ".png"):
+            p = AVATARS_DIR / f"{_safe_filename(wxid)}{ext}"
+            if p.exists():
+                return p
 
     # 按 identifier 查找
-    p = _avatar_local_path(identifier)
-    if p.exists():
-        return p
+    if identifier:
+        for ext in (_AVATAR_EXT, ".png"):
+            p = AVATARS_DIR / f"{_safe_filename(identifier)}{ext}"
+            if p.exists():
+                return p
 
     # 模糊匹配（identifier 可能是 displayName，缓存文件可能是旧格式）
     if identifier:
         safe = _safe_filename(identifier)
-        for f in AVATARS_DIR.glob("*.png"):
-            if safe in f.stem:
+        for f in AVATARS_DIR.iterdir():
+            if f.suffix.lower() in (".jpg", ".png") and safe in f.stem:
                 return f
 
     return None
+
+
+# ── 头像变化检测 ──────────────────────────────────────────────────────
+
+def _load_avatar_meta() -> dict:
+    """加载头像元数据（URL → 文件映射，用于变化检测）。"""
+    if not _META_FILE.is_file():
+        return {}
+    try:
+        return json.loads(_META_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_avatar_meta(meta: dict) -> None:
+    """保存头像元数据。"""
+    try:
+        AVATARS_DIR.mkdir(parents=True, exist_ok=True)
+        _META_FILE.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        logger.warning(f"保存头像元数据失败: {e}")
+
+
+def _check_avatar_changed(wxid: str, avatar_url: str) -> bool:
+    """检查头像 URL 是否变化（快速判断，不需要下载）。
+
+    Args:
+        wxid: 联系人 wxid
+        avatar_url: 当前头像 URL
+
+    Returns:
+        bool: True 表示头像已变化（需要重新下载），False 表示未变化
+    """
+    meta = _load_avatar_meta()
+    record = meta.get(wxid, {})
+    stored_url = record.get("url", "")
+    # URL 相同则认为头像未变化（CDN URL 含版本信息）
+    return stored_url != avatar_url
+
+
+def _update_avatar_meta(wxid: str, display_name: str, avatar_url: str, file_path: Path) -> None:
+    """更新头像元数据记录。"""
+    meta = _load_avatar_meta()
+    meta[wxid] = {
+        "display_name": display_name,
+        "url": avatar_url,
+        "file": file_path.name,
+        "downloaded_at": int(__import__("time").time()),
+    }
+    _save_avatar_meta(meta)
+
+
+def _create_display_name_copy(wxid_path: Path, display_name: str, wxid: str) -> Path | None:
+    """创建按 display_name 命名的头像副本（供 wechat_send 模板匹配使用）。
+
+    wechat_send 需要 data/avatars/<name>.jpg，而主文件按 wxid 命名。
+    此函数创建 display_name.jpg 副本。
+
+    Returns:
+        副本路径，失败返回 None
+    """
+    if not wxid_path.exists() or not display_name or display_name == wxid:
+        return None
+
+    # 如果 display_name 和 wxid 相同，不需要副本
+    safe_name = _safe_filename(display_name)
+    if safe_name == _safe_filename(wxid):
+        return None
+
+    copy_path = AVATARS_DIR / f"{safe_name}{_AVATAR_EXT}"
+
+    # 如果副本已存在且与源文件相同，跳过
+    if copy_path.exists():
+        if copy_path.stat().st_size == wxid_path.stat().st_size:
+            return copy_path
+
+    try:
+        import shutil
+        shutil.copy2(wxid_path, copy_path)
+        return copy_path
+    except Exception as e:
+        logger.warning(f"创建 display_name 副本失败: {e}")
+        return None
 
 
 def _is_cdn_url(url: str) -> bool:
@@ -334,20 +426,25 @@ def get_avatar(
     *,
     config: Config | None = None,
     force_refresh: bool = False,
+    check_update: bool = True,
 ) -> str | None:
     """根据名称或标识符获取联系人头像。
 
     查询顺序：
-    1. 检查本地 data/avatars/ 缓存（除非 force_refresh）
-    2. 查询本地 core.db 的 contacts 表
-    3. 调用 WeFlow/WCD API 关键词搜索（需要服务运行）
-    4. 查询 WeFlow contacts.json 缓存（CDN 直链，不需要服务运行）
-    5. 下载头像到本地
+    1. 查询头像 URL（本地 DB → WeFlow API → contacts.json 缓存）
+    2. URL 变化检测：如果 URL 未变化且本地有缓存，直接返回（check_update=True 时）
+    3. 下载头像到本地（.jpg 格式）
+
+    头像更新策略：
+    - force_refresh=True: 强制重新下载，忽略缓存
+    - check_update=True（默认）: 比较 URL，变化才下载
+    - check_update=False: 有缓存就返回，不检查更新
 
     Args:
         identifier: 联系人名称或标识符（display_name / remark / nickname / alias / wxid）
         config: 全局配置（None 时自动加载）
         force_refresh: 为 True 时跳过本地缓存，强制重新下载
+        check_update: 为 True 时检查头像 URL 是否变化（默认 True）
 
     Returns:
         头像本地文件路径，失败返回 None
@@ -357,23 +454,17 @@ def get_avatar(
 
     AVATARS_DIR.mkdir(parents=True, exist_ok=True)
 
-    # 1. 检查本地缓存
-    if not force_refresh:
-        cached = _find_cached_avatar(identifier)
-        if cached:
-            logger.info(f"头像已缓存: {cached.name}")
-            return str(cached)
+    # 1. 查询头像 URL（先查 DB，再查 API，最后 contacts.json）
+    avatar_url = None
+    wxid = ""
+    display_name = identifier
 
-    # 2. 查询本地 DB
+    # 1a. 查询本地 DB
     conn = get_db(config.db_path)
     try:
         local_result = _query_local_avatar(conn, identifier)
     finally:
         conn.close()
-
-    avatar_url = None
-    wxid = ""
-    display_name = identifier
 
     if local_result:
         avatar_url = local_result["avatar_url"]
@@ -381,25 +472,14 @@ def get_avatar(
         display_name = local_result["display_name"] or identifier
         logger.info(f"本地 DB 命中: {display_name} ({wxid})")
 
-        # 再次检查缓存（这次用 wxid 查）
-        if not force_refresh:
-            cached = _find_cached_avatar(display_name, wxid)
-            if cached:
-                logger.info(f"头像已缓存: {cached.name}")
-                return str(cached)
-
-        # 如果 DB 中的 URL 是代理 URL，先尝试下载，失败则继续找 CDN URL
+        # 如果 DB 中的 URL 是代理 URL，尝试用 contacts.json 获取 CDN URL
         if avatar_url and _is_proxy_url(avatar_url):
-            logger.info(f"DB URL 为代理 URL，尝试下载...")
-            save_path = _avatar_local_path(display_name, wxid)
-            if _download_avatar(avatar_url, save_path):
-                size_kb = save_path.stat().st_size // 1024
-                logger.info(f"头像保存成功: {save_path.name} ({size_kb} KB)")
-                return str(save_path)
-            logger.warning(f"代理 URL 下载失败，尝试其他数据源...")
-            avatar_url = None  # 重置，继续找 CDN URL
+            cache_result = _query_weflow_cache(wxid) or _query_weflow_cache(display_name)
+            if cache_result and _is_cdn_url(cache_result["avatar_url"]):
+                avatar_url = cache_result["avatar_url"]
+                logger.info(f"代理 URL → CDN URL: {display_name}")
 
-    # 3. API 查询（如果 DB 没找到或代理 URL 失败）
+    # 1b. API 查询（如果 DB 没找到）
     if not avatar_url:
         client = _create_client(config)
         if client.health():
@@ -412,7 +492,7 @@ def get_avatar(
         else:
             logger.info(f"WeFlow API 不可用: {config.weflow.base_url}，尝试 contacts.json 缓存...")
 
-    # 4. WeFlow contacts.json 缓存兜底
+    # 1c. WeFlow contacts.json 缓存兜底
     if not avatar_url:
         cache_result = _query_weflow_cache(identifier)
         if cache_result:
@@ -422,16 +502,52 @@ def get_avatar(
             logger.info(f"contacts.json 命中: {display_name} ({wxid})")
 
     if not avatar_url:
-        logger.warning(f"未找到联系人 {identifier} 的头像")
+        logger.warning(f"未找到联系人 {identifier} 的头像 URL")
         return None
 
-    # 5. 下载头像
+    # 2. 检查本地缓存 + URL 变化检测
+    cached = _find_cached_avatar(display_name, wxid)
+    if cached and not force_refresh:
+        if not check_update:
+            # 不检查更新，直接返回缓存
+            logger.info(f"头像已缓存（跳过更新检查）: {cached.name}")
+            return str(cached)
+
+        # URL 变化检测：比较当前 URL 与元数据中记录的 URL
+        if wxid and not _check_avatar_changed(wxid, avatar_url):
+            logger.info(f"头像未变化（URL 一致）: {cached.name}")
+            return str(cached)
+
+        logger.info(f"头像 URL 已变化，重新下载: {display_name}")
+
+    # 3. 如果是代理 URL 且没有 CDN URL，直接尝试下载代理 URL
+    if avatar_url and _is_proxy_url(avatar_url):
+        save_path = _avatar_local_path(display_name, wxid)
+        if _download_avatar(avatar_url, save_path):
+            size_kb = save_path.stat().st_size // 1024
+            logger.info(f"头像保存成功（代理）: {save_path.name} ({size_kb} KB)")
+            if wxid:
+                _update_avatar_meta(wxid, display_name, avatar_url, save_path)
+            # 创建按 display_name 命名的副本（供 wechat_send 使用）
+            if display_name and display_name != wxid:
+                _create_display_name_copy(save_path, display_name, wxid)
+            return str(save_path)
+        logger.warning(f"代理 URL 下载失败: {display_name}")
+        return None
+
+    # 4. 下载头像（CDN URL 或 data URL）
     save_path = _avatar_local_path(display_name, wxid)
     logger.info(f"下载头像: {display_name} -> {save_path.name}")
 
     if _download_avatar(avatar_url, save_path):
         size_kb = save_path.stat().st_size // 1024
         logger.info(f"头像保存成功: {save_path.name} ({size_kb} KB)")
+        # 更新元数据
+        if wxid:
+            _update_avatar_meta(wxid, display_name, avatar_url, save_path)
+        # 创建按 display_name 命名的副本（供 wechat_send 使用）
+        if display_name and display_name != wxid:
+            _create_display_name_copy(save_path, display_name, wxid)
         return str(save_path)
 
     logger.warning(f"头像下载失败: {display_name}")

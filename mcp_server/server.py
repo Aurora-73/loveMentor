@@ -20,7 +20,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 from fastmcp import FastMCP
 
-from mcp_server import tools_read, tools_write, tools_formula, tools_guide, tools_config, tools_workflow, tools_live, tools_wechat
+from mcp_server import tools_read, tools_write, tools_formula, tools_guide, tools_config, tools_workflow, tools_live, tools_wechat, tools_avatar
 
 mcp = FastMCP("LoveMentor")
 
@@ -511,6 +511,20 @@ mcp.tool(
                "示例：wechat_ocr('chat') → 截图聊天区域并返回识别到的文字",
     annotations={"readOnlyHint": True},
 )(tools_wechat.wechat_ocr)
+
+# ── 注册头像获取工具 ────────────────────────────────────────────
+
+mcp.tool(
+    name="person_avatar",
+    description="【头像获取】获取联系人头像并保存到 data/avatars/<name>.jpg。"
+               "支持任意标识符：昵称、wxid、微信号、备注名、alias 均可。"
+               "保存的 .jpg 文件可直接用于 wechat_send 工具的模板匹配。"
+               "头像更新策略：默认比较 URL 检测变化（check_update=True），URL 不变则跳过下载。"
+               "数据源优先级：本地缓存 → core.db → WeFlow API → contacts.json 缓存（CDN 直链，不需要服务运行）。"
+               "参数：name（联系人标识符），force_refresh（强制重新下载，默认false），"
+               "check_update（检查URL变化，默认true）。"
+               "示例：person_avatar('[REDACTED]') → 获取 [REDACTED] 的头像并保存为 [REDACTED].jpg",
+)(tools_avatar.person_avatar)
 
 if __name__ == "__main__":
     try:
