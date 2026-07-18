@@ -124,7 +124,10 @@ def find_search_bar_in_image(image):
     # 方法2: 布局检测（白色判定）
     detector = WeChatLayoutDetector()
     nav_right, session_right = detector.detect(image)
-    layout_valid = not (nav_right < 100 or session_right < 300 or session_right <= nav_right)
+    # 放宽异常判定阈值：dynamic_detector 的 nav_right=84（微信默认导航栏宽度）是合理值
+    # 旧条件 nav_right < 100 会误判 84 为异常，导致覆盖为固定比例值 47（错误）
+    # 新条件：只在检测完全失效时（nav_right 极小或 session_right 极小或顺序反了）才判异常
+    layout_valid = not (nav_right < 30 or session_right < 150 or session_right <= nav_right)
 
     layout_search_x = None
     layout_search_y = None
@@ -144,9 +147,10 @@ def find_search_bar_in_image(image):
     if not layout_valid:
         layout_search_x = int(w * 0.075)
         layout_search_y = int(h * 0.05)
-        nav_right = int(w * 0.04)
-        session_right = int(w * 0.20)
+        # 不覆盖 nav_right/session_right，保留 dynamic_detector 的原始值
+        # （调用方依赖这俩值计算中间栏点击区域，覆盖会导致点击位置偏移）
         logger.info(f"    [固定比例] 搜索栏位置: ({layout_search_x}, {layout_search_y})")
+        logger.info(f"    [保留] nav_right={nav_right}, session_right={session_right}（dynamic_detector 原始值）")
 
     # 综合判定：优先用 OCR，但结合布局检测验证
     if ocr_search_x is not None:
@@ -512,13 +516,21 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
     else:
         # SetForegroundWindow 成功，用 Ctrl+F 快捷键打开搜索栏
         # 用户确认：Ctrl+F 可直接打开微信搜索栏，是最佳方案（不依赖精确点击位置）
-        # 先点击主窗口中间栏中心，确保焦点在微信窗口上（Ctrl+F 依赖焦点）
+        # 先点击主窗口中间栏70%区域内的随机位置，确保焦点在微信窗口上（Ctrl+F 依赖焦点）
+        # 随机化避免每次点击同一位置（防检测），同时避开边缘 15%（不点导航栏/搜索栏/聊天区域边缘）
+        # 用户反馈：40% 太窄，70% 合适（中间栏判定已修复，范围正确）
+        # ⚠️ 严禁双击中间栏（会弹出对话框），只能用 physical_click 单击
+        import random as _random
         h_img, w_img = pw_image.shape[:2]
-        mid_x = (nav_right + session_right) // 2
-        mid_y = h_img // 2
+        mid_col_width = session_right - nav_right
+        # x: 中间栏70%区域（避开左右边缘各15%）
+        mid_x = int(nav_right + mid_col_width * (0.15 + 0.7 * _random.random()))
+        # y: 窗口高度70%区域（避开上下边缘各15%）
+        mid_y = int(h_img * (0.15 + 0.7 * _random.random()))
         mid_screen_x, mid_screen_y = client_to_screen(
             hwnd_main, mid_x - offset_x, mid_y - offset_y
         )
+        logger.info(f"    随机点击中间栏激活焦点: 客户区({mid_x},{mid_y}) 屏幕({mid_screen_x},{mid_screen_y})")
         physical_click(mid_screen_x, mid_screen_y)
         time.sleep(0.3)
 
