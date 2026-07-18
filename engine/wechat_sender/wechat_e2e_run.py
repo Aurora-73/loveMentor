@@ -289,6 +289,28 @@ def handle_stage_2_history_window(attempt_idx, template_path):
         return True
 
 
+def rollback_wechat_state():
+    """回滚微信状态，清除残留输入和搜索栏。
+
+    在流程失败时调用，确保下次重试不受残留状态影响：
+    1. 按 Esc 关闭搜索候选框
+    2. 按 Esc 清除搜索栏文字
+    3. 点击聊天输入框区域清除焦点
+    """
+    print("\n[回滚] 清理微信残留状态...")
+    KEYEVENTF_KEYUP = 0x0002
+    VK_ESCAPE = 0x1B
+
+    # 连按3次 Esc，关闭搜索候选框和清除搜索栏
+    for i in range(3):
+        user32.keybd_event(VK_ESCAPE, 0, 0, 0)
+        time.sleep(0.05)
+        user32.keybd_event(VK_ESCAPE, 0, KEYEVENTF_KEYUP, 0)
+        time.sleep(0.1)
+    print("    [回滚] 已按 Esc 清理搜索栏/候选框")
+    time.sleep(0.3)
+
+
 def run_e2e(message, contact_name, template_path):
     """端到端流程：阶段一 → 阶段二 → 阶段三
 
@@ -356,6 +378,7 @@ def run_e2e(message, contact_name, template_path):
 
     if not stage1_success:
         print(f"\n❌ 阶段一失败：{MAX_ATTEMPTS} 次尝试全部失败")
+        rollback_wechat_state()
         return False
 
     print(f"\n✅ 阶段一成功（第 {attempt_idx} 次尝试）")
@@ -382,6 +405,7 @@ def run_e2e(message, contact_name, template_path):
         stage2_ok = handle_stage_2_history_window(attempt_idx, template_path)
         if not stage2_ok:
             print("   ❌ 阶段二失败")
+            rollback_wechat_state()
             return False
         print("   ✅ 阶段二成功")
     else:
@@ -395,6 +419,7 @@ def run_e2e(message, contact_name, template_path):
     stage3_ok = run_send_message(message, do_send=True)
     if not stage3_ok:
         print("   ❌ 阶段三失败")
+        rollback_wechat_state()
         return False
 
     print("\n" + "=" * 60)
