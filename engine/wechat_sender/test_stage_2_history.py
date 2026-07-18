@@ -35,6 +35,9 @@ from wechat_e2e_run import (  # noqa: E402
     TEMPLATES_DIR,
 )
 
+from logger import get_logger  # noqa: E402
+logger = get_logger(__name__)
+
 
 def main():
     output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
@@ -44,57 +47,57 @@ def main():
     contact_name = sys.argv[1] if len(sys.argv) > 1 else "[REDACTED]"
     template_path = os.path.join(TEMPLATES_DIR, f"{contact_name}.jpg")
 
-    print("=" * 60)
-    print("  阶段二 2 窗口分支测试（历史聊天界面）")
-    print(f"  联系人: {contact_name!r}")
-    print(f"  模板: {template_path}")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("  阶段二 2 窗口分支测试（历史聊天界面）")
+    logger.info(f"  联系人: {contact_name!r}")
+    logger.info(f"  模板: {template_path}")
+    logger.info("=" * 60)
 
     if not os.path.exists(template_path):
-        print(f"\n❌ 模板文件不存在: {template_path}")
-        print(f"   请将联系人头像模板放在 {TEMPLATES_DIR} 目录，命名为 {contact_name}.jpg")
+        logger.error(f"\n❌ 模板文件不存在: {template_path}")
+        logger.info(f"   请将联系人头像模板放在 {TEMPLATES_DIR} 目录，命名为 {contact_name}.jpg")
         return False
 
     # 1. 检查当前窗口数
     chat_count, chat_wins = count_chat_windows()
-    print(f"\n[1] 当前聊天窗口数（排除搜索候选框）: {chat_count}")
+    logger.info(f"\n[1] 当前聊天窗口数（排除搜索候选框）: {chat_count}")
     for w in chat_wins:
-        print(f"    - hwnd={w['hwnd']} title={w['title']!r} "
+        logger.info(f"    - hwnd={w['hwnd']} title={w['title']!r} "
               f"class={w['class']!r}")
 
     if chat_count != 2:
-        print(f"\n⚠️ 预期 2 个窗口，实际 {chat_count} 个")
-        print("   请手动操作微信进入 2 窗口状态：")
-        print(f"   1. 在微信主窗口搜索栏输入联系人名（如 {contact_name}）")
-        print("   2. 在搜索候选框中点击'搜索聊天记录'或类似选项")
-        print("      （会弹出独立的'搜索聊天记录'窗口）")
-        print("   3. 确认'搜索聊天记录'窗口可见且包含对方头像")
-        print("   4. 重新运行本脚本：")
-        print(f"      python E:\\Code\\loveMentor\\send_message\\test_stage_2_history.py {contact_name}")
+        logger.warning(f"\n⚠️ 预期 2 个窗口，实际 {chat_count} 个")
+        logger.info("   请手动操作微信进入 2 窗口状态：")
+        logger.info(f"   1. 在微信主窗口搜索栏输入联系人名（如 {contact_name}）")
+        logger.info("   2. 在搜索候选框中点击'搜索聊天记录'或类似选项")
+        logger.info("      （会弹出独立的'搜索聊天记录'窗口）")
+        logger.info("   3. 确认'搜索聊天记录'窗口可见且包含对方头像")
+        logger.info("   4. 重新运行本脚本：")
+        logger.info(f"      python E:\\Code\\loveMentor\\send_message\\test_stage_2_history.py {contact_name}")
         return False
 
-    print("\n✅ 已是 2 窗口状态，开始执行阶段二逻辑")
+    logger.info("\n✅ 已是 2 窗口状态，开始执行阶段二逻辑")
 
     # 2. 执行阶段二
     ok = handle_stage_2_history_window(attempt_idx=99, template_path=template_path)
     if not ok:
-        print("\n❌ 阶段二失败")
+        logger.error("\n❌ 阶段二失败")
         return False
 
     # 3. 验证窗口数变为 1
     chat_count_after, chat_wins_after = count_chat_windows()
-    print(f"\n[验证] 执行后聊天窗口数: {chat_count_after}")
+    logger.info(f"\n[验证] 执行后聊天窗口数: {chat_count_after}")
     for w in chat_wins_after:
-        print(f"    - hwnd={w['hwnd']} title={w['title']!r} "
+        logger.info(f"    - hwnd={w['hwnd']} title={w['title']!r} "
               f"class={w['class']!r}")
 
     if chat_count_after == 1:
-        print("\n✅ 阶段二测试成功：已从 2 窗口变为 1 窗口")
-        print("   主窗口应已跳转到联系人聊天界面，可进入阶段三发送消息")
+        logger.info("\n✅ 阶段二测试成功：已从 2 窗口变为 1 窗口")
+        logger.info("   主窗口应已跳转到联系人聊天界面，可进入阶段三发送消息")
         return True
     else:
-        print(f"\n⚠️ 预期 1 窗口，实际 {chat_count_after} 窗口")
-        print("   但阶段二逻辑已执行，请检查微信当前状态")
+        logger.warning(f"\n⚠️ 预期 1 窗口，实际 {chat_count_after} 窗口")
+        logger.info("   但阶段二逻辑已执行，请检查微信当前状态")
         return False
 
 

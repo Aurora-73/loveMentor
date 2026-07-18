@@ -47,6 +47,11 @@ from PIL import Image
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from dynamic_detector import WeChatLayoutDetector  # noqa: E402
 from test_current_wechat import find_wechat_window, screencap_window  # noqa: E402
+from wechat_window_utils import (  # noqa: E402  统一窗口枚举
+    find_search_candidate_window,
+    find_search_candidate_windows,
+    count_wechat_windows,
+)
 from click_search_and_input import (  # noqa: E402
     get_client_offset,
     client_to_screen,
@@ -72,6 +77,9 @@ from config import (
     GREEN_RING_TOLERANCE,
 )
 
+from logger import get_logger  # noqa: E402
+logger = get_logger(__name__)
+
 # 重试参数（按 talk.md：失败可以重试，最多重试 3 次）
 MAX_RETRIES = 3
 MAX_ATTEMPTS = MAX_RETRIES + 1  # 初次 + 3 次重试 = 4 次
@@ -81,39 +89,6 @@ MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP = 0x0004
 MOUSEEVENTF_WHEEL = 0x0800
 WHEEL_DELTA = 120
-
-
-def find_search_candidate_window():
-    """找到搜索候选框窗口（标题 'Weixin'，类名含 'ToolSaveBits'）"""
-    windows = []
-
-    def enum_proc(hwnd, lparam):
-        if not user32.IsWindowVisible(hwnd):
-            return True
-        length = user32.GetWindowTextLengthW(hwnd) + 1
-        if length <= 1:
-            return True
-        buf = ctypes.create_unicode_buffer(length)
-        user32.GetWindowTextW(hwnd, buf, length)
-        title = buf.value
-        cls_buf = ctypes.create_unicode_buffer(256)
-        user32.GetClassNameW(hwnd, cls_buf, 256)
-        cls_name = cls_buf.value
-        if title == "Weixin" and "ToolSaveBits" in cls_name:
-            rect = wintypes.RECT()
-            user32.GetWindowRect(hwnd, ctypes.byref(rect))
-            windows.append({
-                "hwnd": hwnd,
-                "title": title,
-                "class": cls_name,
-                "rect": (rect.left, rect.top, rect.right, rect.bottom),
-                "size": (rect.right - rect.left, rect.bottom - rect.top),
-            })
-        return True
-
-    callback = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)(enum_proc)
-    user32.EnumWindows(callback, 0)
-    return windows
 
 
 def find_search_bar_in_image(image):
@@ -136,15 +111,15 @@ def find_search_bar_in_image(image):
         for r in results:
             # 匹配规则：文字长度至多4字符且包含"搜索"
             if '搜索' in r.text and len(r.text) <= 4:
-                print(f"    ✅ OCR 识别到'{r.text}' center=({r.center_x}, {r.center_y}) conf={r.confidence:.3f}")
+                logger.info(f"    ✅ OCR 识别到'{r.text}' center=({r.center_x}, {r.center_y}) conf={r.confidence:.3f}")
                 ocr_search_x = r.center_x
                 ocr_search_y = r.center_y
                 break
 
         if ocr_search_x is None:
-            print("    ⚠️ OCR 未识别到含'搜索'的文字（≤4字符），回退到布局检测")
+            logger.warning("    ⚠️ OCR 未识别到含'搜索'的文字（≤4字符），回退到布局检测")
     except Exception as e:
-        print(f"    ⚠️ OCR 识别失败: {e}，回退到布局检测")
+        logger.warning(f"    ⚠️ OCR 识别失败: {e}，回退到布局检测")
 
     # 方法2: 布局检测（白色判定）
     detector = WeChatLayoutDetector()
@@ -161,9 +136,9 @@ def find_search_bar_in_image(image):
         search_top = 0
         search_bottom = int(h * 0.3)
         layout_search_y = search_top + int(np.argmax(row_brightness[search_top:search_bottom]))
-        print(f"    [布局检测] 搜索栏位置: ({layout_search_x}, {layout_search_y}) nav_right={nav_right} session_right={session_right}")
+        logger.info(f"    [布局检测] 搜索栏位置: ({layout_search_x}, {layout_search_y}) nav_right={nav_right} session_right={session_right}")
     else:
-        print(f"    ⚠️ 布局检测结果异常 (nav_right={nav_right}, session_right={session_right})")
+        logger.warning(f"    ⚠️ 布局检测结果异常 (nav_right={nav_right}, session_right={session_right})")
 
     # 方法3: 固定比例回退（布局检测失败时）
     if not layout_valid:
@@ -171,20 +146,20 @@ def find_search_bar_in_image(image):
         layout_search_y = int(h * 0.05)
         nav_right = int(w * 0.04)
         session_right = int(w * 0.20)
-        print(f"    [固定比例] 搜索栏位置: ({layout_search_x}, {layout_search_y})")
+        logger.info(f"    [固定比例] 搜索栏位置: ({layout_search_x}, {layout_search_y})")
 
     # 综合判定：优先用 OCR，但结合布局检测验证
     if ocr_search_x is not None:
         # OCR 成功，验证位置合理性（应该在窗口左上区域）
         if ocr_search_x < w * 0.3 and ocr_search_y < h * 0.15:
-            print(f"    🎯 综合判定: 使用 OCR 位置 ({ocr_search_x}, {ocr_search_y})")
+            logger.info(f"    🎯 综合判定: 使用 OCR 位置 ({ocr_search_x}, {ocr_search_y})")
             # 用 OCR 的 y，布局检测的 x 范围（更稳健）
             if layout_valid:
                 final_x = (nav_right + session_right) // 2
                 final_y = ocr_search_y
                 # 如果 OCR 和布局检测的 x 差距不大，用布局检测的 x（更居中）
                 if abs(final_x - ocr_search_x) < 50:
-                    print(f"    [融合] OCR x={ocr_search_x} 与布局 x={final_x} 接近，用布局 x（更居中）")
+                    logger.info(f"    [融合] OCR x={ocr_search_x} 与布局 x={final_x} 接近，用布局 x（更居中）")
                 else:
                     final_x = ocr_search_x
             else:
@@ -192,7 +167,7 @@ def find_search_bar_in_image(image):
                 final_y = ocr_search_y
             return final_x, final_y, nav_right, session_right
         else:
-            print(f"    ⚠️ OCR 位置 ({ocr_search_x}, {ocr_search_y}) 不在合理范围，用布局检测")
+            logger.warning(f"    ⚠️ OCR 位置 ({ocr_search_x}, {ocr_search_y}) 不在合理范围，用布局检测")
 
     # 回退到布局检测/固定比例
     return layout_search_x, layout_search_y, nav_right, session_right
@@ -373,40 +348,6 @@ def find_green_ring(image, avatar_cx, avatar_cy, avatar_size,
     return passed, green_ratio, debug
 
 
-def count_wechat_windows():
-    """统计微信相关窗口数量（排除托盘图标等小窗口）"""
-    windows = []
-
-    def enum_proc(hwnd, lparam):
-        if not user32.IsWindowVisible(hwnd):
-            return True
-        length = user32.GetWindowTextLengthW(hwnd) + 1
-        if length <= 1:
-            return True
-        buf = ctypes.create_unicode_buffer(length)
-        user32.GetWindowTextW(hwnd, buf, length)
-        title = buf.value
-        cls_buf = ctypes.create_unicode_buffer(256)
-        user32.GetClassNameW(hwnd, cls_buf, 256)
-        cls_name = cls_buf.value
-        if any(kw in title for kw in ["微信", "WeChat", "Weixin"]) or \
-           any(kw in cls_name for kw in ["WeChat", "Weixin"]):
-            # 排除托盘图标等小窗口（与 find_wechat_window 阈值一致）
-            rect = wintypes.RECT()
-            user32.GetWindowRect(hwnd, ctypes.byref(rect))
-            w = rect.right - rect.left
-            h = rect.bottom - rect.top
-            if w < 500 or h < 400:
-                return True  # 跳过小窗口
-            windows.append({"hwnd": hwnd, "title": title, "class": cls_name,
-                            "width": w, "height": h})
-        return True
-
-    callback = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)(enum_proc)
-    user32.EnumWindows(callback, 0)
-    return len(windows), windows
-
-
 def scroll_in_main_middle_column():
     """重试前预备动作（按 talk.md 协议澄清版）：
     在微信主窗口的中间栏（nav_right 和 session_right 之间）滑动滑轮几下，再点击一下。
@@ -424,47 +365,47 @@ def scroll_in_main_middle_column():
     """
     window = find_wechat_window()
     if not window:
-        print("    [重试预备] 未找到微信主窗口，跳过滚动")
+        logger.info("    [重试预备] 未找到微信主窗口，跳过滚动")
         return False
 
     hwnd_main = window["hwnd"]
-    print(f"    [重试预备] 微信主窗口: hwnd={hwnd_main}")
+    logger.info(f"    [重试预备] 微信主窗口: hwnd={hwnd_main}")
 
     # 截图主窗口，检测分界线
     img = screencap_window(hwnd_main)
     if img is None:
-        print("    [重试预备] 主窗口截图失败，跳过滚动")
+        logger.info("    [重试预备] 主窗口截图失败，跳过滚动")
         return False
 
     h, w = img.shape[:2]
     detector = WeChatLayoutDetector()
     nav_right, session_right = detector.detect(img)
-    print(f"    [重试预备] 分界线: nav_right={nav_right} session_right={session_right}")
+    logger.info(f"    [重试预备] 分界线: nav_right={nav_right} session_right={session_right}")
 
     # 中间栏中心（截图坐标系）
     middle_x = (nav_right + session_right) // 2
     middle_y = h // 2
-    print(f"    [重试预备] 中间栏中心(截图坐标): ({middle_x}, {middle_y})")
+    logger.info(f"    [重试预备] 中间栏中心(截图坐标): ({middle_x}, {middle_y})")
 
     # 转屏幕坐标
     offset_x, offset_y = get_client_offset(hwnd_main)
     client_x = middle_x - offset_x
     client_y = middle_y - offset_y
     screen_x, screen_y = client_to_screen(hwnd_main, client_x, client_y)
-    print(f"    [重试预备] 中间栏中心(屏幕坐标): ({screen_x}, {screen_y})")
+    logger.info(f"    [重试预备] 中间栏中心(屏幕坐标): ({screen_x}, {screen_y})")
 
     # 1. 移动鼠标到中间栏中心
     user32.SetCursorPos(screen_x, screen_y)
     time.sleep(0.3)
 
     # 2. 滚动滑轮 3 下向下（让会话列表滚动刷新）
-    print("    [重试预备] 滚动滑轮 3 下（向下）...")
+    logger.info("    [重试预备] 滚动滑轮 3 下（向下）...")
     for _ in range(3):
         user32.mouse_event(MOUSEEVENTF_WHEEL, 0, 0, WHEEL_DELTA, 0)
         time.sleep(0.15)
 
     # 3. 点击中间栏中心（让主窗口激活）
-    print(f"    [重试预备] 点击中间栏中心 ({screen_x}, {screen_y})")
+    logger.info(f"    [重试预备] 点击中间栏中心 ({screen_x}, {screen_y})")
     user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
     time.sleep(0.05)
     user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
@@ -481,25 +422,25 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
         contact_name: 联系人昵称（用于搜索栏输入），默认 CONTACT_NAME
         template_path: 联系人头像模板路径，默认 TEMPLATE_PATH
     """
-    print(f"\n{'=' * 20} 第 {attempt_idx}/{max_attempts} 次尝试 {'=' * 20}")
+    logger.info(f"\n{'=' * 20} 第 {attempt_idx}/{max_attempts} 次尝试 {'=' * 20}")
 
     # ========== 阶段 A：点击前窗口数 ==========
     count_before, wins_before = count_wechat_windows()
-    print(f"\n[A] 点击前微信窗口数: {count_before}")
+    logger.info(f"\n[A] 点击前微信窗口数: {count_before}")
     for w in wins_before:
-        print(f"    - hwnd={w['hwnd']} title={w['title']!r} class={w['class']!r}")
+        logger.info(f"    - hwnd={w['hwnd']} title={w['title']!r} class={w['class']!r}")
     if count_before == 0:
-        print("❌ 微信窗口未打开")
+        logger.error("❌ 微信窗口未打开")
         return False, None, 0
 
     # ========== 阶段 B：主窗口截图 + 点击搜索栏 + 输入 ==========
-    print(f"\n[B] 主窗口截图 + 点击搜索栏 + 输入 {contact_name}")
+    logger.info(f"\n[B] 主窗口截图 + 点击搜索栏 + 输入 {contact_name}")
     window = find_wechat_window()
     if not window:
-        print("❌ find_wechat_window 返回 None")
+        logger.error("❌ find_wechat_window 返回 None")
         return False, None, 0
     hwnd_main = window["hwnd"]
-    print(f"    主窗口: hwnd={hwnd_main} size={window['width']}x{window['height']}")
+    logger.info(f"    主窗口: hwnd={hwnd_main} size={window['width']}x{window['height']}")
 
     # 关键修复：截图前先把微信设为前台，确保 PrintWindow 截到最新内容
     # 否则微信在后台时截图可能是旧内容，导致布局检测失败
@@ -509,28 +450,28 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
 
     pw_image = screencap_window(hwnd_main)
     if pw_image is None:
-        print("❌ 主窗口截图失败")
+        logger.error("❌ 主窗口截图失败")
         return False, None, 0
     pw_path = os.path.join(OUTPUT_DIR, f"stage_b_main_printwindow_{attempt_idx}.png")
     cv2.imwrite(pw_path, pw_image)
-    print(f"    主窗口截图: {pw_path}")
+    logger.info(f"    主窗口截图: {pw_path}")
 
     pw_search_x, pw_search_y, nav_right, session_right = find_search_bar_in_image(pw_image)
-    print(f"    搜索栏位置(主窗口): ({pw_search_x}, {pw_search_y})")
+    logger.info(f"    搜索栏位置(主窗口): ({pw_search_x}, {pw_search_y})")
 
     offset_x, offset_y = get_client_offset(hwnd_main)
     client_x = pw_search_x - offset_x
     client_y = pw_search_y - offset_y
     screen_x, screen_y = client_to_screen(hwnd_main, client_x, client_y)
 
-    print(f"    搜索栏屏幕坐标: ({screen_x}, {screen_y})")
-    print("    safe_set_foreground_window + 点击中间栏激活焦点 + Ctrl+F + 输入 ...")
+    logger.info(f"    搜索栏屏幕坐标: ({screen_x}, {screen_y})")
+    logger.info("    safe_set_foreground_window + 点击中间栏激活焦点 + Ctrl+F + 输入 ...")
     fg_ok = safe_set_foreground_window(hwnd_main)
     time.sleep(0.3)
 
     if not fg_ok:
         # SetForegroundWindow 失败，用 PostMessage 方式（不需要窗口在前台）
-        print("    ⚠️ SetForegroundWindow 失败，改用 PostMessage 方式...")
+        logger.warning("    ⚠️ SetForegroundWindow 失败，改用 PostMessage 方式...")
         WM_LBUTTONDOWN = 0x0201
         WM_LBUTTONUP = 0x0202
         WM_KEYDOWN = 0x0100
@@ -563,7 +504,7 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
             time.sleep(0.05)
         time.sleep(0.5)
 
-        print(f"    已通过 PostMessage 输入: {contact_name}")
+        logger.info(f"    已通过 PostMessage 输入: {contact_name}")
 
     else:
         # SetForegroundWindow 成功，用原有方式
@@ -591,38 +532,39 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
         # 输入联系人名
         input_text_via_clipboard(hwnd_main, contact_name)
 
-    print("    等待 1.0 秒，让搜索候选框出现...")
+    logger.info("    等待 1.0 秒，让搜索候选框出现...")
     time.sleep(1.0)
 
     # ========== 阶段 C：找搜索候选框窗口 ==========
-    print("\n[C] 查找搜索候选框窗口")
-    candidates = find_search_candidate_window()
-    print(f"    找到 {len(candidates)} 个搜索候选框窗口")
+    logger.info("\n[C] 查找搜索候选框窗口")
+    candidates = find_search_candidate_windows()
+    logger.info(f"    找到 {len(candidates)} 个搜索候选框窗口")
     if not candidates:
-        print("❌ 未找到搜索候选框窗口（标题 'Weixin' + 类名含 'ToolSaveBits'）")
+        logger.error("❌ 未找到搜索候选框窗口（标题 'Weixin' + 类名含 'ToolSaveBits'）")
         count_now, wins_now = count_wechat_windows()
-        print(f"    当前微信窗口数: {count_now}")
+        logger.info(f"    当前微信窗口数: {count_now}")
         for w in wins_now:
-            print(f"    - hwnd={w['hwnd']} title={w['title']!r} class={w['class']!r}")
+            logger.info(f"    - hwnd={w['hwnd']} title={w['title']!r} class={w['class']!r}")
         return False, None, 0
 
     for i, c in enumerate(candidates):
-        print(f"    #{i}: hwnd={c['hwnd']} title={c['title']!r} "
-              f"class={c['class']!r} size={c['size']} rect={c['rect']}")
+        logger.info(f"    #{i}: hwnd={c['hwnd']} title={c['title']!r} "
+              f"class={c['class']!r} size=({c['width']},{c['height']}) "
+              f"rect=({c['left']},{c['top']},{c['right']},{c['bottom']})")
 
     search_win = candidates[0]
     hwnd_search = search_win["hwnd"]
-    print(f"    选定搜索候选框: hwnd={hwnd_search}")
+    logger.info(f"    选定搜索候选框: hwnd={hwnd_search}")
 
     # ========== 阶段 D：截图搜索候选框 + 匹配 ==========
-    print("\n[D] 截图搜索候选框 + 多尺度匹配")
+    logger.info("\n[D] 截图搜索候选框 + 多尺度匹配")
     search_img = screencap_window(hwnd_search)
     if search_img is None:
-        print("❌ 搜索候选框截图失败")
+        logger.error("❌ 搜索候选框截图失败")
         return False, None, 0
     search_img_path = os.path.join(OUTPUT_DIR, f"stage_d_search_candidate_{attempt_idx}.png")
     cv2.imwrite(search_img_path, search_img)
-    print(f"    搜索候选框截图: {search_img_path} "
+    logger.info(f"    搜索候选框截图: {search_img_path} "
           f"({search_img.shape[1]}x{search_img.shape[0]})")
 
     # OCR 验证候选框内容包含联系人名（防止误识别其他窗口）
@@ -634,38 +576,38 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
         contact_clean = contact_name.replace(' ', '')
         ocr_clean = ocr_text_all.replace(' ', '')
         if contact_clean in ocr_clean:
-            print(f"    ✅ [OCR] 候选框内容包含联系人名 '{contact_name}'")
+            logger.info(f"    ✅ [OCR] 候选框内容包含联系人名 '{contact_name}'")
         else:
-            print(f"    ⚠️ [OCR] 候选框内容未包含联系人名 '{contact_name}'")
-            print(f"    [OCR] 识别到的文字: {ocr_text_all[:100]}")
+            logger.warning(f"    ⚠️ [OCR] 候选框内容未包含联系人名 '{contact_name}'")
+            logger.info(f"    [OCR] 识别到的文字: {ocr_text_all[:100]}")
             # 不 return False，因为 OCR 可能漏识别，继续用头像匹配验证
     except Exception as e:
-        print(f"    ⚠️ [OCR] 候选框内容验证异常: {e}")
+        logger.warning(f"    ⚠️ [OCR] 候选框内容验证异常: {e}")
 
     s_box_x, s_box_y = find_search_box_in_candidate(search_img)
-    print(f"    搜索框位置(候选框内): ({s_box_x}, {s_box_y})")
+    logger.info(f"    搜索框位置(候选框内): ({s_box_x}, {s_box_y})")
 
     points, best_score = find_template_multiscale(
         search_img, template_path, TEMPLATE_SCALES, MATCH_THRESHOLD, NMS_MIN_DIST
     )
 
     if not points:
-        print(f"❌ 未找到匹配点 (最高置信度={best_score:.3f})")
+        logger.error(f"❌ 未找到匹配点 (最高置信度={best_score:.3f})")
         template = cv2.cvtColor(np.array(Image.open(template_path)), cv2.COLOR_RGB2BGR)
-        print("    各尺度最高置信度:")
+        logger.info("    各尺度最高置信度:")
         for s in TEMPLATE_SCALES:
             if s >= search_img.shape[0] or s >= search_img.shape[1]:
                 continue
             scaled = cv2.resize(template, (s, s), interpolation=cv2.INTER_AREA)
             res = cv2.matchTemplate(search_img, scaled, cv2.TM_CCOEFF_NORMED)
             _, mx, _, ml = cv2.minMaxLoc(res)
-            print(f"    - {s}px: max={mx:.3f} at ({ml[0]+s//2}, {ml[1]+s//2})")
+            logger.info(f"    - {s}px: max={mx:.3f} at ({ml[0]+s//2}, {ml[1]+s//2})")
         return False, None, 0
 
-    print(f"    找到 {len(points)} 个匹配点:")
+    logger.info(f"    找到 {len(points)} 个匹配点:")
     for i, (x, y, s, sc) in enumerate(points):
         dist = ((x - s_box_x) ** 2 + (y - s_box_y) ** 2) ** 0.5
-        print(f"    #{i}: ({x}, {y}) conf={s:.3f} scale={sc}px "
+        logger.info(f"    #{i}: ({x}, {y}) conf={s:.3f} scale={sc}px "
               f"距搜索框={dist:.0f}px")
 
     # 改进：先按置信度筛选，再综合置信度和位置评分选择
@@ -674,7 +616,7 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
     high_conf_points = [p for p in points if p[2] >= MIN_CONFIDENCE_FOR_SELECTION]
     if not high_conf_points:
         # 所有匹配点置信度都低于 0.7，回退到原逻辑（选最近）
-        print(f"    ⚠️ 所有匹配点置信度 < {MIN_CONFIDENCE_FOR_SELECTION}，用最近匹配点")
+        logger.warning(f"    ⚠️ 所有匹配点置信度 < {MIN_CONFIDENCE_FOR_SELECTION}，用最近匹配点")
         target = min(points, key=lambda p: (p[0] - s_box_x) ** 2 + (p[1] - s_box_y) ** 2)
     else:
         # 用加权评分：confidence_score * 0.6 + position_score * 0.4
@@ -692,64 +634,64 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
             position_score = min(1.0, dist_score + below_bonus)
             # 综合评分
             total_score = conf * 0.6 + position_score * 0.4
-            print(f"    #?: ({x},{y}) conf={conf:.3f} dist={dist:.0f} "
+            logger.info(f"    #?: ({x},{y}) conf={conf:.3f} dist={dist:.0f} "
                   f"pos_score={position_score:.3f} total={total_score:.3f}")
             if total_score > best_score_val:
                 best_score_val = total_score
                 target = p
-        print(f"    选中(综合评分最高): ({target[0]}, {target[1]}) "
+        logger.info(f"    选中(综合评分最高): ({target[0]}, {target[1]}) "
               f"conf={target[2]:.3f} scale={target[3]}px score={best_score_val:.3f}")
 
-    print(f"    最终选择: ({target[0]}, {target[1]}) "
+    logger.info(f"    最终选择: ({target[0]}, {target[1]}) "
           f"conf={target[2]:.3f} scale={target[3]}px")
 
     # 头像模板有效性检查：低置信度提示模板可能过期
     TEMPLATE_WARNING_THRESHOLD = 0.75
     if target[2] < TEMPLATE_WARNING_THRESHOLD:
-        print(f"    ⚠️ 匹配置信度较低（{target[2]:.3f} < {TEMPLATE_WARNING_THRESHOLD}）")
-        print(f"    可能原因：联系人更换了头像，模板 {os.path.basename(template_path)} 已过期")
-        print(f"    建议：重新截取联系人头像并更新模板文件")
+        logger.warning(f"    ⚠️ 匹配置信度较低（{target[2]:.3f} < {TEMPLATE_WARNING_THRESHOLD}）")
+        logger.info(f"    可能原因：联系人更换了头像，模板 {os.path.basename(template_path)} 已过期")
+        logger.info(f"    建议：重新截取联系人头像并更新模板文件")
         # 不 return False，因为低置信度仍可能正确（只是提示警告）
 
     match_vis = draw_match_result(search_img, points, target, s_box_x, s_box_y)
     match_path = os.path.join(OUTPUT_DIR, f"stage_d_match_result_{attempt_idx}.png")
     cv2.imwrite(match_path, match_vis)
-    print(f"    匹配结果图: {match_path}")
+    logger.info(f"    匹配结果图: {match_path}")
 
     if not do_click:
-        print("\n[只匹配模式] 请检查匹配结果图，确认后用 --click 运行")
+        logger.info("\n[只匹配模式] 请检查匹配结果图，确认后用 --click 运行")
         return True, target, count_before
 
     # ========== 阶段 E：点击头像 ==========
-    print(f"\n[E] 点击头像 ({target[0]}, {target[1]})")
+    logger.info(f"\n[E] 点击头像 ({target[0]}, {target[1]})")
     client_origin_x, client_origin_y = client_to_screen(hwnd_search, 0, 0)
-    print(f"    搜索候选框窗口 rect: {search_win['rect']}")
-    print(f"    ClientToScreen(0, 0) = ({client_origin_x}, {client_origin_y})")
-    print(f"    偏移: dx={client_origin_x - search_win['rect'][0]}, "
+    logger.info(f"    搜索候选框窗口 rect: {search_win['rect']}")
+    logger.info(f"    ClientToScreen(0, 0) = ({client_origin_x}, {client_origin_y})")
+    logger.info(f"    偏移: dx={client_origin_x - search_win['rect'][0]}, "
           f"dy={client_origin_y - search_win['rect'][1]}")
 
     # 修复 P0-4：截图坐标需减去客户区偏移再传给 client_to_screen
     offset_x, offset_y = get_client_offset(hwnd_search)
     click_screen_x, click_screen_y = client_to_screen(hwnd_search, target[0] - offset_x, target[1] - offset_y)
-    print(f"    点击屏幕坐标: ({click_screen_x}, {click_screen_y})")
+    logger.info(f"    点击屏幕坐标: ({click_screen_x}, {click_screen_y})")
 
     pre_click_img = screencap_window(hwnd_search)
     if pre_click_img is not None:
         pre_click_path = os.path.join(OUTPUT_DIR, f"stage_e_pre_click_{attempt_idx}.png")
         cv2.imwrite(pre_click_path, pre_click_img)
-        print(f"    点击前搜索候选框截图: {pre_click_path}")
+        logger.info(f"    点击前搜索候选框截图: {pre_click_path}")
 
     # 尝试用 SetForegroundWindow 激活搜索候选框窗口，如果失败则用 PostMessage 点击
     fg_search_ok = safe_set_foreground_window(hwnd_search)
     time.sleep(0.2)
 
     if fg_search_ok:
-        print(f"    物理点击 ({click_screen_x}, {click_screen_y}) ...")
+        logger.info(f"    物理点击 ({click_screen_x}, {click_screen_y}) ...")
         physical_click(click_screen_x, click_screen_y)
     else:
         # SetForegroundWindow 失败，用 SetCursorPos + mouse_event 点击屏幕坐标
         # mouse_event 是全局的，点击会到达鼠标位置下的窗口，不需要窗口在前台
-        print(f"    ⚠️ SetForegroundWindow 失败，改用 SetCursorPos+mouse_event 点击 ({click_screen_x}, {click_screen_y}) ...")
+        logger.warning(f"    ⚠️ SetForegroundWindow 失败，改用 SetCursorPos+mouse_event 点击 ({click_screen_x}, {click_screen_y}) ...")
         MOUSEEVENTF_LEFTDOWN = 0x0002
         MOUSEEVENTF_LEFTUP = 0x0004
         user32.SetCursorPos(click_screen_x, click_screen_y)
@@ -758,73 +700,73 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
         time.sleep(0.05)
         user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
 
-    print("    等待 1.0 秒，让聊天界面出现...")  # 优化点1：1.5s → 1.0s
+    logger.info("    等待 1.0 秒，让聊天界面出现...")  # 优化点1：1.5s → 1.0s
     time.sleep(1.0)
 
     # ========== 阶段 F：验证绿色环 ==========
-    print("\n[F] 验证绿色环")
+    logger.info("\n[F] 验证绿色环")
     post_img = screencap_window(hwnd_main)
     post_path = os.path.join(OUTPUT_DIR, f"stage_f_after_click_{attempt_idx}.png")
     cv2.imwrite(post_path, post_img)
-    print(f"    点击后主窗口截图: {post_path}")
+    logger.info(f"    点击后主窗口截图: {post_path}")
 
     post_points, post_best = find_template_multiscale(
         post_img, template_path, TEMPLATE_SCALES, MATCH_THRESHOLD, NMS_MIN_DIST
     )
     if not post_points:
-        print(f"    ❌ 主窗口内未匹配到 [REDACTED] 头像 (最高置信度={post_best:.3f})")
+        logger.error(f"    ❌ 主窗口内未匹配到 [REDACTED] 头像 (最高置信度={post_best:.3f})")
         template = cv2.cvtColor(np.array(Image.open(template_path)), cv2.COLOR_RGB2BGR)
-        print("    主窗口内各尺度最高置信度:")
+        logger.info("    主窗口内各尺度最高置信度:")
         for s in TEMPLATE_SCALES:
             if s >= post_img.shape[0] or s >= post_img.shape[1]:
                 continue
             scaled = cv2.resize(template, (s, s), interpolation=cv2.INTER_AREA)
             res = cv2.matchTemplate(post_img, scaled, cv2.TM_CCOEFF_NORMED)
             _, mx, _, ml = cv2.minMaxLoc(res)
-            print(f"    - {s}px: max={mx:.3f} at ({ml[0]+s//2}, {ml[1]+s//2})")
+            logger.info(f"    - {s}px: max={mx:.3f} at ({ml[0]+s//2}, {ml[1]+s//2})")
         found = False
         ratio = 0.0
         debug = post_img.copy()
     else:
-        print(f"    主窗口内匹配到 {len(post_points)} 个 [REDACTED] 头像:")
+        logger.info(f"    主窗口内匹配到 {len(post_points)} 个 [REDACTED] 头像:")
         for i, (x, y, s, sc) in enumerate(post_points):
-            print(f"      #{i}: ({x}, {y}) conf={s:.3f} scale={sc}px")
+            logger.info(f"      #{i}: ({x}, {y}) conf={s:.3f} scale={sc}px")
         post_target = max(post_points, key=lambda p: p[2])
-        print(f"    用置信度最高的点检测绿色环: ({post_target[0]}, {post_target[1]})")
+        logger.info(f"    用置信度最高的点检测绿色环: ({post_target[0]}, {post_target[1]})")
         found, ratio, debug = find_green_ring(
             post_img, post_target[0], post_target[1], post_target[3]
         )
 
     debug_path = os.path.join(OUTPUT_DIR, f"stage_f_verify_green_ring_{attempt_idx}.png")
     cv2.imwrite(debug_path, debug)
-    print(f"    绿色像素占比: {ratio:.3f} (阈值 0.4)")
-    print(f"    验证图: {debug_path}")
+    logger.info(f"    绿色像素占比: {ratio:.3f} (阈值 0.4)")
+    logger.info(f"    验证图: {debug_path}")
 
     if found:
-        print("    ✅ 检测到绿色环，点击成功")
+        logger.info("    ✅ 检测到绿色环，点击成功")
     else:
-        print("    ❌ 未检测到绿色环")
+        logger.error("    ❌ 未检测到绿色环")
 
     # ========== 阶段 G：检查窗口数 ==========
-    print("\n[G] 检查点击后窗口数")
+    logger.info("\n[G] 检查点击后窗口数")
     count_after, wins_after = count_wechat_windows()
-    print(f"    点击后微信窗口数: {count_after}")
+    logger.info(f"    点击后微信窗口数: {count_after}")
     for w in wins_after:
-        print(f"    - hwnd={w['hwnd']} title={w['title']!r} class={w['class']!r}")
+        logger.info(f"    - hwnd={w['hwnd']} title={w['title']!r} class={w['class']!r}")
 
-    print("\n" + "=" * 60)
-    print(f"  第 {attempt_idx} 次尝试结果")
-    print("=" * 60)
-    print(f"  匹配点: ({target[0]}, {target[1]}) conf={target[2]:.3f}")
-    print(f"  绿色环验证: {'✅ 通过' if found else '❌ 未通过'}")
-    print(f"  窗口数变化: {count_before} -> {count_after}")
+    logger.info("\n" + "=" * 60)
+    logger.info(f"  第 {attempt_idx} 次尝试结果")
+    logger.info("=" * 60)
+    logger.info(f"  匹配点: ({target[0]}, {target[1]}) conf={target[2]:.3f}")
+    logger.error(f"  绿色环验证: {'✅ 通过' if found else '❌ 未通过'}")
+    logger.info(f"  窗口数变化: {count_before} -> {count_after}")
     if count_after == 1:
-        print("  分支: 1 个窗口 → 联系人聊天界面")
+        logger.info("  分支: 1 个窗口 → 联系人聊天界面")
     elif count_after == 2:
-        print("  分支: 2 个窗口 → 历史聊天界面（需再次匹配+双击）")
+        logger.info("  分支: 2 个窗口 → 历史聊天界面（需再次匹配+双击）")
     else:
-        print(f"  分支: {count_after} 个窗口（未预期）")
-    print("=" * 60)
+        logger.info(f"  分支: {count_after} 个窗口（未预期）")
+    logger.info("=" * 60)
 
     return found, target, count_after
 
@@ -833,11 +775,11 @@ def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     do_click = "--click" in sys.argv
 
-    print("=" * 60)
-    print("  在搜索候选框窗口内匹配 [REDACTED] 头像（含重试机制）")
-    print(f"  模式: {'匹配+点击+验证+重试' if do_click else '只匹配（不点击）'}")
-    print(f"  最多尝试次数: {MAX_ATTEMPTS}（初次 + {MAX_RETRIES} 次重试）")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("  在搜索候选框窗口内匹配 [REDACTED] 头像（含重试机制）")
+    logger.info(f"  模式: {'匹配+点击+验证+重试' if do_click else '只匹配（不点击）'}")
+    logger.info(f"  最多尝试次数: {MAX_ATTEMPTS}（初次 + {MAX_RETRIES} 次重试）")
+    logger.info("=" * 60)
 
     if not do_click:
         # 只匹配模式：执行一次，不点击
@@ -853,7 +795,7 @@ def main():
         if attempt > 1:
             # 优化点3（澄清版）：重试前在主窗口中间栏滚动滑轮+点击
             # 失败后搜索候选框已关闭，重试时重新从点击搜索栏开始
-            print("\n[重试预备] 在主窗口中间栏执行滚动+点击...")
+            logger.info("\n[重试预备] 在主窗口中间栏执行滚动+点击...")
             scroll_in_main_middle_column()
             time.sleep(0.5)
 
@@ -863,34 +805,34 @@ def main():
         final_count_after = count_after
 
         if success:
-            print(f"\n✅ 第 {attempt} 次尝试成功，流程完成")
+            logger.info(f"\n✅ 第 {attempt} 次尝试成功，流程完成")
             break
         else:
-            print(f"\n❌ 第 {attempt} 次尝试失败")
+            logger.error(f"\n❌ 第 {attempt} 次尝试失败")
             if attempt < MAX_ATTEMPTS:
-                print(f"   0.5 秒后将进行第 {attempt + 1} 次尝试...")
+                logger.info(f"   0.5 秒后将进行第 {attempt + 1} 次尝试...")
                 time.sleep(0.5)
 
-    print("\n" + "=" * 60)
-    print("  最终结果")
-    print("=" * 60)
+    logger.info("\n" + "=" * 60)
+    logger.info("  最终结果")
+    logger.info("=" * 60)
     if final_success:
-        print(f"  ✅ 流程成功")
+        logger.info(f"  ✅ 流程成功")
         if final_target:
-            print(f"  匹配点: ({final_target[0]}, {final_target[1]}) "
+            logger.info(f"  匹配点: ({final_target[0]}, {final_target[1]}) "
                   f"conf={final_target[2]:.3f}")
-        print(f"  点击后窗口数: {final_count_after}")
+        logger.info(f"  点击后窗口数: {final_count_after}")
         if final_count_after == 1:
-            print("  分支: 1 个窗口 → 联系人聊天界面，阶段一完成")
+            logger.info("  分支: 1 个窗口 → 联系人聊天界面，阶段一完成")
         elif final_count_after == 2:
-            print("  分支: 2 个窗口 → 历史聊天界面，需进入阶段二（再次匹配+双击）")
+            logger.info("  分支: 2 个窗口 → 历史聊天界面，需进入阶段二（再次匹配+双击）")
     else:
-        print(f"  ❌ {MAX_ATTEMPTS} 次尝试全部失败")
-        print("  建议检查：")
-        print("  - 微信是否正常显示")
-        print("  - 搜索候选框是否出现")
-        print("  - [REDACTED] 头像是否在搜索结果中")
-    print("=" * 60)
+        logger.error(f"  ❌ {MAX_ATTEMPTS} 次尝试全部失败")
+        logger.info("  建议检查：")
+        logger.info("  - 微信是否正常显示")
+        logger.info("  - 搜索候选框是否出现")
+        logger.info("  - [REDACTED] 头像是否在搜索结果中")
+    logger.info("=" * 60)
 
 
 if __name__ == "__main__":

@@ -131,20 +131,8 @@ def _ensure_wechat_window(max_wait: float = 15.0) -> dict:
 
     # 方法 C: 用 ShowWindow 恢复最小化的窗口
     try:
-        SW_RESTORE = 9
-        SW_SHOW = 5
-        # 遍历所有微信窗口，尝试恢复
-        def _try_restore(hwnd, lparam):
-            length = user32.GetWindowTextLengthW(hwnd) + 1
-            if length > 1:
-                buf = ctypes.create_unicode_buffer(length)
-                user32.GetWindowTextW(hwnd, buf, length)
-                if "微信" in buf.value:
-                    user32.ShowWindow(hwnd, SW_RESTORE)
-                    user32.ShowWindow(hwnd, SW_SHOW)
-            return True
-        callback = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)(_try_restore)
-        user32.EnumWindows(callback, 0)
+        from wechat_window_utils import restore_wechat_windows
+        restore_wechat_windows()
     except Exception:
         pass
 

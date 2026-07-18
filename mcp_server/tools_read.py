@@ -828,65 +828,14 @@ def wechat_status() -> dict:
 def _find_wechat_window() -> dict | None:
     """查找微信主窗口，返回 HWND 和窗口尺寸。
 
-    匹配策略（按优先级）：
-    1. 标题精确等于 "微信"
-    2. 标题包含 "微信"
-    3. 类名包含 "Qt" 且包含 "WindowIcon"（微信使用 Qt 框架）
+    委托给 wechat_window_utils.find_wechat_window（统一窗口枚举实现）。
+    匹配策略：标题精确"微信" > 标题含"微信" > 类名匹配（WeChat/Qt+WindowIcon）。
 
     Returns:
         dict with hwnd/left/top/width/height，未找到返回 None
     """
-    exact_match = None
-    fuzzy_match = None
-    class_match = None
-
-    def enum_proc(hwnd, lparam):
-        nonlocal exact_match, fuzzy_match, class_match
-        if not _user32.IsWindowVisible(hwnd):
-            return True
-
-        # 获取窗口标题
-        length = _user32.GetWindowTextLengthW(hwnd) + 1
-        if length <= 1:
-            title = ""
-        else:
-            buf = _ctypes.create_unicode_buffer(length)
-            _user32.GetWindowTextW(hwnd, buf, length)
-            title = buf.value
-
-        # 获取窗口类名
-        cls_buf = _ctypes.create_unicode_buffer(256)
-        _user32.GetClassNameW(hwnd, cls_buf, 256)
-        cls_name = cls_buf.value
-
-        # 策略1: 精确匹配
-        if title == "微信":
-            exact_match = hwnd
-            return False  # 最高优先级，直接停止
-        # 策略2: 标题包含"微信"
-        if "微信" in title and fuzzy_match is None:
-            fuzzy_match = hwnd
-        # 策略3: 类名含 Qt 且含 WindowIcon
-        if "Qt" in cls_name and "WindowIcon" in cls_name and class_match is None:
-            class_match = hwnd
-        return True
-
-    callback = _ctypes.WINFUNCTYPE(_wintypes.BOOL, _wintypes.HWND, _wintypes.LPARAM)(enum_proc)
-    _user32.EnumWindows(callback, 0)
-
-    found_hwnd = exact_match or fuzzy_match or class_match
-    if not found_hwnd:
-        return None
-
-    rect = _RECT()
-    _user32.GetWindowRect(found_hwnd, _ctypes.byref(rect))
-    return {
-        "hwnd": found_hwnd,
-        "left": rect.left,
-        "top": rect.top,
-        "width": rect.right - rect.left,
-        "height": rect.bottom - rect.top,
-    }
+    from engine.wechat_sender.wechat_window_utils import find_wechat_window
+    return find_wechat_window()
 
 
 def _bring_window_to_front(hwnd: int):

@@ -41,6 +41,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from dynamic_detector import WeChatLayoutDetector  # noqa: E402
 from test_current_wechat import find_wechat_window, screencap_window  # noqa: E402
+from wechat_window_utils import find_largest_wechat_window  # noqa: E402  统一窗口枚举
 from click_search_and_input import (  # noqa: E402
     get_client_offset,
     client_to_screen,
@@ -48,6 +49,9 @@ from click_search_and_input import (  # noqa: E402
     input_text_via_clipboard,
     safe_set_foreground_window,
 )
+
+from logger import get_logger  # noqa: E402
+logger = get_logger(__name__)
 
 user32 = ctypes.windll.user32
 
@@ -59,54 +63,6 @@ SEND_BTN_TOLERANCE = 30
 
 # 输入框位置：距底部 80px（输入框中心的大概位置）
 INPUT_BOX_OFFSET_FROM_BOTTOM = 80
-
-
-def find_largest_wechat_window():
-    """找到最大的微信窗口（避免找到托盘图标等小窗口）"""
-    candidates = []
-
-    def enum_proc(hwnd, lparam):
-        if not user32.IsWindowVisible(hwnd):
-            return True
-        length = user32.GetWindowTextLengthW(hwnd) + 1
-        if length <= 1:
-            return True
-        buf = ctypes.create_unicode_buffer(length)
-        user32.GetWindowTextW(hwnd, buf, length)
-        title = buf.value
-        cls_buf = ctypes.create_unicode_buffer(256)
-        user32.GetClassNameW(hwnd, cls_buf, 256)
-        cls_name = cls_buf.value
-        if "微信" in title or "WeChat" in cls_name or "WeChatMainWnd" in cls_name:
-            rect = wintypes.RECT()
-            user32.GetWindowRect(hwnd, ctypes.byref(rect))
-            w = rect.right - rect.left
-            h = rect.bottom - rect.top
-            candidates.append({
-                "hwnd": hwnd,
-                "title": title,
-                "class": cls_name,
-                "width": w,
-                "height": h,
-                "left": rect.left,
-                "top": rect.top,
-            })
-        return True
-
-    callback = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)(enum_proc)
-    user32.EnumWindows(callback, 0)
-
-    if not candidates:
-        return None
-
-    # 按面积排序，选最大的
-    candidates.sort(key=lambda c: c["width"] * c["height"], reverse=True)
-    print(f"找到 {len(candidates)} 个微信窗口候选:")
-    for i, c in enumerate(candidates):
-        print(f"  {i+1}. 标题: '{c['title']}', 类名: '{c['class']}', "
-              f"尺寸: {c['width']}x{c['height']}")
-
-    return candidates[0]
 
 
 def find_send_button_by_ocr(image):
@@ -133,16 +89,16 @@ def find_send_button_by_ocr(image):
             # 匹配规则：文字长度至多4字符且包含"发送"
             if '发送' in r.text and len(r.text) <= 4:
                 cx, cy = r.center_x, r.center_y
-                print(f"    ✅ OCR 识别到'{r.text}' center=({cx}, {cy}) conf={r.confidence:.3f}")
+                logger.info(f"    ✅ OCR 识别到'{r.text}' center=({cx}, {cy}) conf={r.confidence:.3f}")
                 # 在图上标注
                 pts = [(int(p[0]), int(p[1])) for p in r.bbox]
                 cv2.polylines(marked, [np.array(pts)], True, (0, 255, 0), 2)
                 cv2.circle(marked, (cx, cy), 10, (0, 255, 0), 2)
                 return cx, cy, marked
 
-        print("    ⚠️ OCR 未识别到含'发送'的文字（≤4字符）")
+        logger.warning("    ⚠️ OCR 未识别到含'发送'的文字（≤4字符）")
     except Exception as e:
-        print(f"    ⚠️ OCR 识别失败: {e}")
+        logger.warning(f"    ⚠️ OCR 识别失败: {e}")
 
     return None, None, marked
 
@@ -231,67 +187,67 @@ def draw_input_box(image, input_cx, input_cy, session_right):
 
 def run_send_message(message, do_send=True):
     """执行阶段三：输入和发送消息"""
-    print("=" * 60)
+    logger.info("=" * 60)
     if do_send:
-        print(f"  阶段三：输入和发送消息  message={message!r}")
+        logger.info(f"  阶段三：输入和发送消息  message={message!r}")
     else:
-        print("  阶段三：只检测布局（输入测试文本但不发送）")
-    print("=" * 60)
+        logger.info("  阶段三：只检测布局（输入测试文本但不发送）")
+    logger.info("=" * 60)
 
     # 1. 找微信窗口（选最大的，避免找到托盘图标等小窗口）
     window = find_largest_wechat_window()
     if not window:
-        print("❌ 未找到微信窗口")
+        logger.error("❌ 未找到微信窗口")
         return False
     hwnd = window["hwnd"]
-    print(f"\n[1] 微信窗口: hwnd={hwnd} size={window['width']}x{window['height']}")
+    logger.info(f"\n[1] 微信窗口: hwnd={hwnd} size={window['width']}x{window['height']}")
 
     # 检查窗口大小（避免找到托盘图标等小窗口）
     if window["width"] < 500 or window["height"] < 400:
-        print(f"❌ 微信窗口太小 ({window['width']}x{window['height']})，可能不是主窗口")
-        print("   请确认微信主窗口已打开并显示在屏幕上")
+        logger.error(f"❌ 微信窗口太小 ({window['width']}x{window['height']})，可能不是主窗口")
+        logger.info("   请确认微信主窗口已打开并显示在屏幕上")
         return False
 
     # 2. 截图（发送前）
-    print("\n[2] 截图（发送前）")
+    logger.info("\n[2] 截图（发送前）")
     img = screencap_window(hwnd)
     if img is None:
-        print("❌ 截图失败")
+        logger.error("❌ 截图失败")
         return False
     img_path = os.path.join(OUTPUT_DIR, "stage_3_before_send.png")
     cv2.imwrite(img_path, img)
-    print(f"    截图: {img_path} ({img.shape[1]}x{img.shape[0]})")
+    logger.info(f"    截图: {img_path} ({img.shape[1]}x{img.shape[0]})")
 
     h, w = img.shape[:2]
 
     # 3. 检测聊天区域分界线
-    print("\n[3] 检测聊天区域分界线")
+    logger.info("\n[3] 检测聊天区域分界线")
     detector = WeChatLayoutDetector()
     nav_right, session_right = detector.detect(img)
-    print(f"    nav_right={nav_right} session_right={session_right}")
+    logger.info(f"    nav_right={nav_right} session_right={session_right}")
 
     chat_x = session_right
     chat_w = w - session_right
-    print(f"    聊天区域: x={chat_x} w={chat_w}")
+    logger.info(f"    聊天区域: x={chat_x} w={chat_w}")
 
     # 4. 计算输入框位置（聊天区域底部中心，距底部 80px）
     input_cx = chat_x + chat_w // 2
     input_cy = h - INPUT_BOX_OFFSET_FROM_BOTTOM
-    print(f"\n[4] 输入框位置(截图坐标): ({input_cx}, {input_cy})")
+    logger.info(f"\n[4] 输入框位置(截图坐标): ({input_cx}, {input_cy})")
 
     # 标注输入框位置
     input_vis = draw_input_box(img, input_cx, input_cy, session_right)
     input_vis_path = os.path.join(OUTPUT_DIR, "stage_3_input_box.png")
     cv2.imwrite(input_vis_path, input_vis)
-    print(f"    输入框标注图: {input_vis_path}")
+    logger.info(f"    输入框标注图: {input_vis_path}")
 
     # 5. 物理点击输入框
-    print(f"\n[5] 物理点击输入框")
+    logger.info(f"\n[5] 物理点击输入框")
     offset_x, offset_y = get_client_offset(hwnd)
     client_x = input_cx - offset_x
     client_y = input_cy - offset_y
     screen_x, screen_y = client_to_screen(hwnd, client_x, client_y)
-    print(f"    输入框屏幕坐标: ({screen_x}, {screen_y})")
+    logger.info(f"    输入框屏幕坐标: ({screen_x}, {screen_y})")
     safe_set_foreground_window(hwnd)
     time.sleep(0.5)
     physical_click(screen_x, screen_y)
@@ -300,7 +256,7 @@ def run_send_message(message, do_send=True):
     # 6. 输入消息（此时发送按钮变绿）
     # 超长消息分段输入+发送，避免输入框滚动导致发送按钮位置变化
     MAX_MSG_LENGTH = 500  # 微信输入框单次最大推荐长度
-    print(f"\n[6] 输入消息: {message!r}")
+    logger.info(f"\n[6] 输入消息: {message!r}")
 
     if len(message) <= MAX_MSG_LENGTH:
         # 短消息：一次性输入+发送
@@ -308,25 +264,25 @@ def run_send_message(message, do_send=True):
         time.sleep(0.8)
     else:
         # 长消息：分段输入+发送
-        print(f"    消息较长（{len(message)} 字符），分 {(len(message) + MAX_MSG_LENGTH - 1) // MAX_MSG_LENGTH} 段发送")
+        logger.info(f"    消息较长（{len(message)} 字符），分 {(len(message) + MAX_MSG_LENGTH - 1) // MAX_MSG_LENGTH} 段发送")
         segments = [message[i:i+MAX_MSG_LENGTH] for i in range(0, len(message), MAX_MSG_LENGTH)]
         for seg_idx, segment in enumerate(segments, 1):
-            print(f"    --- 第 {seg_idx}/{len(segments)} 段 ---")
+            logger.info(f"    --- 第 {seg_idx}/{len(segments)} 段 ---")
             input_text_via_clipboard(hwnd, segment)
             time.sleep(0.8)
 
             # 找发送按钮并发送本段
             seg_img = screencap_window(hwnd)
             if seg_img is None:
-                print(f"    ❌ 第 {seg_idx} 段截图失败")
+                logger.error(f"    ❌ 第 {seg_idx} 段截图失败")
                 return False
             seg_cx, seg_cy, _ = find_send_button_by_ocr(seg_img)
             if seg_cx is None:
                 seg_cx, seg_cy, _ = find_send_button_from_bottom_right(seg_img, session_right)
             if seg_cx is None:
-                print(f"    ❌ 第 {seg_idx} 段未找到发送按钮")
+                logger.error(f"    ❌ 第 {seg_idx} 段未找到发送按钮")
                 return False
-            print(f"    第 {seg_idx} 段发送按钮: ({seg_cx}, {seg_cy})")
+            logger.info(f"    第 {seg_idx} 段发送按钮: ({seg_cx}, {seg_cy})")
             seg_offset_x, seg_offset_y = get_client_offset(hwnd)
             seg_screen_x, seg_screen_y = client_to_screen(hwnd, seg_cx - seg_offset_x, seg_cy - seg_offset_y)
             safe_set_foreground_window(hwnd)
@@ -335,78 +291,78 @@ def run_send_message(message, do_send=True):
             time.sleep(1.0)
 
         # 所有分段发送完成，直接返回成功（跳过后续单次发送逻辑）
-        print("\n" + "=" * 60)
-        print("  阶段三完成（分段发送）")
-        print("=" * 60)
+        logger.info("\n" + "=" * 60)
+        logger.info("  阶段三完成（分段发送）")
+        logger.info("=" * 60)
         return True
 
     # 7. 重新截图（此时发送按钮是绿色）
-    print("\n[7] 重新截图（发送按钮应变绿）")
+    logger.info("\n[7] 重新截图（发送按钮应变绿）")
     img_after_input = screencap_window(hwnd)
     if img_after_input is None:
-        print("❌ 重新截图失败")
+        logger.error("❌ 重新截图失败")
         return False
     img_after_input_path = os.path.join(OUTPUT_DIR, "stage_3_after_input.png")
     cv2.imwrite(img_after_input_path, img_after_input)
-    print(f"    截图: {img_after_input_path}")
+    logger.info(f"    截图: {img_after_input_path}")
 
     # 8. 用 OCR 识别"发送"文字定位发送按钮（优先），回退到绿色按钮检测
-    print("\n[8] 定位发送按钮（OCR 优先）")
+    logger.info("\n[8] 定位发送按钮（OCR 优先）")
     send_cx, send_cy, send_debug = find_send_button_by_ocr(img_after_input)
 
     if send_cx is None:
-        print("    OCR 未找到，回退到绿色按钮检测...")
+        logger.info("    OCR 未找到，回退到绿色按钮检测...")
         send_cx, send_cy, send_debug = find_send_button_from_bottom_right(
             img_after_input, session_right
         )
 
     send_debug_path = os.path.join(OUTPUT_DIR, "stage_3_send_button.png")
     cv2.imwrite(send_debug_path, send_debug)
-    print(f"    发送按钮检测图: {send_debug_path}")
+    logger.info(f"    发送按钮检测图: {send_debug_path}")
 
     if send_cx is None:
-        print("    ❌ 未找到发送按钮")
-        print("    可能原因：消息未输入成功，或发送按钮位置不在右下角 1/3 区域")
+        logger.error("    ❌ 未找到发送按钮")
+        logger.info("    可能原因：消息未输入成功，或发送按钮位置不在右下角 1/3 区域")
         return False
 
-    print(f"    ✅ 找到发送按钮: ({send_cx}, {send_cy})")
+    logger.info(f"    ✅ 找到发送按钮: ({send_cx}, {send_cy})")
 
     if not do_send:
-        print("\n[只检测模式] 已找到发送按钮，未点击发送")
+        logger.info("\n[只检测模式] 已找到发送按钮，未点击发送")
         return True
 
     # 9. 物理点击发送按钮
-    print(f"\n[9] 物理点击发送按钮 ({send_cx}, {send_cy})")
+    logger.info(f"\n[9] 物理点击发送按钮 ({send_cx}, {send_cy})")
     client_x = send_cx - offset_x
     client_y = send_cy - offset_y
     screen_x, screen_y = client_to_screen(hwnd, client_x, client_y)
-    print(f"    发送按钮屏幕坐标: ({screen_x}, {screen_y})")
+    logger.info(f"    发送按钮屏幕坐标: ({screen_x}, {screen_y})")
     physical_click(screen_x, screen_y)
     time.sleep(1.5)
 
     # 10. 截图验证 + OCR 确认消息已发送
-    print("\n[10] 截图验证（发送后）")
+    logger.info("\n[10] 截图验证（发送后）")
     after_img = screencap_window(hwnd)
     if after_img is None:
-        print("❌ 发送后截图失败")
+        logger.error("❌ 发送后截图失败")
         return False
     after_path = os.path.join(OUTPUT_DIR, "stage_3_after_send.png")
     cv2.imwrite(after_path, after_img)
-    print(f"    发送后截图: {after_path}")
+    logger.info(f"    发送后截图: {after_path}")
 
     # 11. OCR 验证：确认消息出现在聊天记录中
-    print("\n[11] OCR 验证消息是否出现在聊天记录")
+    logger.info("\n[11] OCR 验证消息是否出现在聊天记录")
     verify_ok = verify_message_sent(after_img, message, session_right)
     if verify_ok:
-        print("    ✅ 消息验证成功：发送的消息出现在聊天记录中")
+        logger.info("    ✅ 消息验证成功：发送的消息出现在聊天记录中")
     else:
-        print("    ⚠️ 消息验证失败：未在聊天记录中找到发送的消息")
-        print("    （可能消息已发送但 OCR 未能识别，或消息位置在可视区域外）")
+        logger.warning("    ⚠️ 消息验证失败：未在聊天记录中找到发送的消息")
+        logger.info("    （可能消息已发送但 OCR 未能识别，或消息位置在可视区域外）")
         return False
 
-    print("\n" + "=" * 60)
-    print("  阶段三完成")
-    print("=" * 60)
+    logger.info("\n" + "=" * 60)
+    logger.info("  阶段三完成")
+    logger.info("=" * 60)
     return True
 
 
@@ -448,7 +404,7 @@ def verify_message_sent(image, message, session_right):
             # 完全匹配或消息内容包含在 OCR 文字中
             # 注意：不使用 text_clean in message_clean，避免短文本误匹配长消息
             if text_clean == message_clean or message_clean in text_clean:
-                print(f"    [OCR] 找到匹配: {r.text!r} (center=({r.center_x + session_right}, {r.center_y}), conf={r.confidence:.3f})")
+                logger.info(f"    [OCR] 找到匹配: {r.text!r} (center=({r.center_x + session_right}, {r.center_y}), conf={r.confidence:.3f})")
                 return True
 
         # 如果消息较长，分段匹配（OCR 可能只识别到部分）
@@ -460,14 +416,14 @@ def verify_message_sent(image, message, session_right):
                 for r in results:
                     text_clean = r.text.replace(' ', '').replace('\n', '')
                     if segment in text_clean:
-                        print(f"    [OCR] 分段匹配: {r.text!r} 包含 {segment!r}")
+                        logger.info(f"    [OCR] 分段匹配: {r.text!r} 包含 {segment!r}")
                         return True
 
-        print(f"    [OCR] 未找到匹配的消息（共识别 {len(results)} 条文字）")
+        logger.info(f"    [OCR] 未找到匹配的消息（共识别 {len(results)} 条文字）")
         return False
 
     except Exception as e:
-        print(f"    [OCR] 验证异常: {e}")
+        logger.info(f"    [OCR] 验证异常: {e}")
         return False
 
 

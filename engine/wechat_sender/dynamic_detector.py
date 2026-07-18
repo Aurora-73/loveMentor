@@ -6,6 +6,9 @@ import cv2
 import numpy as np
 
 
+from logger import get_logger  # noqa: E402
+logger = get_logger(__name__)
+
 class WeChatLayoutDetector:
     def __init__(self):
         self.nav_bar_right = 0
@@ -13,7 +16,7 @@ class WeChatLayoutDetector:
 
     def detect(self, image):
         h, w = image.shape[:2]
-        print(f"图片尺寸: {w}x{h}")
+        logger.info(f"图片尺寸: {w}x{h}")
 
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
@@ -32,12 +35,12 @@ class WeChatLayoutDetector:
         self.nav_bar_right = nav_right
         self.session_list_right = session_right
 
-        print(f"\n检测结果:")
-        print(f"  导航栏右边界: {nav_right}px")
-        print(f"  会话列表右边界: {session_right}px")
-        print(f"  导航栏: 0-{nav_right} ({nav_right}px)")
-        print(f"  会话列表: {nav_right}-{session_right} ({session_right-nav_right}px)")
-        print(f"  聊天区域: {session_right}-{w} ({w-session_right}px)")
+        logger.info(f"\n检测结果:")
+        logger.info(f"  导航栏右边界: {nav_right}px")
+        logger.info(f"  会话列表右边界: {session_right}px")
+        logger.info(f"  导航栏: 0-{nav_right} ({nav_right}px)")
+        logger.info(f"  会话列表: {nav_right}-{session_right} ({session_right-nav_right}px)")
+        logger.info(f"  聊天区域: {session_right}-{w} ({w-session_right}px)")
 
         # 标注边界
         debug_image = image.copy()
@@ -51,7 +54,7 @@ class WeChatLayoutDetector:
 
         output_path = "screenshots/layout_analysis.png"
         cv2.imwrite(output_path, debug_image)
-        print(f"\n标注图已保存: {output_path}")
+        logger.info(f"\n标注图已保存: {output_path}")
 
         return nav_right, session_right
 
@@ -76,7 +79,7 @@ class WeChatLayoutDetector:
             sat_increase = (left_sat < 5 and right_sat > 10)
 
             if var_jump and sat_increase:
-                print(f"  导航栏边界检测: x={x}, 方差 {left_var:.0f}→{right_var:.0f}, 饱和度 {left_sat:.1f}→{right_sat:.1f}")
+                logger.info(f"  导航栏边界检测: x={x}, 方差 {left_var:.0f}→{right_var:.0f}, 饱和度 {left_sat:.1f}→{right_sat:.1f}")
                 return x
 
         # 回退：找方差变化最大的位置
@@ -91,7 +94,7 @@ class WeChatLayoutDetector:
                     best_ratio = ratio
                     best_x = x
 
-        print(f"  导航栏边界检测(回退): x={best_x}, 方差比={best_ratio:.1f}")
+        logger.info(f"  导航栏边界检测(回退): x={best_x}, 方差比={best_ratio:.1f}")
         return best_x
 
     def _find_session_boundary(self, saturation, brightness, w, nav_right):
@@ -114,7 +117,7 @@ class WeChatLayoutDetector:
             brt_increase = (right_brt > left_brt + 10)
 
             if sat_drop and brt_increase:
-                print(f"  会话列表边界检测: x={x}, 饱和度 {left_sat:.1f}→{right_sat:.1f}, 亮度 {left_brt:.1f}→{right_brt:.1f}")
+                logger.info(f"  会话列表边界检测: x={x}, 饱和度 {left_sat:.1f}→{right_sat:.1f}, 亮度 {left_brt:.1f}→{right_brt:.1f}")
                 return x
 
         # 回退：找饱和度下降最大的位置
@@ -128,25 +131,25 @@ class WeChatLayoutDetector:
                 best_drop = drop
                 best_x = x
 
-        print(f"  会话列表边界检测(回退): x={best_x}, 饱和度下降={best_drop:.1f}")
+        logger.info(f"  会话列表边界检测(回退): x={best_x}, 饱和度下降={best_drop:.1f}")
         return best_x
 
 
 def main():
-    print("=" * 60)
-    print("  微信界面布局动态检测（方差+饱和度算法）")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("  微信界面布局动态检测（方差+饱和度算法）")
+    logger.info("=" * 60)
 
     image_path = "screenshots/raw_screenshot.png"
     image = cv2.imread(image_path)
     if image is None:
-        print(f"❌ 无法读取图片: {image_path}")
+        logger.error(f"❌ 无法读取图片: {image_path}")
         return
 
     detector = WeChatLayoutDetector()
     detector.detect(image)
 
-    print("\n✅ 完成，请查看 screenshots/layout_analysis.png")
+    logger.info("\n✅ 完成，请查看 screenshots/layout_analysis.png")
 
 
 if __name__ == "__main__":

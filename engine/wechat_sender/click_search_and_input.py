@@ -32,6 +32,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from dynamic_detector import WeChatLayoutDetector
 from test_current_wechat import find_wechat_window, screencap_window
 
+from logger import get_logger  # noqa: E402
+logger = get_logger(__name__)
+
 user32 = ctypes.windll.user32
 
 # Windows 消息常量
@@ -89,7 +92,7 @@ def click_taskbar_wechat(max_wait=5.0):
     # 1. 找到任务栏窗口
     Shell_TrayWnd = user32.FindWindowW("Shell_TrayWnd", None)
     if not Shell_TrayWnd:
-        print("   ⚠️ 未找到任务栏窗口")
+        logger.warning("   ⚠️ 未找到任务栏窗口")
         return False
 
     # 获取任务栏矩形
@@ -99,7 +102,7 @@ def click_taskbar_wechat(max_wait=5.0):
     height = rect.bottom - rect.top
 
     if width <= 0 or height <= 0:
-        print(f"   ⚠️ 任务栏尺寸异常: {width}x{height}")
+        logger.warning(f"   ⚠️ 任务栏尺寸异常: {width}x{height}")
         return False
 
     # 2. 用 BitBlt 从屏幕 DC 截取任务栏区域
@@ -179,7 +182,7 @@ def click_taskbar_wechat(max_wait=5.0):
             })
 
     if not candidates:
-        print("   ⚠️ 任务栏上未找到微信图标（无绿色候选区域）")
+        logger.warning("   ⚠️ 任务栏上未找到微信图标（无绿色候选区域）")
         return False
 
     # 选面积最大的候选
@@ -188,7 +191,7 @@ def click_taskbar_wechat(max_wait=5.0):
     screen_x = rect.left + cx
     screen_y = rect.top + cy
 
-    print(f"   📍 任务栏微信图标位置: ({screen_x}, {screen_y})，候选数: {len(candidates)}")
+    logger.info(f"   📍 任务栏微信图标位置: ({screen_x}, {screen_y})，候选数: {len(candidates)}")
 
     # 5. 物理点击任务栏上的微信图标
     physical_click(screen_x, screen_y)
@@ -204,10 +207,10 @@ def click_taskbar_wechat(max_wait=5.0):
             wechat_window = find_wechat_window()
             if wechat_window and wechat_window["hwnd"] == foreground_hwnd:
                 elapsed = time.time() - start_time
-                print(f"   ✅ 点击任务栏图标成功，微信已在前台（耗时 {elapsed:.1f}s）")
+                logger.info(f"   ✅ 点击任务栏图标成功，微信已在前台（耗时 {elapsed:.1f}s）")
                 return True
 
-    print(f"   ⚠️ 点击任务栏图标后 {max_wait}s 内微信未出现在前台")
+    logger.warning(f"   ⚠️ 点击任务栏图标后 {max_wait}s 内微信未出现在前台")
     return False
 
 
@@ -264,7 +267,7 @@ def safe_set_foreground_window(hwnd, max_retries=3):
             if user32.GetForegroundWindow() == hwnd:
                 return True
 
-        print(f"   ⚠️ SetForegroundWindow 第 {i+1} 次失败 (hwnd={hwnd})")
+        logger.warning(f"   ⚠️ SetForegroundWindow 第 {i+1} 次失败 (hwnd={hwnd})")
         time.sleep(0.3)
 
     # 所有重试失败，尝试用 PowerShell COM 对象激活（最后手段）
@@ -278,18 +281,18 @@ def safe_set_foreground_window(hwnd, max_retries=3):
         )
         time.sleep(0.5)
         if user32.GetForegroundWindow() == hwnd:
-            print(f"   ✅ PowerShell AppActivate 成功激活微信窗口")
+            logger.info(f"   ✅ PowerShell AppActivate 成功激活微信窗口")
             return True
     except Exception:
         pass
 
     # 最终回退：点击任务栏上的微信图标（模拟用户行为，最可靠）
-    print(f"   🔄 尝试点击任务栏微信图标...")
+    logger.info(f"   🔄 尝试点击任务栏微信图标...")
     if click_taskbar_wechat(max_wait=5.0):
         return True
 
     # 所有方法都失败，仍然继续（PrintWindow 可能仍能工作）
-    print(f"   ⚠️ SetForegroundWindow {max_retries} 次重试均失败 (hwnd={hwnd})，继续尝试")
+    logger.warning(f"   ⚠️ SetForegroundWindow {max_retries} 次重试均失败 (hwnd={hwnd})，继续尝试")
     return False
 
 
@@ -303,7 +306,7 @@ def physical_click(screen_x, screen_y):
     time.sleep(0.05)
     user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
     time.sleep(0.1)
-    print(f"   物理点击屏幕坐标: ({screen_x}, {screen_y})")
+    logger.info(f"   物理点击屏幕坐标: ({screen_x}, {screen_y})")
 
 
 def post_click(hwnd, client_x, client_y):
@@ -312,7 +315,7 @@ def post_click(hwnd, client_x, client_y):
     user32.PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
     time.sleep(0.05)
     user32.PostMessageW(hwnd, WM_LBUTTONUP, 0, lparam)
-    print(f"   PostMessage 点击客户区坐标: ({client_x}, {client_y})")
+    logger.info(f"   PostMessage 点击客户区坐标: ({client_x}, {client_y})")
 
 
 def post_key(hwnd, vk, down=True):
@@ -381,7 +384,7 @@ def input_text_via_clipboard(hwnd, text):
 
     # 写入剪贴板（用 ctypes，避免 PowerShell 注入风险）
     if not set_clipboard_text(text):
-        print(f"   ⚠️ 剪贴板设置失败，文本: {text}")
+        logger.warning(f"   ⚠️ 剪贴板设置失败，文本: {text}")
         return False
     time.sleep(0.2)
 
@@ -413,7 +416,7 @@ def input_text_via_clipboard(hwnd, text):
     user32.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)  # Ctrl up
     time.sleep(0.3)
 
-    print(f"   已通过剪贴板+keybd_event 输入: {text}")
+    logger.info(f"   已通过剪贴板+keybd_event 输入: {text}")
 
     # 不恢复之前的前台窗口，让用户看到结果
 
@@ -436,59 +439,59 @@ def find_search_bar(image, nav_right, session_right):
 
 
 def main():
-    print("=" * 60)
-    print("        点击搜索栏并输入联系人昵称")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("        点击搜索栏并输入联系人昵称")
+    logger.info("=" * 60)
 
     # 1. 查找窗口
     window = find_wechat_window()
     if not window:
-        print("❌ 未找到微信窗口")
+        logger.error("❌ 未找到微信窗口")
         return
     hwnd = window["hwnd"]
-    print(f"找到微信窗口: {window['width']}x{window['height']}")
+    logger.info(f"找到微信窗口: {window['width']}x{window['height']}")
 
     # 2. 截图
-    print("正在截取微信窗口...")
+    logger.info("正在截取微信窗口...")
     image = screencap_window(hwnd)
     if image is None:
-        print("❌ 截图失败")
+        logger.error("❌ 截图失败")
         return
 
     # 3. 检测分界线
-    print("\n检测界面分界线...")
+    logger.info("\n检测界面分界线...")
     detector = WeChatLayoutDetector()
     nav_right, session_right = detector.detect(image)
 
     # 4. 检测搜索栏
     search_x, search_y = find_search_bar(image, nav_right, session_right)
-    print(f"\n搜索栏位置（截图坐标）: ({search_x}, {search_y})")
+    logger.info(f"\n搜索栏位置（截图坐标）: ({search_x}, {search_y})")
 
     # 5. 计算客户区坐标
     offset_x, offset_y = get_client_offset(hwnd)
-    print(f"客户区偏移: x={offset_x}, y={offset_y}")
+    logger.info(f"客户区偏移: x={offset_x}, y={offset_y}")
     client_x = search_x - offset_x
     client_y = search_y - offset_y
-    print(f"搜索栏客户区坐标: ({client_x}, {client_y})")
+    logger.info(f"搜索栏客户区坐标: ({client_x}, {client_y})")
 
     # 6. 将微信设为前台
-    print("\n将微信设为前台...")
+    logger.info("\n将微信设为前台...")
     user32.SetForegroundWindow(hwnd)
     time.sleep(0.5)
 
     # 7. 物理点击搜索栏（屏幕坐标）
     screen_x, screen_y = client_to_screen(hwnd, client_x, client_y)
-    print(f"搜索栏屏幕坐标: ({screen_x}, {screen_y})")
-    print("物理点击搜索栏...")
+    logger.info(f"搜索栏屏幕坐标: ({screen_x}, {screen_y})")
+    logger.info("物理点击搜索栏...")
     physical_click(screen_x, screen_y)
     time.sleep(0.8)  # 等待搜索框激活
 
     # 8. 输入文本
-    print("输入文本 [REDACTED]...")
+    logger.info("输入文本 [REDACTED]...")
     input_text_via_clipboard(hwnd, "[REDACTED]")
     time.sleep(0.5)
 
-    print("\n✅ 完成，请检查微信窗口搜索栏是否已输入 [REDACTED]")
+    logger.info("\n✅ 完成，请检查微信窗口搜索栏是否已输入 [REDACTED]")
 
 
 if __name__ == "__main__":
