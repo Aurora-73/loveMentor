@@ -717,6 +717,28 @@ def behaviors_data(name: str, *, window_days: int = 30, source: str = "macbert",
         conn.close()
 
 
+def avatar(name: str, *, force_refresh: bool = False) -> str:
+    """获取联系人头像的本地文件路径。
+
+    查询顺序：本地缓存 → core.db → WeFlow API → 下载到 data/avatars/
+
+    Args:
+        name: 联系人名称或标识符（display_name / remark / nickname / alias / wxid）
+        force_refresh: 为 True 时跳过缓存，强制重新下载
+
+    Returns:
+        头像本地文件路径，失败返回错误信息字符串
+    """
+    from engine.wechat_data.avatar_fetcher import get_avatar
+    try:
+        path = get_avatar(name, force_refresh=force_refresh)
+        if path:
+            return f"头像路径: {path}"
+        return f"未找到 {name} 的头像"
+    except Exception as e:
+        return f"获取头像失败: {e}"
+
+
 __all__ = [
     # 只读
     "brief", "chat", "evidence", "metrics", "rank", "status",
@@ -745,6 +767,8 @@ __all__ = [
     "maintain_candidates", "format_candidates",
     # 密钥管理
     "check_keys", "fetch_keys",
+    # 头像
+    "avatar",
     # 战态公式
     "formula_params", "formula_ivi", "formula_spe", "formula_ews",
     "formula_is", "formula_gap_effect", "formula_eev", "formula_cs",
