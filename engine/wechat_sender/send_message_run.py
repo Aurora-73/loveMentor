@@ -346,7 +346,7 @@ def run_send_message(message, do_send=True):
     physical_click(screen_x, screen_y)
     time.sleep(1.5)
 
-    # 10. 截图验证
+    # 10. 截图验证 + OCR 确认消息已发送
     print("\n[10] 截图验证（发送后）")
     after_img = screencap_window(hwnd)
     if after_img is None:
@@ -356,10 +356,81 @@ def run_send_message(message, do_send=True):
     cv2.imwrite(after_path, after_img)
     print(f"    发送后截图: {after_path}")
 
+    # 11. OCR 验证：确认消息出现在聊天记录中
+    print("\n[11] OCR 验证消息是否出现在聊天记录")
+    verify_ok = verify_message_sent(after_img, message, session_right)
+    if verify_ok:
+        print("    ✅ 消息验证成功：发送的消息出现在聊天记录中")
+    else:
+        print("    ⚠️ 消息验证失败：未在聊天记录中找到发送的消息")
+        print("    （可能消息已发送但 OCR 未能识别，或消息位置在可视区域外）")
+        # 不 return False，因为消息可能已发送只是 OCR 没识别到
+        # 保留警告让调用方判断
+
     print("\n" + "=" * 60)
     print("  阶段三完成")
     print("=" * 60)
     return True
+
+
+def verify_message_sent(image, message, session_right):
+    """用 OCR 验证消息是否出现在聊天记录中。
+
+    在聊天区域（session_right 右侧）识别文字，检查是否包含发送的消息内容。
+
+    Args:
+        image: 发送后的微信窗口截图
+        message: 发送的消息内容
+        session_right: 会话列表右边界（聊天区域起始 x）
+
+    Returns:
+        bool: 是否找到发送的消息
+    """
+    try:
+        _project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        if _project_root not in sys.path:
+            sys.path.insert(0, _project_root)
+        from engine.importers.ocr_engine import ocr_image_array
+
+        # 裁剪聊天区域（避免会话列表干扰）
+        h, w = image.shape[:2]
+        if session_right > 0 and session_right < w:
+            chat_region = image[:, session_right:]
+        else:
+            chat_region = image
+
+        # OCR 识别
+        results = ocr_image_array(chat_region, use_cache=False)
+
+        # 准备匹配：去掉空格和换行，提高匹配容错
+        message_clean = message.replace(' ', '').replace('\n', '')
+
+        # 检查是否包含发送的消息
+        for r in results:
+            text_clean = r.text.replace(' ', '').replace('\n', '')
+            # 完全匹配或消息内容包含在 OCR 文字中
+            if text_clean == message_clean or message_clean in text_clean or text_clean in message_clean:
+                print(f"    [OCR] 找到匹配: {r.text!r} (center=({r.center_x + session_right}, {r.center_y}), conf={r.confidence:.3f})")
+                return True
+
+        # 如果消息较长，分段匹配（OCR 可能只识别到部分）
+        if len(message_clean) > 10:
+            # 取消息中间一段作为匹配特征
+            mid = len(message_clean) // 2
+            segment = message_clean[max(0, mid-5):mid+5]
+            if len(segment) >= 4:
+                for r in results:
+                    text_clean = r.text.replace(' ', '').replace('\n', '')
+                    if segment in text_clean:
+                        print(f"    [OCR] 分段匹配: {r.text!r} 包含 {segment!r}")
+                        return True
+
+        print(f"    [OCR] 未找到匹配的消息（共识别 {len(results)} 条文字）")
+        return False
+
+    except Exception as e:
+        print(f"    [OCR] 验证异常: {e}")
+        return False
 
 
 def main():
