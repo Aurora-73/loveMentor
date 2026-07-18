@@ -44,10 +44,12 @@ def _is_wechat_running() -> bool:
 
 
 def _ensure_wechat_window(max_wait: float = 15.0) -> dict:
-    """确保微信主窗口可见。
+    """确保微信主窗口可见且已登录。
 
-    如果微信进程在运行但主窗口不可见（最小化到托盘），
-    通过启动新 Weixin.exe 进程触发已运行实例显示主窗口。
+    改进：
+    1. 检查微信是否已登录（托盘图标/主窗口尺寸/隐藏子窗口综合判定），未登录则拒绝发送
+    2. 如果微信进程在运行但主窗口不可见（最小化到托盘），通过托盘图标唤醒
+    3. 回退方法：启动新 Weixin.exe 进程触发已运行实例显示窗口
 
     Args:
         max_wait: 等待窗口出现的最大秒数
@@ -56,7 +58,8 @@ def _ensure_wechat_window(max_wait: float = 15.0) -> dict:
         dict: {
             "success": bool,
             "window_visible": bool,
-            "action": str,  # "already_visible" / "restored" / "launched_new" / "failed"
+            "logged_in": bool,
+            "action": str,  # "already_visible" / "restored" / "process_not_running" / "not_logged_in" / "failed"
             "message": str,
         }
     """
@@ -73,30 +76,67 @@ def _ensure_wechat_window(max_wait: float = 15.0) -> dict:
 
     from engine.wechat_sender.test_current_wechat import find_wechat_window
 
-    # 1. 检查主窗口是否已可见（必须 >= 500x400 才算主窗口）
-    window = find_wechat_window()
-    if window and window["width"] >= 500 and window["height"] >= 400:
-        return {
-            "success": True,
-            "window_visible": True,
-            "action": "already_visible",
-            "message": f"微信主窗口已可见 ({window['width']}x{window['height']})",
-        }
-
-    # 2. 检查微信进程是否在运行
+    # 1. 检查微信进程是否在运行
     process_running = _is_wechat_running()
     if not process_running:
         return {
             "success": False,
             "window_visible": False,
+            "logged_in": False,
             "action": "process_not_running",
             "message": "微信进程未运行，请先调用 wechat_start 启动微信",
         }
 
-    # 3. 进程在运行但窗口不可见，尝试多种方法恢复
-    import subprocess
+    # 2. 检查微信是否已登录（综合判定）
+    try:
+        from engine.wechat_sender.wechat_window_utils import check_login_status
+        login_info = check_login_status()
+        if not login_info["logged_in"]:
+            return {
+                "success": False,
+                "window_visible": False,
+                "logged_in": False,
+                "action": "not_logged_in",
+                "message": (
+                    f"微信未登录（托盘图标={login_info['tray_icon_found']}, "
+                    f"主窗口尺寸={login_info['main_window_size']}, "
+                    f"隐藏子窗口={login_info['has_hidden_subwindow']}），"
+                    f"请先调用 wechat_start 启动并登录微信"
+                ),
+            }
+    except Exception:
+        # 登录检测失败，继续尝试发送（保守策略，避免误拒）
+        pass
 
-    # 方法 A: 启动新 Weixin.exe 触发已运行实例显示窗口
+    # 3. 检查主窗口是否已可见（必须 >= 500x400 才算主窗口）
+    window = find_wechat_window()
+    if window and window["width"] >= 500 and window["height"] >= 400:
+        return {
+            "success": True,
+            "window_visible": True,
+            "logged_in": True,
+            "action": "already_visible",
+            "message": f"微信主窗口已可见 ({window['width']}x{window['height']})",
+        }
+
+    # 4. 进程在运行已登录但窗口不可见，通过托盘图标唤醒（优先）
+    try:
+        from engine.wechat_sender.open_wechat_window import open_wechat_window_robust
+        if open_wechat_window_robust(timeout=max_wait):
+            window = find_wechat_window()
+            if window and window["width"] >= 500 and window["height"] >= 400:
+                return {
+                    "success": True,
+                    "window_visible": True,
+                    "logged_in": True,
+                    "action": "restored",
+                    "message": f"微信主窗口已通过托盘图标唤醒 ({window['width']}x{window['height']})",
+                }
+    except Exception:
+        pass
+
+    # 5. 回退方法 A: 启动新 Weixin.exe 触发已运行实例显示窗口
+    import subprocess
     try:
         subprocess.Popen(
             [WEIXIN_EXE],
@@ -107,6 +147,7 @@ def _ensure_wechat_window(max_wait: float = 15.0) -> dict:
         return {
             "success": False,
             "window_visible": False,
+            "logged_in": True,
             "action": "launch_failed",
             "message": f"启动 Weixin.exe 失败: {e}",
         }
@@ -118,25 +159,26 @@ def _ensure_wechat_window(max_wait: float = 15.0) -> dict:
         return {
             "success": True,
             "window_visible": True,
+            "logged_in": True,
             "action": "restored",
             "message": f"微信主窗口已恢复可见 ({window['width']}x{window['height']}，方法A:启动新进程)",
         }
 
-    # 方法 B: 点击任务栏微信图标
+    # 回退方法 B: 点击任务栏微信图标
     try:
         from engine.wechat_sender.click_search_and_input import click_taskbar_wechat
         click_taskbar_wechat(max_wait=3.0)
     except Exception as e:
         pass
 
-    # 方法 C: 用 ShowWindow 恢复最小化的窗口
+    # 回退方法 C: 用 ShowWindow 恢复最小化的窗口
     try:
         from wechat_window_utils import restore_wechat_windows
         restore_wechat_windows()
     except Exception:
         pass
 
-    # 4. 轮询等待窗口出现（必须 >= 500x400 才算主窗口恢复）
+    # 6. 轮询等待窗口出现（必须 >= 500x400 才算主窗口恢复）
     start_time = time.time()
     while time.time() - start_time < max_wait:
         time.sleep(1.0)
@@ -146,6 +188,7 @@ def _ensure_wechat_window(max_wait: float = 15.0) -> dict:
             return {
                 "success": True,
                 "window_visible": True,
+                "logged_in": True,
                 "action": "restored",
                 "message": f"微信主窗口已恢复可见 ({window['width']}x{window['height']}，耗时 {elapsed:.1f}s)",
             }
@@ -153,6 +196,7 @@ def _ensure_wechat_window(max_wait: float = 15.0) -> dict:
     return {
         "success": False,
         "window_visible": False,
+        "logged_in": True,
         "action": "timeout",
         "message": f"等待 {max_wait}s 后窗口仍未出现，可能微信被最小化到托盘且无法自动恢复",
     }
@@ -351,6 +395,53 @@ def _resolve_contact(name: str) -> dict:
         conn.close()
 
 
+# ── 录屏辅助函数 ────────────────────────────────────────────────
+
+def _with_recording(operation_name, func, *args, **kwargs):
+    """执行微信操作并录屏（统一录屏逻辑，供所有操作微信的 MCP 工具使用）。
+
+    在 MCP 工具层使用，统一处理录屏启动/停止/清理逻辑：
+    - 操作前自动开始录屏（BitBlt + OpenCV VideoWriter，5 FPS）
+    - 操作成功 → 自动删除录屏
+    - 操作失败 → 保留录屏 7 天，路径加入返回值的 recording_path 字段
+    - 录屏路径：data/outputs/recordings/wechat_<op>_<timestamp>_<contact>.mp4
+    - ⚠️ 录屏文件在 data/ 目录下，已被 .gitignore 忽略
+
+    Args:
+        operation_name: 操作名称（用于录屏文件命名，如 "wechat_send"）
+        func: 要执行的函数（返回 dict）
+        *args, **kwargs: 函数参数
+
+    Returns:
+        dict: func 的返回值，添加 recording_path 字段
+              - 成功时 recording_path = None（录屏已删除）
+              - 失败时 recording_path = 录屏文件路径（保留 7 天）
+    """
+    from engine.wechat_sender.wechat_recorder import WechatRecorder
+    recorder = WechatRecorder(contact_name=operation_name)
+    recorder.start()
+    result = None
+    try:
+        result = func(*args, **kwargs)
+    except Exception as e:
+        result = {
+            "success": False,
+            "message": f"录屏包装层异常: {e}",
+            "error": f"WRAPPER_ERROR: {traceback.format_exc()}",
+            "recording_path": None,
+        }
+    finally:
+        recorder.stop()
+        if result and isinstance(result, dict):
+            if result.get("success"):
+                recorder.discard()
+                result["recording_path"] = None
+            else:
+                kept_path = recorder.keep()
+                result["recording_path"] = kept_path
+    return result
+
+
 # ── 工具1: wechat_send ──────────────────────────────────────────
 
 def wechat_send(name: str, message: str) -> dict:
@@ -371,6 +462,18 @@ def wechat_send(name: str, message: str) -> dict:
     - 若按昵称匹配到多个联系人 → 拒绝发送，返回匹配列表
     - 示例：wechat_send('[REDACTED]', '你好') → 数据库查找 [REDACTED] 的微信号 → 用微信号搜索
 
+    头像自动获取逻辑（内部封装，agent 无需关心）：
+    - 本地有头像 → 直接用本地头像
+    - 本地无头像 → 立即调用 avatar_fetcher 获取并保存
+    - 阶段一 4 次失败后 → 强制刷新头像，头像变了才重试（hash 比对）
+
+    录屏功能（诊断失败用）：
+    - 每次操作前自动开始录屏（BitBlt + OpenCV VideoWriter，5 FPS）
+    - 操作成功 → 自动删除录屏
+    - 操作失败 → 保留录屏 7 天，路径在返回值的 recording_path 字段
+    - 录屏路径：data/outputs/recordings/wechat_send_<timestamp>_<contact>.mp4
+    - ⚠️ 录屏文件在 data/ 目录下，已被 .gitignore 忽略，不会提交到 git
+
     Args:
         name: 微信联系人标识符（微信号 / wxid / 昵称 / 备注名 均可）
         message: 要发送的消息内容
@@ -386,7 +489,65 @@ def wechat_send(name: str, message: str) -> dict:
             "error": str|None,     # 失败原因
             "window_restored": bool,  # 是否触发了窗口恢复
             "matches": list|None,  # 多匹配时的联系人列表（仅 MULTIPLE_MATCHES 时有值）
+            "recording_path": str|None,  # 失败时的录屏文件路径（成功时为 None）
         }
+    """
+    # 启动录屏（每次操作微信前录制，成功删除，失败保留供用户核对）
+    from engine.wechat_sender.wechat_recorder import WechatRecorder
+    recorder = WechatRecorder(contact_name=name)
+    recorder.start()
+    result = None
+    try:
+        result = _wechat_send_impl(name, message)
+    except Exception as e:
+        # 包装层异常（_wechat_send_impl 内部已有异常处理，这里兜底）
+        result = {
+            "success": False,
+            "message": f"录屏包装层异常: {e}",
+            "contact": name,
+            "search_term": name,
+            "template": "",
+            "attempts": 0,
+            "error": f"WRAPPER_ERROR: {traceback.format_exc()}",
+            "window_restored": False,
+            "matches": None,
+        }
+    finally:
+        # 停止录屏
+        video_path = recorder.stop()
+        if result and result.get("success"):
+            # 操作成功 → 删除录屏
+            recorder.discard()
+            result["recording_path"] = None
+        else:
+            # 操作失败 → 保留录屏供用户核对（7 天后自动清理）
+            kept_path = recorder.keep()
+            if result:
+                result["recording_path"] = kept_path
+            else:
+                # result 为 None 的极端情况，构造一个失败结果
+                result = {
+                    "success": False,
+                    "message": "录屏包装层异常: result 为 None",
+                    "contact": name,
+                    "search_term": name,
+                    "template": "",
+                    "attempts": 0,
+                    "error": "WRAPPER_RESULT_NONE",
+                    "window_restored": False,
+                    "matches": None,
+                    "recording_path": kept_path,
+                }
+    return result
+
+
+def _wechat_send_impl(name: str, message: str) -> dict:
+    """wechat_send 的实现（不含录屏，由 wechat_send 包装）。
+
+    头像自动获取逻辑：
+    - 本地有头像 → 直接用
+    - 本地无头像 → 立即调用 avatar_fetcher 获取并保存
+    - 阶段一 4 次失败后 → _refresh_avatar_and_maybe_retry 强制刷新头像
     """
     _wechat_op_lock.acquire()
     try:
@@ -423,18 +584,46 @@ def wechat_send(name: str, message: str) -> dict:
             if os.path.exists(safe_path):
                 template_path = safe_path
 
+        # 如果头像模板不存在，先尝试用 avatar_fetcher 获取头像
         if not os.path.exists(template_path):
-            return {
-                "success": False,
-                "message": f"头像模板不存在: data/avatars/{display_name}.jpg",
-                "contact": display_name,
-                "search_term": search_term,
-                "template": template_path,
-                "attempts": 0,
-                "error": "TEMPLATE_NOT_FOUND",
-                "window_restored": False,
-                "matches": None,
-            }
+            try:
+                from engine.wechat_data.avatar_fetcher import get_avatar
+                # 优先用 alias 查询（微信号唯一），回退到 display_name
+                fetch_identifier = alias if alias else display_name
+                fetched_path = get_avatar(fetch_identifier, force_refresh=True)
+                if not fetched_path or not os.path.exists(fetched_path):
+                    # 回退：用 display_name 查询
+                    if alias:
+                        fetched_path = get_avatar(display_name, force_refresh=True)
+                if fetched_path and os.path.exists(fetched_path):
+                    template_path = fetched_path
+                else:
+                    return {
+                        "success": False,
+                        "message": (
+                            f"头像模板不存在且自动获取失败: data/avatars/{display_name}.jpg。"
+                            f"请手动将联系人头像保存为 data/avatars/{display_name}.jpg"
+                        ),
+                        "contact": display_name,
+                        "search_term": search_term,
+                        "template": template_path,
+                        "attempts": 0,
+                        "error": "TEMPLATE_NOT_FOUND",
+                        "window_restored": False,
+                        "matches": None,
+                    }
+            except Exception as e:
+                return {
+                    "success": False,
+                    "message": f"头像模板不存在且获取异常: {e}",
+                    "contact": display_name,
+                    "search_term": search_term,
+                    "template": template_path,
+                    "attempts": 0,
+                    "error": "TEMPLATE_FETCH_ERROR",
+                    "window_restored": False,
+                    "matches": None,
+                }
 
         # 设置 DPI 感知
         import ctypes
@@ -548,6 +737,8 @@ def open_wechat_window(timeout: float = 10.0) -> dict:
     - 微信被用户手动关闭窗口后，需要重新打开窗口
     - 自动化流程中确保微信窗口可用
 
+    录屏功能：操作前自动开始录屏，成功删除，失败保留 7 天（路径在 recording_path 字段）。
+
     Args:
         timeout: 等待微信窗口出现的最大秒数（默认 10.0）
 
@@ -559,8 +750,14 @@ def open_wechat_window(timeout: float = 10.0) -> dict:
             "window": dict|None,      # 窗口信息 {"hwnd": int, "width": int, "height": int}
             "elapsed": float|None,    # 唤醒耗时（秒，仅 tray_click 时有值）
             "error": str|None,
+            "recording_path": str|None,  # 失败时的录屏文件路径（成功时为 None）
         }
     """
+    return _with_recording("open_wechat_window", _open_wechat_window_impl, timeout=timeout)
+
+
+def _open_wechat_window_impl(timeout: float = 10.0) -> dict:
+    """open_wechat_window 的实现（不含录屏，由 open_wechat_window 包装）。"""
     _wechat_op_lock.acquire()
     try:
         from engine.wechat_sender.open_wechat_window import open_wechat_window_robust
@@ -646,6 +843,8 @@ def wechat_ocr(region: str = "full", use_cache: bool = False) -> dict:
     对当前微信主窗口截图，用 RapidOCR 识别文字，返回带位置信息的结果。
     适用于：读取聊天界面文字、提取联系人信息、识别界面元素等场景。
 
+    录屏功能：操作前自动开始录屏，成功删除，失败保留 7 天（路径在 recording_path 字段）。
+
     Args:
         region: 截图区域，可选值：
             - "full"（默认）: 整个微信窗口
@@ -664,6 +863,7 @@ def wechat_ocr(region: str = "full", use_cache: bool = False) -> dict:
             "region": str,             # 实际截图区域
             "screenshot_path": str,    # 截图保存路径
             "error": str|None,
+            "recording_path": str|None,  # 失败时的录屏文件路径（成功时为 None）
         }
 
         texts 中每个元素: {
@@ -673,6 +873,11 @@ def wechat_ocr(region: str = "full", use_cache: bool = False) -> dict:
             "center": [x, y],          # 中心坐标
         }
     """
+    return _with_recording("wechat_ocr", _wechat_ocr_impl, region=region, use_cache=use_cache)
+
+
+def _wechat_ocr_impl(region: str = "full", use_cache: bool = False) -> dict:
+    """wechat_ocr 的实现（不含录屏，由 wechat_ocr 包装）。"""
     _wechat_op_lock.acquire()
     try:
         import ctypes

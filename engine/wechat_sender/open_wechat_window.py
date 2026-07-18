@@ -234,8 +234,42 @@ def _double_click(screen_x, screen_y):
     _physical_click(screen_x, screen_y)
 
 
+def _find_wechat_icon_in_tray_with_icon_match(tray_img, tray_left, tray_top):
+    """优先用 icon 模板匹配找微信图标，失败则回退到 HSV 颜色匹配。
+
+    改进：避免 HSV 误判其他绿色软件（如 Snipaste、企业微信等）。
+
+    Args:
+        tray_img: 托盘区域截图 (BGR)
+        tray_left, tray_top: 托盘区域在屏幕上的左上角坐标
+
+    Returns:
+        (screen_x, screen_y, method, confidence) 或 None
+        method: "icon_template" 或 "hsv_fallback"
+    """
+    # 1. 优先 icon 模板匹配
+    try:
+        from wechat_window_utils import _load_wx_icons, find_wechat_icon_by_template
+        icons = _load_wx_icons()
+        if icons:
+            match = find_wechat_icon_by_template(tray_img, icons, tray_left, tray_top)
+            if match:
+                return (match[0], match[1], "icon_template", match[2])
+    except Exception as e:
+        logger.warning(f"   ⚠️ icon 模板匹配异常: {e}，回退到 HSV")
+
+    # 2. fallback: HSV 颜色匹配
+    hsv_pos = _find_wechat_icon_in_tray(tray_img, tray_left, tray_top)
+    if hsv_pos:
+        return (hsv_pos[0], hsv_pos[1], "hsv_fallback", None)
+    return None
+
+
 def open_wechat_window(timeout=10.0, try_double_click=False):
     """在微信已启动但无窗口的情况下，点击托盘图标唤醒微信窗口。
+
+    改进：优先用 icon 模板匹配定位微信图标（更准确，避免 HSV 误判其他绿色软件），
+    失败则回退到 HSV 颜色匹配。
 
     Args:
         timeout: 等待微信窗口出现的最大秒数
@@ -290,15 +324,18 @@ def open_wechat_window(timeout=10.0, try_double_click=False):
     except Exception:
         pass
 
-    # 4. 在托盘区域找微信图标
-    icon_pos = _find_wechat_icon_in_tray(tray_img, tray_left, tray_top)
-    if icon_pos is None:
+    # 4. 在托盘区域找微信图标（优先 icon 模板匹配，fallback HSV）
+    icon_result = _find_wechat_icon_in_tray_with_icon_match(tray_img, tray_left, tray_top)
+    if icon_result is None:
         logger.error("❌ 未在托盘找到微信图标（微信可能未启动，或图标被隐藏）")
         logger.info("   建议：1) 确认微信进程已启动  2) 检查托盘图标是否被隐藏到溢出区")
         return False
 
+    screen_x, screen_y, method, confidence = icon_result
+    logger.info(f"   📍 微信托盘图标位置: ({screen_x}, {screen_y}) method={method}"
+                + (f" confidence={confidence:.3f}" if confidence is not None else ""))
+
     # 5. 点击托盘图标
-    screen_x, screen_y = icon_pos
     if try_double_click:
         logger.info("   尝试双击托盘图标...")
         _double_click(screen_x, screen_y)
@@ -339,6 +376,8 @@ def open_wechat_window_robust(timeout=10.0):
 
     # 第二次尝试：双击
     # 先关闭可能出现的气泡（按 Esc，已升级为 SendInput 带扫描码）
+    # ⚠️ 注意：这里调用时微信主窗口本来就没有（否则 open_wechat_window 第一次就成功了），
+    #    所以按 Esc 不会触发"关闭主面板"快捷键（主面板本来就没打开）。
     from human_sim import _press_single_key, VK_ESCAPE
     _press_single_key(VK_ESCAPE)
     time.sleep(0.3)
@@ -357,4 +396,3 @@ if __name__ == "__main__":
     else:
         logger.error("\n💥 打开微信窗口失败")
         sys.exit(1)
-

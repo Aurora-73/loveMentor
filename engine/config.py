@@ -187,6 +187,9 @@ class Config:
         self.weights = WeightsConfig(d.get("weights", {}))
         self.ranking = RankingConfig(d.get("ranking", {}))
         self.wiki = WikiConfig(d.get("wiki", {}))
+        # debug 模式：开启后微信操作会录屏（成功删除，失败保留 7 天供核对）
+        # 默认 false，避免正常使用时消耗资源
+        self.debug: bool = d.get("debug", False)
 
     @property
     def db_path(self) -> Path:

@@ -856,7 +856,10 @@ def _remove_topmost(hwnd: int):
 
 
 def _click_login_button(delay_before: float = 3.0, max_retries: int = 3) -> bool:
-    """找到微信窗口，置顶，点击登录按钮（窗口水平居中，垂直 77.3%）。
+    """找到微信未登录窗口，置顶，点击登录按钮（窗口水平居中，垂直 77.3%）。
+
+    改进：先验证窗口尺寸符合登录页特征（约 350x475，宽高比 ≈ 0.74），
+    避免在已登录窗口（>500 宽）上误点。
 
     点击后检查窗口大小是否变化（登录成功后窗口会从登录页尺寸变为正常尺寸）。
     如果没变化则重试，最多 max_retries 次。
@@ -886,6 +889,10 @@ def _click_login_button(delay_before: float = 3.0, max_retries: int = 3) -> bool
 
         # 记录点击前的窗口尺寸
         prev_w, prev_h = win["width"], win["height"]
+
+        # 验证：已登录窗口（>500 宽）不应执行点击登录按钮
+        if prev_w > 500:
+            return True  # 已登录，视为成功（不需要点击）
 
         # 置顶窗口
         _bring_window_to_front(win["hwnd"])
@@ -924,9 +931,20 @@ def wechat_start(timeout: int = 30, click_login: bool = True) -> dict:
     """启动微信（Weixin.exe）并自动点击登录按钮。
 
     什么时候用：wechat_status 显示微信未运行时启动微信。
-    返回什么：dict 含 success/message/already_running/clicked 字段。
-    边界是什么：如果微信已在运行，直接返回成功。click_login=True 时启动后自动点击登录按钮（屏幕正中偏下 57% 位置）。
+    返回什么：dict 含 success/message/already_running/clicked/logged_in 字段。
+    边界是什么：
+    - 如果微信进程已在运行，直接返回成功。
+    - 如果微信已登录（托盘有图标/主窗口>500宽/有隐藏子窗口），拒绝重复登录。
+    - click_login=True 时启动后自动点击登录按钮（登录页窗口水平居中，垂直 77.3%）。
+
+    录屏功能：操作前自动开始录屏，成功删除，失败保留 7 天（路径在 recording_path 字段）。
     """
+    from mcp_server.tools_wechat import _with_recording
+    return _with_recording("wechat_start", _wechat_start_impl, timeout=timeout, click_login=click_login)
+
+
+def _wechat_start_impl(timeout: int = 30, click_login: bool = True) -> dict:
+    """wechat_start 的实现（不含录屏，由 wechat_start 包装）。"""
     import subprocess
     import sys
     import time
@@ -936,11 +954,34 @@ def wechat_start(timeout: int = 30, click_login: bool = True) -> dict:
         # 1. 先检查是否已在运行
         status = wechat_status()
         if status.get("online"):
+            # 进一步检测是否已登录（避免重复登录）
+            try:
+                from engine.wechat_sender.wechat_window_utils import check_login_status
+                login_info = check_login_status()
+                if login_info["logged_in"]:
+                    return {
+                        "success": True,
+                        "already_running": True,
+                        "already_logged_in": True,
+                        "pid": status.get("pid"),
+                        "message": f"微信已运行且已登录（PID: {status.get('pid')}），拒绝重复登录",
+                        "login_details": {
+                            "tray_icon_found": login_info["tray_icon_found"],
+                            "tray_method": login_info["tray_method"],
+                            "tray_confidence": login_info["tray_confidence"],
+                            "main_window_size": login_info["main_window_size"],
+                            "has_hidden_subwindow": login_info["has_hidden_subwindow"],
+                        },
+                    }
+            except Exception:
+                pass
+
             return {
                 "success": True,
                 "already_running": True,
+                "already_logged_in": False,
                 "pid": status.get("pid"),
-                "message": "微信已在运行，无需重复启动",
+                "message": "微信已在运行（未确认登录状态），无需重复启动",
             }
 
         # 2. 定位 Weixin.exe
@@ -959,7 +1000,7 @@ def wechat_start(timeout: int = 30, click_login: bool = True) -> dict:
             stderr=subprocess.DEVNULL,
         )
 
-        # 4. 轮询等待进程启动（不需要等登录，只要进程起来即可）
+        # 3. 轮询等待进程启动（不需要等登录，只要进程起来即可）
         start_time = time.time()
         launched_pid = None
         while time.time() - start_time < timeout:
@@ -1021,7 +1062,15 @@ def wechat_stop(force: bool = False) -> dict:
     返回什么：dict 含 success/message/killed_pids 字段。
     边界是什么：force=False 时先尝试优雅关闭（发送关闭信号），force=True 时强制终止。
     配合 wechat_start 可实现重启：wechat_stop → wechat_start。
+
+    录屏功能：操作前自动开始录屏，成功删除，失败保留 7 天（路径在 recording_path 字段）。
     """
+    from mcp_server.tools_wechat import _with_recording
+    return _with_recording("wechat_stop", _wechat_stop_impl, force=force)
+
+
+def _wechat_stop_impl(force: bool = False) -> dict:
+    """wechat_stop 的实现（不含录屏，由 wechat_stop 包装）。"""
     import subprocess
     import sys
     import time

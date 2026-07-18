@@ -51,6 +51,7 @@ from wechat_window_utils import (  # noqa: E402  统一窗口枚举
     find_search_candidate_window,
     find_search_candidate_windows,
     count_wechat_windows,
+    close_unexpected_wechat_windows,
 )
 from click_search_and_input import (  # noqa: E402
     get_client_offset,
@@ -175,6 +176,77 @@ def find_search_bar_in_image(image):
 
     # 回退到布局检测/固定比例
     return layout_search_x, layout_search_y, nav_right, session_right
+
+
+def verify_main_window_layout(image, strict=True):
+    """验证主窗口截图的布局是否正常（三个区域分界线可检测）。
+
+    用户反馈：代码有时操作的是"网络搜索窗口"而非真正的主窗口。
+    通过检测三个区域（导航栏、会话列表、聊天区域）的分界线，
+    可以确认截图确实来自主窗口。
+
+    合理布局参考（来自正常微信主窗口）：
+    - nav_right 在 [50, 200] 范围内（导航栏宽度）
+    - session_right > nav_right + 100（中间栏至少 100px 宽）
+    - session_right < width - 200（聊天区域至少 200px 宽）
+    - nav_right < session_right（顺序正确）
+
+    Args:
+        image: 主窗口截图（BGR）
+        strict: True=严格模式（任一条件不满足就判失败），
+                False=宽松模式（只检查极端异常）
+
+    Returns:
+        tuple (is_valid: bool, layout_info: dict)
+        - is_valid: 主窗口布局是否正常
+        - layout_info: {
+            "nav_right": int, "session_right": int,
+            "width": int, "height": int,
+            "reason": str  # 失败原因（is_valid=False 时有值）
+          }
+    """
+    h, w = image.shape[:2]
+    detector = WeChatLayoutDetector()
+    nav_right, session_right = detector.detect(image)
+
+    info = {
+        "nav_right": nav_right,
+        "session_right": session_right,
+        "width": w,
+        "height": h,
+        "reason": "",
+    }
+
+    # 检查 1：nav_right 在合理范围
+    if not (50 <= nav_right <= 200):
+        info["reason"] = f"nav_right={nav_right} 不在合理范围 [50, 200]"
+        return False, info
+
+    # 检查 2：session_right > nav_right + 100（中间栏至少 100px 宽）
+    if session_right <= nav_right + 100:
+        info["reason"] = (
+            f"session_right={session_right} <= nav_right+100={nav_right + 100}，"
+            f"中间栏宽度不足"
+        )
+        return False, info
+
+    # 检查 3：session_right < width - 200（聊天区域至少 200px 宽）
+    if session_right >= w - 200:
+        info["reason"] = (
+            f"session_right={session_right} >= width-200={w - 200}，"
+            f"聊天区域宽度不足"
+        )
+        return False, info
+
+    # 检查 4（严格模式）：nav_right < session_right（顺序正确）
+    if strict and nav_right >= session_right:
+        info["reason"] = (
+            f"nav_right={nav_right} >= session_right={session_right}，"
+            f"分界线顺序异常"
+        )
+        return False, info
+
+    return True, info
 
 
 def find_template_multiscale(scene, template_path, scales, threshold, nms_min_dist):
@@ -433,7 +505,7 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
 
     logger.info(f"\n{'=' * 20} 第 {attempt_idx}/{max_attempts} 次尝试 {'=' * 20}")
 
-    # ========== 阶段 A：点击前窗口数 ==========
+    # ========== 阶段 A：点击前窗口数 + 健壮性清理 + 主窗口布局验证 ==========
     count_before, wins_before = count_wechat_windows()
     logger.info(f"\n[A] 点击前微信窗口数: {count_before}")
     for w in wins_before:
@@ -441,6 +513,93 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
     if count_before == 0:
         logger.error("❌ 微信窗口未打开")
         return False, None, 0
+
+    # 健壮性增强（用户反馈）：
+    # 1. 关闭意外窗口（如"搜索网络结果"窗口、Chrome_WidgetWin_0 内嵌浏览器窗口）
+    # 2. 关闭搜索候选框（如果存在，避免重试时累加操作到搜索框）
+    # 3. 将微信主程序重新置顶（执行操作时微信主窗口必须位于顶端）
+    # 4. 验证主窗口布局正常（三个区域分界线可检测）
+    # 触发场景：
+    #   - 上次点击位置错误 → 弹出"搜索网络结果"窗口 → 后续操作在错误窗口里进行
+    #   - 上次匹配失败但搜索候选框还在 → 重试时累加操作到搜索框
+
+    # 步骤 1：关闭意外窗口
+    try:
+        closed_count, closed_wins = close_unexpected_wechat_windows()
+        if closed_count > 0:
+            logger.warning(
+                f"    ⚠️ [健壮性] 检测到 {closed_count} 个意外微信窗口，已关闭："
+            )
+            for cw in closed_wins:
+                logger.warning(
+                    f"      - hwnd={cw['hwnd']} title={cw['title']!r} class={cw['class']!r}"
+                )
+            time.sleep(0.5)
+            count_before, wins_before = count_wechat_windows()
+            logger.info(f"    [健壮性] 关闭意外窗口后，微信窗口数: {count_before}")
+            if count_before == 0:
+                logger.error("❌ 关闭意外窗口后微信主窗口也消失了")
+                return False, None, 0
+    except Exception as e:
+        logger.warning(f"    ⚠️ [健壮性] 关闭意外窗口异常: {e}（继续执行）")
+
+    # 步骤 2：关闭搜索候选框（避免重试时累加操作到搜索框）
+    try:
+        from wechat_window_utils import find_search_candidate_windows
+        search_candidates = find_search_candidate_windows()
+        if search_candidates:
+            logger.info(
+                f"    [健壮性] 检测到 {len(search_candidates)} 个搜索候选框，关闭它们避免重试累加操作"
+            )
+            WM_CLOSE = 0x0010
+            for sc in search_candidates:
+                user32.PostMessageW(sc["hwnd"], WM_CLOSE, 0, 0)
+                logger.info(
+                    f"      - 关闭搜索候选框 hwnd={sc['hwnd']}"
+                )
+            time.sleep(0.5)
+    except Exception as e:
+        logger.warning(f"    ⚠️ [健壮性] 关闭搜索候选框异常: {e}（继续执行）")
+
+    # 步骤 3：确保微信主窗口在前台
+    try:
+        main_win = find_wechat_window()
+        if main_win:
+            fg_ok_a = safe_set_foreground_window(main_win["hwnd"])
+            if fg_ok_a:
+                logger.info(f"    [健壮性] 微信主窗口已置顶 (hwnd={main_win['hwnd']})")
+                time.sleep(0.5)
+            else:
+                logger.warning(f"    ⚠️ [健壮性] 微信主窗口置顶失败，继续执行")
+    except Exception as e:
+        logger.warning(f"    ⚠️ [健壮性] 主窗口置顶异常: {e}（继续执行）")
+
+    # 步骤 4：验证主窗口布局（三个区域分界线可检测）
+    # 用户反馈：代码有时操作的是"网络搜索窗口"而非真正的主窗口
+    try:
+        main_win_verify = find_wechat_window()
+        if main_win_verify:
+            verify_img = screencap_window(main_win_verify["hwnd"])
+            if verify_img is not None:
+                layout_ok, layout_info = verify_main_window_layout(verify_img, strict=True)
+                if layout_ok:
+                    logger.info(
+                        f"    [健壮性] 主窗口布局验证通过 "
+                        f"(nav_right={layout_info['nav_right']}, "
+                        f"session_right={layout_info['session_right']}, "
+                        f"size={layout_info['width']}x{layout_info['height']})"
+                    )
+                else:
+                    logger.error(
+                        f"    ❌ [健壮性] 主窗口布局验证失败：{layout_info['reason']}"
+                    )
+                    logger.error(
+                        f"    可能操作的不是真正的主窗口（如网络搜索窗口），"
+                        f"本次尝试判失败"
+                    )
+                    return False, None, 0
+    except Exception as e:
+        logger.warning(f"    ⚠️ [健壮性] 主窗口布局验证异常: {e}（继续执行）")
 
     # ========== 阶段 B：主窗口截图 + 点击搜索栏 + 输入 ==========
     logger.info(f"\n[B] 主窗口截图 + 点击搜索栏 + 输入 {contact_name}")
@@ -623,46 +782,48 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
 
     # 改进：先按置信度筛选，再综合置信度和位置评分选择
     # 搜索候选框中头像应在搜索框下方，y 坐标 > s_box_y 的匹配点优先
+    # 严格阈值：低于 MIN_CONFIDENCE_FOR_SELECTION(0.7) 一律不点击，直接判本次失败触发上层重试
+    # （用户要求：匹配度低就不该点击，避免点错位置触发"搜索网络结果"等意外窗口）
     MIN_CONFIDENCE_FOR_SELECTION = 0.7
     high_conf_points = [p for p in points if p[2] >= MIN_CONFIDENCE_FOR_SELECTION]
     if not high_conf_points:
-        # 所有匹配点置信度都低于 0.7，回退到原逻辑（选最近）
-        logger.warning(f"    ⚠️ 所有匹配点置信度 < {MIN_CONFIDENCE_FOR_SELECTION}，用最近匹配点")
-        target = min(points, key=lambda p: (p[0] - s_box_x) ** 2 + (p[1] - s_box_y) ** 2)
-    else:
-        # 用加权评分：confidence_score * 0.6 + position_score * 0.4
-        # position_score：距搜索框越近、在搜索框下方，分数越高
-        max_dist = max(((p[0] - s_box_x) ** 2 + (p[1] - s_box_y) ** 2) ** 0.5
-                       for p in high_conf_points) or 1
-        best_score_val = -1
-        target = high_conf_points[0]
-        for p in high_conf_points:
-            x, y, conf, _ = p
-            dist = ((x - s_box_x) ** 2 + (y - s_box_y) ** 2) ** 0.5
-            # 位置分：距离归一化（越近越高），在搜索框下方加分
-            dist_score = 1.0 - (dist / max_dist)
-            below_bonus = 0.2 if y > s_box_y else 0.0  # 在搜索框下方加分
-            position_score = min(1.0, dist_score + below_bonus)
-            # 综合评分
-            total_score = conf * 0.6 + position_score * 0.4
-            logger.info(f"    #?: ({x},{y}) conf={conf:.3f} dist={dist:.0f} "
-                  f"pos_score={position_score:.3f} total={total_score:.3f}")
-            if total_score > best_score_val:
-                best_score_val = total_score
-                target = p
-        logger.info(f"    选中(综合评分最高): ({target[0]}, {target[1]}) "
-              f"conf={target[2]:.3f} scale={target[3]}px score={best_score_val:.3f}")
+        # 严格判定本次失败，不点击，触发上层重试机制：
+        # - 4 次失败后 _refresh_avatar_and_maybe_retry 强制刷新头像
+        # - 头像变了才重试，仍失败则反馈给 agent
+        logger.error(
+            f"    ❌ 所有匹配点置信度 < {MIN_CONFIDENCE_FOR_SELECTION}，"
+            f"严格判定本次失败（不点击，避免点错位置触发意外窗口）"
+        )
+        return False, None, 0
+
+    # 用加权评分：confidence_score * 0.6 + position_score * 0.4
+    # position_score：距搜索框越近、在搜索框下方，分数越高
+    max_dist = max(((p[0] - s_box_x) ** 2 + (p[1] - s_box_y) ** 2) ** 0.5
+                   for p in high_conf_points) or 1
+    best_score_val = -1
+    target = high_conf_points[0]
+    for p in high_conf_points:
+        x, y, conf, _ = p
+        dist = ((x - s_box_x) ** 2 + (y - s_box_y) ** 2) ** 0.5
+        # 位置分：距离归一化（越近越高），在搜索框下方加分
+        dist_score = 1.0 - (dist / max_dist)
+        below_bonus = 0.2 if y > s_box_y else 0.0  # 在搜索框下方加分
+        position_score = min(1.0, dist_score + below_bonus)
+        # 综合评分
+        total_score = conf * 0.6 + position_score * 0.4
+        logger.info(f"    #?: ({x},{y}) conf={conf:.3f} dist={dist:.0f} "
+              f"pos_score={position_score:.3f} total={total_score:.3f}")
+        if total_score > best_score_val:
+            best_score_val = total_score
+            target = p
+    logger.info(f"    选中(综合评分最高): ({target[0]}, {target[1]}) "
+          f"conf={target[2]:.3f} scale={target[3]}px score={best_score_val:.3f}")
 
     logger.info(f"    最终选择: ({target[0]}, {target[1]}) "
           f"conf={target[2]:.3f} scale={target[3]}px")
-
-    # 头像模板有效性检查：低置信度提示模板可能过期
-    TEMPLATE_WARNING_THRESHOLD = 0.75
-    if target[2] < TEMPLATE_WARNING_THRESHOLD:
-        logger.warning(f"    ⚠️ 匹配置信度较低（{target[2]:.3f} < {TEMPLATE_WARNING_THRESHOLD}）")
-        logger.info(f"    可能原因：联系人更换了头像，模板 {os.path.basename(template_path)} 已过期")
-        logger.info(f"    建议：重新截取联系人头像并更新模板文件")
-        # 不 return False，因为低置信度仍可能正确（只是提示警告）
+    # 注：find_template_multiscale 已经过滤 < MATCH_THRESHOLD 的点，
+    # 且上面 high_conf_points 非空才走到这里，所以 target 的置信度一定 >= 0.7，
+    # 不需要额外的"低置信度警告"分支（原代码在此处仍有警告但不 return False，已删除）。
 
     match_vis = draw_match_result(search_img, points, target, s_box_x, s_box_y)
     match_path = os.path.join(OUTPUT_DIR, f"stage_d_match_result_{attempt_idx}.png")
@@ -840,5 +1001,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-

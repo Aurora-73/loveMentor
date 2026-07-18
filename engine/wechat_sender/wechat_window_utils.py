@@ -1,6 +1,6 @@
 """微信窗口枚举公共模块。
 
-统一所有 EnumWindows 实现，提供窗口查找、统计、恢复功能。
+统一所有 EnumWindows 实现，提供窗口查找、统计、恢复、登录状态检测功能。
 消除 6 个文件中 7 处重复的 EnumWindows 代码。
 
 使用方式:
@@ -11,14 +11,18 @@
         count_chat_windows,
         count_wechat_windows,
         restore_wechat_windows,
+        check_login_status,
+        is_wechat_logged_in,
     )
 
     window = find_wechat_window()
     candidate = find_search_candidate_window()
+    login_info = check_login_status()
 """
 
 import ctypes
 import ctypes.wintypes as wintypes
+import os
 
 # 设置 DPI 感知，让 GetWindowRect 等返回物理像素而非逻辑像素
 try:
@@ -30,6 +34,7 @@ except Exception:
         pass
 
 user32 = ctypes.windll.user32
+kernel32 = ctypes.windll.kernel32
 
 # 类型声明（确保 64 位兼容性，参考 tools_read.py 的严谨做法）
 user32.EnumWindows.argtypes = [wintypes.HANDLE, wintypes.LPARAM]
@@ -44,6 +49,8 @@ user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
 user32.GetWindowRect.restype = wintypes.BOOL
 user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
 user32.GetClassNameW.restype = ctypes.c_int
+user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+user32.GetWindowThreadProcessId.restype = wintypes.DWORD
 user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
 user32.ShowWindow.restype = wintypes.BOOL
 
@@ -55,24 +62,90 @@ WECHAT_MIN_HEIGHT = 400
 _WECHAT_TITLE_KEYWORDS = ("微信", "WeChat", "Weixin")
 _WECHAT_CLASS_KEYWORDS = ("WeChat", "Weixin", "WeChatMainWnd")
 
+# 微信相关进程名（新版 Weixin.exe，旧版 WeChat.exe，小程序 WeChatAppEx.exe）
+_WECHAT_PROCESS_NAMES = ("Weixin.exe", "WeChat.exe", "WeChatAppEx.exe")
 
-def _is_wechat_window(title: str, class_name: str) -> bool:
-    """判断窗口是否为微信相关窗口。"""
-    if any(kw in title for kw in _WECHAT_TITLE_KEYWORDS):
-        return True
-    if any(kw in class_name for kw in _WECHAT_CLASS_KEYWORDS):
-        return True
-    # Qt 框架特征（微信使用 Qt）
-    if "Qt" in class_name and "WindowIcon" in class_name:
-        return True
-    return False
+
+def get_process_name_by_pid(pid: int) -> str | None:
+    """通过 PID 查询进程名（用于排除 Snipaste 等 Qt 框架窗口的误判）。
+
+    用 QueryFullProcessImageNameW（只需 PROCESS_QUERY_LIMITED_INFORMATION 权限，
+    不需要 PROCESS_VM_READ，普通用户权限即可）。
+
+    Args:
+        pid: 进程 ID
+
+    Returns:
+        进程名（如 "Weixin.exe"）或 None（查询失败）
+    """
+    try:
+        # PROCESS_QUERY_LIMITED_INFORMATION = 0x1000（普通用户权限即可）
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        hProcess = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not hProcess:
+            return None
+        try:
+            buf = ctypes.create_unicode_buffer(260)
+            size = wintypes.DWORD(260)
+            if kernel32.QueryFullProcessImageNameW(hProcess, 0, buf, ctypes.byref(size)):
+                return os.path.basename(buf.value)
+            return None
+        finally:
+            kernel32.CloseHandle(hProcess)
+    except Exception:
+        return None
+
+
+def _is_wechat_window(title: str, class_name: str, pid: int | None = None) -> bool:
+    """判断窗口是否为微信相关窗口。
+
+    改进：加上进程名验证，排除 Snipaste 等 Qt 框架窗口的误判。
+    Snipaste 也用 Qt，class='Qt624QWindowIcon'，会被 "Qt + WindowIcon" 规则误判。
+
+    保守策略：如果 PID 查询进程名失败，不回退到 Qt+WindowIcon 匹配（可能误判）。
+    只有标题/类名明确含微信关键词，或进程名确认是微信，才算微信窗口。
+
+    Args:
+        title: 窗口标题
+        class_name: 窗口类名
+        pid: 进程 ID（可选，用于进程名验证）
+
+    Returns:
+        bool: 是否为微信窗口
+    """
+    # 标题或类名明确匹配微信关键词
+    title_match = any(kw in title for kw in _WECHAT_TITLE_KEYWORDS)
+    class_match = any(kw in class_name for kw in _WECHAT_CLASS_KEYWORDS)
+    qt_match = "Qt" in class_name and "WindowIcon" in class_name
+
+    if not (title_match or class_match or qt_match):
+        return False
+
+    # 如果有 PID，验证进程名（排除 Snipaste 等误判）
+    if pid is not None:
+        proc_name = get_process_name_by_pid(pid)
+        if proc_name:
+            # 只接受微信相关进程
+            if any(proc_name == name for name in _WECHAT_PROCESS_NAMES):
+                return True
+            # 进程名不匹配，排除
+            return False
+        else:
+            # 进程名查询失败：保守策略
+            # 只有标题/类名明确匹配微信关键词才算（不靠 Qt+WindowIcon）
+            if title_match or class_match:
+                return True
+            return False
+
+    # 没有 PID 信息时，回退到原逻辑（标题/类名匹配）
+    return title_match or class_match or qt_match
 
 
 def enumerate_visible_windows():
     """遍历所有可见窗口，返回窗口信息列表。
 
     Returns:
-        list[dict]: 每个窗口包含 hwnd/title/class/left/top/right/bottom/width/height
+        list[dict]: 每个窗口包含 hwnd/title/class/left/top/right/bottom/width/height/pid
     """
     windows = []
 
@@ -91,6 +164,8 @@ def enumerate_visible_windows():
         cls_name = cls_buf.value
         rect = wintypes.RECT()
         user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        pid = wintypes.DWORD(0)
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
         windows.append({
             "hwnd": hwnd,
             "title": title,
@@ -101,6 +176,7 @@ def enumerate_visible_windows():
             "bottom": rect.bottom,
             "width": rect.right - rect.left,
             "height": rect.bottom - rect.top,
+            "pid": pid.value,
         })
         return True
 
@@ -113,19 +189,25 @@ def find_wechat_window(min_width=WECHAT_MIN_WIDTH, min_height=WECHAT_MIN_HEIGHT)
     """找到微信主窗口。
 
     匹配策略（按优先级）：
-    1. 标题精确等于 "微信"
-    2. 标题包含 "微信"
-    3. 类名匹配（WeChat/Weixin/WeChatMainWnd/Qt+WindowIcon）
+    1. 标题精确等于 "微信" + Qt/WeChatMainWndForPC 类（真正的主窗口）
+    2. 标题精确等于 "微信"（其他类，如 Chrome_WidgetWin_0 是内嵌浏览器窗口）
+    3. 标题包含 "微信"
+    4. 类名匹配（WeChat/Weixin/WeChatMainWnd/Qt+WindowIcon）
 
     过滤掉小于 min_width x min_height 的小窗口（除非全部都是小窗口）。
+
+    注意：新版微信（Weixin.exe）的主窗口类是 Qt51514QWindowIcon，
+    但微信内嵌的浏览器窗口（如"搜一搜"等）类是 Chrome_WidgetWin_0，
+    两者标题都是"微信"。优先选 Qt 类的，避免误操作浏览器窗口。
 
     Returns:
         dict 或 None: 包含 hwnd/title/class/left/top/width/height，未找到返回 None
     """
     all_windows = enumerate_visible_windows()
 
-    # 筛选微信窗口候选
-    wechat_candidates = [w for w in all_windows if _is_wechat_window(w["title"], w["class"])]
+    # 筛选微信窗口候选（带进程名验证，排除 Snipaste 等误判）
+    wechat_candidates = [w for w in all_windows
+                         if _is_wechat_window(w["title"], w["class"], w.get("pid"))]
 
     if not wechat_candidates:
         return None
@@ -144,13 +226,25 @@ def find_wechat_window(min_width=WECHAT_MIN_WIDTH, min_height=WECHAT_MIN_HEIGHT)
             reverse=True
         )
 
-    # 优先级：标题精确为"微信" > 标题含"微信" > 其他（按面积最大）
+    # 优先级 1：标题精确为"微信" + Qt/WeChatMainWndForPC 类（真正的主窗口）
+    # 新版 Weixin.exe 用 Qt51514QWindowIcon，旧版 WeChat.exe 用 WeChatMainWndForPC
+    # Chrome_WidgetWin_0 是微信内嵌浏览器窗口（如"搜一搜"），不算主窗口
+    main_window_classes = ("Qt", "WeChatMainWndForPC", "WeixinMainWndForPC")
+    for c in big_candidates:
+        if c["title"] == "微信" and any(cls in c["class"] for cls in main_window_classes):
+            return c
+
+    # 优先级 2：标题精确为"微信"（其他类，回退）
     for c in big_candidates:
         if c["title"] == "微信":
             return c
+
+    # 优先级 3：标题含"微信"
     for c in big_candidates:
         if "微信" in c["title"]:
             return c
+
+    # 优先级 4：面积最大
     return max(big_candidates, key=lambda c: c["width"] * c["height"])
 
 
@@ -204,6 +298,107 @@ def find_history_chat_window():
     return None
 
 
+# 预期窗口白名单（其他微信相关窗口视为意外窗口，会被关闭）
+# - title="微信"：微信主窗口
+# - title="Weixin" + class 含 "ToolSaveBits"：搜索候选框
+# - title="搜索聊天记录"：历史聊天界面（阶段二）
+# - title=""  + class="MS_MASKED_WINDOW" 等：微信内部辅助小窗口（不算意外）
+_EXPECTED_WECHAT_TITLES = ("微信", "Weixin", "搜索聊天记录")
+
+
+def _is_expected_wechat_window(w: dict) -> bool:
+    """判断窗口是否为预期的微信窗口（主窗口/搜索候选框/历史聊天窗口）。
+
+    预期窗口白名单：
+    - 主窗口：title="微信" + 类是 Qt/WeChatMainWndForPC（真正的主窗口）
+    - 搜索候选框：title="Weixin" 或 class 含 ToolSaveBits
+    - 历史聊天窗口：title="搜索聊天记录"
+
+    非预期窗口（会被 close_unexpected_wechat_windows 关闭）：
+    - title="微信" + class="Chrome_WidgetWin_0"（微信内嵌浏览器窗口，如"搜一搜"）
+    - 其他标题的微信进程窗口
+
+    Args:
+        w: enumerate_visible_windows 返回的窗口 dict
+
+    Returns:
+        bool: 是否为预期窗口
+    """
+    title = w.get("title", "")
+    cls = w.get("class", "")
+
+    # 搜索候选框（title="Weixin"，class 含 ToolSaveBits）
+    if "ToolSaveBits" in cls:
+        return True
+
+    # 历史聊天窗口（title="搜索聊天记录"）
+    if title == "搜索聊天记录":
+        return True
+
+    # 主窗口：title="微信" + Qt/WeChatMainWndForPC 类
+    # 排除 Chrome_WidgetWin_0（微信内嵌浏览器窗口，标题也是"微信"但不是主窗口）
+    if title == "微信":
+        main_window_classes = ("Qt", "WeChatMainWndForPC", "WeixinMainWndForPC")
+        if any(c in cls for c in main_window_classes):
+            return True
+        # title="微信" 但类是 Chrome_WidgetWin_0 等 → 意外窗口
+        return False
+
+    # 其他 title 含 "Weixin" 的小窗口（如托盘图标等）算预期（不会被关闭）
+    if title == "Weixin":
+        return True
+
+    return False
+
+
+def close_unexpected_wechat_windows(min_width=WECHAT_MIN_WIDTH, min_height=WECHAT_MIN_HEIGHT):
+    """关闭意外出现的微信相关窗口（如"搜索网络结果"窗口）。
+
+    健壮性增强：用户反馈代码误点击"搜索网络结果"按钮会弹出新的窗口，
+    后续操作都在错误窗口里进行。此函数在每次操作前清理这些意外窗口。
+
+    关闭逻辑：
+    - 遍历所有可见窗口
+    - 过滤出微信相关窗口（_is_wechat_window）
+    - 排除预期窗口（主窗口/搜索候选框/历史聊天窗口）
+    - 排除小窗口（< min_width x min_height，避免误关托盘图标等）
+    - 对剩余的意外窗口发送 WM_CLOSE
+
+    Returns:
+        tuple (closed_count: int, closed_windows: list[dict])
+    """
+    all_windows = enumerate_visible_windows()
+    closed = []
+    WM_CLOSE = 0x0010
+
+    for w in all_windows:
+        title = w.get("title", "")
+        cls = w.get("class", "")
+        pid = w.get("pid")
+
+        # 必须是微信相关窗口
+        if not _is_wechat_window(title, cls, pid):
+            continue
+
+        # 排除预期窗口
+        if _is_expected_wechat_window(w):
+            continue
+
+        # 排除小窗口（托盘图标、辅助小窗口等）
+        if w["width"] < min_width or w["height"] < min_height:
+            continue
+
+        # 意外窗口：关闭它
+        hwnd = w["hwnd"]
+        try:
+            user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
+            closed.append(w)
+        except Exception:
+            pass
+
+    return len(closed), closed
+
+
 def count_chat_windows(min_width=WECHAT_MIN_WIDTH, min_height=WECHAT_MIN_HEIGHT):
     """精确统计聊天相关窗口数（排除搜索候选框）。
 
@@ -237,7 +432,7 @@ def count_chat_windows(min_width=WECHAT_MIN_WIDTH, min_height=WECHAT_MIN_HEIGHT)
 def count_wechat_windows(min_width=WECHAT_MIN_WIDTH, min_height=WECHAT_MIN_HEIGHT):
     """统计微信相关窗口数量（排除托盘图标等小窗口）。
 
-    匹配规则：标题或类名匹配微信关键词
+    匹配规则：标题或类名匹配微信关键词（带进程名验证）
 
     Returns:
         (count, windows)
@@ -245,12 +440,240 @@ def count_wechat_windows(min_width=WECHAT_MIN_WIDTH, min_height=WECHAT_MIN_HEIGH
     all_windows = enumerate_visible_windows()
     wechat_windows = []
     for w in all_windows:
-        if not _is_wechat_window(w["title"], w["class"]):
+        if not _is_wechat_window(w["title"], w["class"], w.get("pid")):
             continue
         if w["width"] < min_width or w["height"] < min_height:
             continue
         wechat_windows.append(w)
     return len(wechat_windows), wechat_windows
+
+
+# ========== 登录状态检测 ==========
+
+# numpy/cv2/PIL 用于 icon 模板匹配（可选依赖）
+try:
+    import numpy as np
+    import cv2
+    from PIL import Image
+    _HAS_CV = True
+except ImportError:
+    _HAS_CV = False
+
+
+def _load_wx_icons():
+    """加载微信图标模板（用于模板匹配）。
+
+    从 engine/wechat_sender/wx_icon/1.ico ~ 6.ico 加载图标。
+
+    Returns:
+        list[np.ndarray]: 图标模板列表（BGR 格式），加载失败返回空列表
+    """
+    if not _HAS_CV:
+        return []
+    icon_dir = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "wx_icon"
+    )
+    if not os.path.isdir(icon_dir):
+        return []
+    icons = []
+    for i in range(1, 7):
+        icon_path = os.path.join(icon_dir, f"{i}.ico")
+        if not os.path.isfile(icon_path):
+            continue
+        try:
+            img = Image.open(icon_path).convert("RGB")
+            arr = np.array(img)[:, :, ::-1].copy()  # RGB → BGR
+            icons.append(arr)
+        except Exception:
+            pass
+    return icons
+
+
+def find_wechat_icon_by_template(tray_img, icons, tray_left, tray_top, threshold=0.6):
+    """用模板匹配找微信图标。
+
+    Args:
+        tray_img: 托盘区域截图 (BGR)
+        icons: 图标模板列表（BGR）
+        tray_left, tray_top: 托盘区域在屏幕上的左上角坐标
+        threshold: 匹配阈值 (0-1)，低于此值视为未匹配
+
+    Returns:
+        (screen_x, screen_y, confidence) 或 None
+    """
+    if tray_img is None or not icons:
+        return None
+
+    best_match = None
+    best_conf = 0.0
+    # 托盘图标通常 20-32px，尝试多种尺寸
+    for icon in icons:
+        for size in [20, 24, 28, 32]:
+            resized = cv2.resize(icon, (size, size), interpolation=cv2.INTER_AREA)
+            result = cv2.matchTemplate(tray_img, resized, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, max_loc = cv2.minMaxLoc(result)
+            if max_val > best_conf and max_val >= threshold:
+                best_conf = max_val
+                cx = max_loc[0] + size // 2
+                cy = max_loc[1] + size // 2
+                best_match = (tray_left + cx, tray_top + cy, max_val)
+
+    return best_match
+
+
+def check_login_status():
+    """检测微信是否已登录。
+
+    综合判定（任意一个满足即视为已登录）：
+    1. 托盘有微信图标（最可靠，用 icon 模板匹配）
+    2. 主窗口尺寸 > 500 宽（未登录窗口约 350x475）
+    3. 同 PID 下存在隐藏子窗口 'Weixin'（已登录才有）
+
+    Returns:
+        dict: {
+            "logged_in": bool,           # 是否已登录
+            "tray_icon_found": bool,     # 托盘是否有微信图标
+            "tray_method": str|None,     # icon_template / hsv_fallback
+            "tray_confidence": float|None,
+            "main_window_size": tuple|None,  # (width, height)
+            "has_hidden_subwindow": bool,    # 是否有隐藏子窗口 'Weixin'
+            "process_running": bool,
+            "main_pid": int|None,
+        }
+    """
+    result = {
+        "logged_in": False,
+        "tray_icon_found": False,
+        "tray_method": None,
+        "tray_confidence": None,
+        "main_window_size": None,
+        "has_hidden_subwindow": False,
+        "process_running": False,
+        "main_pid": None,
+    }
+
+    # 1. 检查进程
+    try:
+        import subprocess
+        proc = subprocess.run(
+            ["tasklist", "/FO", "CSV", "/NH"],
+            capture_output=True, timeout=5, encoding="gbk", errors="ignore"
+        )
+        lines = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+        wechat_pids = []
+        for line in lines:
+            for name in _WECHAT_PROCESS_NAMES:
+                if name in line:
+                    parts = line.split(",")
+                    if len(parts) >= 2:
+                        try:
+                            wechat_pids.append(int(parts[1].strip('"')))
+                        except ValueError:
+                            pass
+                    break
+        result["process_running"] = bool(wechat_pids)
+        # 主进程优先 Weixin.exe / WeChat.exe
+        main_pids = [pid for pid in wechat_pids
+                     if get_process_name_by_pid(pid) in ("Weixin.exe", "WeChat.exe")]
+        result["main_pid"] = main_pids[0] if main_pids else (wechat_pids[0] if wechat_pids else None)
+    except Exception:
+        pass
+
+    # 2. 检查主窗口尺寸
+    all_windows = enumerate_visible_windows()
+    main_windows = [w for w in all_windows
+                    if w["title"] == "微信"
+                    and _is_wechat_window(w["title"], w["class"], w.get("pid"))]
+    if main_windows:
+        main_win = max(main_windows, key=lambda w: w["width"] * w["height"])
+        result["main_window_size"] = (main_win["width"], main_win["height"])
+
+    # 3. 检查隐藏子窗口 'Weixin'（已登录才有，需枚举所有窗口包括不可见的）
+    if result["main_pid"]:
+        try:
+            # 枚举所有窗口（包括不可见的）
+            all_windows_incl_hidden = []
+
+            def _enum_all(hwnd, lparam):
+                length = user32.GetWindowTextLengthW(hwnd) + 1
+                if length <= 1:
+                    title = ""
+                else:
+                    buf = ctypes.create_unicode_buffer(length)
+                    user32.GetWindowTextW(hwnd, buf, length)
+                    title = buf.value
+                cls_buf = ctypes.create_unicode_buffer(256)
+                user32.GetClassNameW(hwnd, cls_buf, 256)
+                cls_name = cls_buf.value
+                pid = wintypes.DWORD(0)
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                all_windows_incl_hidden.append({
+                    "hwnd": hwnd,
+                    "title": title,
+                    "class": cls_name,
+                    "pid": pid.value,
+                    "is_visible": bool(user32.IsWindowVisible(hwnd)),
+                })
+                return True
+
+            callback = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)(_enum_all)
+            user32.EnumWindows(callback, 0)
+
+            hidden_sub = [w for w in all_windows_incl_hidden
+                          if w["title"] == "Weixin"
+                          and not w["is_visible"]
+                          and w["pid"] == result["main_pid"]]
+            result["has_hidden_subwindow"] = bool(hidden_sub)
+        except Exception:
+            pass
+
+    # 4. 检查托盘图标（用 icon 模板匹配）
+    try:
+        from open_wechat_window import (
+            _find_tray_window, _capture_region, _find_wechat_icon_in_tray, TRAY_RIGHT_RATIO
+        )
+        tray = _find_tray_window()
+        if tray:
+            tray_left = int(tray["right"] - tray["width"] * TRAY_RIGHT_RATIO)
+            tray_top = tray["top"]
+            tray_width = int(tray["width"] * TRAY_RIGHT_RATIO)
+            tray_height = tray["height"]
+            tray_img = _capture_region(tray_left, tray_top, tray_width, tray_height)
+            if tray_img is not None:
+                # 优先 icon 模板匹配
+                if _HAS_CV:
+                    icons = _load_wx_icons()
+                    if icons:
+                        match = find_wechat_icon_by_template(
+                            tray_img, icons, tray_left, tray_top
+                        )
+                        if match:
+                            result["tray_icon_found"] = True
+                            result["tray_method"] = "icon_template"
+                            result["tray_confidence"] = float(match[2])
+                # fallback HSV
+                if not result["tray_icon_found"]:
+                    hsv_pos = _find_wechat_icon_in_tray(tray_img, tray_left, tray_top)
+                    if hsv_pos:
+                        result["tray_icon_found"] = True
+                        result["tray_method"] = "hsv_fallback"
+    except Exception:
+        pass
+
+    # 5. 综合判定
+    is_logged_in = (
+        result["tray_icon_found"]
+        or (result["main_window_size"] is not None and result["main_window_size"][0] > 500)
+        or result["has_hidden_subwindow"]
+    )
+    result["logged_in"] = bool(is_logged_in)
+    return result
+
+
+def is_wechat_logged_in() -> bool:
+    """简化接口：微信是否已登录。"""
+    return check_login_status()["logged_in"]
 
 
 def restore_wechat_windows():

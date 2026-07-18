@@ -194,6 +194,22 @@ def run_send_message(message, do_send=True):
         logger.info("  阶段三：只检测布局（输入测试文本但不发送）")
     logger.info("=" * 60)
 
+    # 0. 前置检查：微信是否已登录（避免在未登录窗口上操作）
+    try:
+        from wechat_window_utils import check_login_status
+        login_info = check_login_status()
+        if not login_info["logged_in"]:
+            logger.error("❌ 微信未登录，拒绝发送消息")
+            logger.info(f"   登录状态: tray_icon={login_info['tray_icon_found']} "
+                        f"main_window_size={login_info['main_window_size']} "
+                        f"hidden_subwindow={login_info['has_hidden_subwindow']}")
+            logger.info("   请先调用 wechat_start 启动并登录微信")
+            return False
+        logger.info(f"[0] 登录状态: 已登录 (tray={login_info['tray_method']}, "
+                    f"main_size={login_info['main_window_size']})")
+    except Exception as e:
+        logger.warning(f"⚠️ 登录状态检测异常: {e}，继续尝试发送")
+
     # 1. 找微信窗口（选最大的，避免找到托盘图标等小窗口）
     window = find_largest_wechat_window()
     if not window:

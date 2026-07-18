@@ -1,4 +1,4 @@
-﻿import yaml
+import yaml
 import os
 from pathlib import Path
 

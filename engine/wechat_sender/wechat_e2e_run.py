@@ -156,16 +156,19 @@ def handle_stage_2_history_window(attempt_idx, template_path):
         logger.info(f"      #{i}: ({x}, {y}) conf={s:.3f} scale={sc}px")
 
     # 修复 P1-5：阶段二选点逻辑与阶段一统一，先过滤低置信度点
+    # 严格阈值：低于 MATCH_THRESHOLD(0.7) 一律不点击，直接判失败触发上层重试
+    # （与 click_avatar_in_search_window.py 阶段一逻辑保持一致，避免点错位置触发意外窗口）
     high_conf_points = [p for p in points if p[2] >= MATCH_THRESHOLD]
-    if high_conf_points:
-        target = max(high_conf_points, key=lambda p: p[2])
-        logger.info(f"    选中(置信度最高, >= {MATCH_THRESHOLD}): ({target[0]}, {target[1]}) "
-              f"conf={target[2]:.3f} scale={target[3]}px")
-    else:
-        logger.warning(f"    ⚠️ 所有匹配点置信度 < {MATCH_THRESHOLD}，回退到最高置信度")
-        target = max(points, key=lambda p: p[2])
-        logger.info(f"    选中(回退-置信度最高): ({target[0]}, {target[1]}) "
-              f"conf={target[2]:.3f} scale={target[3]}px")
+    if not high_conf_points:
+        logger.error(
+            f"    ❌ 所有匹配点置信度 < {MATCH_THRESHOLD}，"
+            f"严格判定阶段二失败（不点击，避免点错位置触发意外窗口）"
+        )
+        return False
+
+    target = max(high_conf_points, key=lambda p: p[2])
+    logger.info(f"    选中(置信度最高, >= {MATCH_THRESHOLD}): ({target[0]}, {target[1]}) "
+          f"conf={target[2]:.3f} scale={target[3]}px")
 
     # 画匹配结果图
     out = img.copy()
@@ -209,21 +212,66 @@ def handle_stage_2_history_window(attempt_idx, template_path):
 
 
 def rollback_wechat_state():
-    """回滚微信状态，清除残留输入和搜索栏。
+    """回滚微信状态，清除残留输入、搜索栏、意外窗口。
 
-    在流程失败时调用，确保下次重试不受残留状态影响：
-    1. 按 Esc 关闭搜索候选框
-    2. 按 Esc 清除搜索栏文字
-    3. 点击聊天输入框区域清除焦点
+    用户反馈：失败重试时直接累加操作到搜索框，导致错误。
+    正确做法：失败后先回滚状态（清理所有残留），再进行下一次重试。
+
+    步骤：
+    1. 关闭意外窗口（"搜索网络结果"窗口、Chrome_WidgetWin_0 内嵌浏览器窗口）
+    2. 关闭搜索候选框（避免重试时累加操作到搜索框）
+    3. 主窗口置顶（确保下次操作的是主窗口）
+    4. 点击主窗口中间栏激活焦点（清除搜索栏输入框内容）
+
+    ⚠️ 不按 Esc 键：微信"关闭主面板"快捷键默认是 Esc，按 Esc 会关闭主窗口
+       导致下次重试时 find_wechat_window 找不到窗口，全部 attempt 失败。
     """
-    logger.info("\n[回滚] 清理微信残留状态...")
-    from human_sim import _press_single_key, VK_ESCAPE
+    logger.info("\n[回滚] 清理微信残留状态（关闭意外窗口+搜索候选框+主窗口置顶）...")
 
-    # 连按3次 Esc，关闭搜索候选框和清除搜索栏（已升级为 SendInput 带扫描码）
-    for i in range(3):
-        _press_single_key(VK_ESCAPE)
-        time.sleep(0.1)
-    logger.info("    [回滚] 已按 Esc 清理搜索栏/候选框")
+    # 步骤 1：关闭意外窗口
+    try:
+        from wechat_window_utils import close_unexpected_wechat_windows
+        closed_count, closed_wins = close_unexpected_wechat_windows()
+        if closed_count > 0:
+            logger.info(f"    [回滚] 关闭 {closed_count} 个意外窗口:")
+            for cw in closed_wins:
+                logger.info(
+                    f"      - hwnd={cw['hwnd']} title={cw['title']!r} class={cw['class']!r}"
+                )
+            time.sleep(0.3)
+    except Exception as e:
+        logger.warning(f"    [回滚] 关闭意外窗口异常: {e}")
+
+    # 步骤 2：关闭搜索候选框
+    try:
+        from wechat_window_utils import find_search_candidate_windows
+        search_candidates = find_search_candidate_windows()
+        if search_candidates:
+            logger.info(f"    [回滚] 关闭 {len(search_candidates)} 个搜索候选框")
+            WM_CLOSE = 0x0010
+            for sc in search_candidates:
+                user32.PostMessageW(sc["hwnd"], WM_CLOSE, 0, 0)
+            time.sleep(0.5)
+    except Exception as e:
+        logger.warning(f"    [回滚] 关闭搜索候选框异常: {e}")
+
+    # 步骤 3：主窗口置顶
+    try:
+        from test_current_wechat import find_wechat_window
+        from click_search_and_input import safe_set_foreground_window
+        main_win = find_wechat_window()
+        if main_win:
+            if safe_set_foreground_window(main_win["hwnd"]):
+                logger.info(f"    [回滚] 主窗口已置顶 (hwnd={main_win['hwnd']})")
+                time.sleep(0.3)
+    except Exception as e:
+        logger.warning(f"    [回滚] 主窗口置顶异常: {e}")
+
+    # 步骤 4：点击主窗口中间栏，激活焦点（清除搜索栏输入框内容）
+    try:
+        scroll_in_main_middle_column()
+    except Exception as e:
+        logger.warning(f"    [回滚] 点击中间栏失败: {e}")
     time.sleep(0.3)
 
 
@@ -308,10 +356,14 @@ def _refresh_avatar_and_maybe_retry(contact_name, template_path, message):
     retry_count_after = 0
 
     for attempt in range(1, MAX_ATTEMPTS + 1):
-        # 每次尝试前确保微信窗口存在
-        from wechat_window_utils import find_wechat_window as _find_wx, restore_wechat_windows
-        if not _find_wx():
-            logger.info(f"\n[头像更新后-窗口唤醒] 微信窗口不存在，尝试唤醒...")
+        # 每次尝试前确保微信主窗口可见（>= 500x400）
+        # 修复 bug：原来用 find_wechat_window() 判断，但它在小窗口存在时回退返回非 None
+        from wechat_window_utils import (
+            find_wechat_window as _find_wx, restore_wechat_windows, count_wechat_windows
+        )
+        _big_wx_count, _ = count_wechat_windows()
+        if _big_wx_count == 0:
+            logger.info(f"\n[头像更新后-窗口唤醒] 微信主窗口不可见，尝试唤醒...")
             try:
                 from open_wechat_window import open_wechat_window_robust
                 if open_wechat_window_robust(timeout=10.0):
@@ -328,13 +380,9 @@ def _refresh_avatar_and_maybe_retry(contact_name, template_path, message):
                 logger.warning(f"   ⚠️ 窗口唤醒异常: {e}")
 
         if attempt > 1:
-            logger.info("\n[重试预备] 清理搜索栏残留状态 + 滚动+点击...")
-            from human_sim import _press_single_key, VK_ESCAPE
-            for _ in range(2):
-                _press_single_key(VK_ESCAPE)
-                time.sleep(0.1)
-            time.sleep(0.3)
-            scroll_in_main_middle_column()
+            # 用户反馈：失败重试时必须先回滚状态（与 run_e2e 主循环保持一致）
+            logger.info("\n[头像更新后-重试预备] 回滚微信状态...")
+            rollback_wechat_state()
             time.sleep(0.5)
 
         success, target, count_after = run_one_attempt(
@@ -350,6 +398,9 @@ def _refresh_avatar_and_maybe_retry(contact_name, template_path, message):
         else:
             logger.error(f"\n❌ [头像更新后] 第 {attempt} 次尝试失败")
             if attempt < MAX_ATTEMPTS:
+                # 失败后立即回滚状态
+                logger.info(f"   [头像更新后-失败处理] 立即回滚状态...")
+                rollback_wechat_state()
                 time.sleep(0.5)
 
     if not retry_success:
@@ -414,10 +465,15 @@ def run_e2e(message, contact_name, template_path):
     for attempt in range(1, MAX_ATTEMPTS + 1):
         attempt_idx = attempt
 
-        # 每次尝试前确保微信窗口存在，不存在则通过托盘图标唤醒
-        from wechat_window_utils import find_wechat_window, restore_wechat_windows
-        if not find_wechat_window():
-            logger.info(f"\n[窗口唤醒] 微信窗口不存在，尝试通过托盘图标唤醒...")
+        # 每次尝试前确保微信主窗口可见（>= 500x400），不可见则通过托盘图标唤醒
+        # 修复 bug：原来用 find_wechat_window() 判断，但它在小窗口存在时回退返回非 None，
+        # 导致微信主窗口最小化时不会触发唤醒，run_one_attempt [A] 阶段报"窗口数=0"
+        from wechat_window_utils import (
+            find_wechat_window, restore_wechat_windows, count_wechat_windows
+        )
+        _big_wx_count, _ = count_wechat_windows()
+        if _big_wx_count == 0:
+            logger.info(f"\n[窗口唤醒] 微信主窗口不可见（大窗口数=0），尝试通过托盘图标唤醒...")
             try:
                 from open_wechat_window import open_wechat_window_robust
                 if open_wechat_window_robust(timeout=10.0):
@@ -431,20 +487,23 @@ def run_e2e(message, contact_name, template_path):
                         safe_set_foreground_window(wx_win["hwnd"])  # 设为前台
                         logger.info(f"   ✅ 微信窗口已设为前台 (hwnd={wx_win['hwnd']})")
                     time.sleep(0.5)
+                    # 唤醒后再次验证大窗口确实存在
+                    _big_wx_count2, _ = count_wechat_windows()
+                    if _big_wx_count2 == 0:
+                        logger.warning(f"   ⚠️ 唤醒后大窗口数仍为 0，可能窗口被立即隐藏")
                 else:
                     logger.warning(f"   ⚠️ 微信窗口唤醒失败，继续尝试（可能 PrintWindow 仍能工作）")
             except Exception as e:
                 logger.warning(f"   ⚠️ 窗口唤醒异常: {e}")
 
         if attempt > 1:
-            logger.info("\n[重试预备] 清理搜索栏残留状态 + 滚动+点击...")
-            # 先按 Esc 关闭可能残留的搜索候选框和搜索栏（已升级为 SendInput 带扫描码）
-            from human_sim import _press_single_key, VK_ESCAPE
-            for _ in range(2):
-                _press_single_key(VK_ESCAPE)
-                time.sleep(0.1)
-            time.sleep(0.3)
-            scroll_in_main_middle_column()
+            # 用户反馈：失败重试时不能直接累加操作，必须先回滚状态
+            # - 关闭意外窗口（搜索网络结果等）
+            # - 关闭搜索候选框（避免重试时累加操作到搜索框）
+            # - 主窗口置顶
+            # - 清除搜索栏输入
+            logger.info("\n[重试预备] 回滚微信状态（关闭意外窗口+搜索候选框+主窗口置顶）...")
+            rollback_wechat_state()
             time.sleep(0.5)
 
         success, target, count_after = run_one_attempt(
@@ -455,7 +514,9 @@ def run_e2e(message, contact_name, template_path):
         if not success:
             logger.error(f"\n❌ 第 {attempt} 次尝试失败")
             if attempt < MAX_ATTEMPTS:
-                logger.info(f"   0.5 秒后将进行第 {attempt + 1} 次尝试...")
+                # 失败后立即回滚状态（避免下次重试累加操作）
+                logger.info(f"   [失败处理] 立即回滚状态，准备第 {attempt + 1} 次尝试...")
+                rollback_wechat_state()
                 time.sleep(0.5)
             continue
 
@@ -544,4 +605,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

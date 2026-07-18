@@ -1,4 +1,4 @@
-﻿﻿"""基于用户标注分析各案例在新指标下的表现，验证区分度。"""
+"""基于用户标注分析各案例在新指标下的表现，验证区分度。"""
 import sqlite3
 import sys
 from pathlib import Path

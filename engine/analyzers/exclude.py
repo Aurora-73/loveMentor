@@ -296,4 +296,3 @@ def remove_merge(conn: sqlite3.Connection, canonical_wxid: str) -> bool:
     )
     conn.commit()
     return cursor.rowcount > 0
-
