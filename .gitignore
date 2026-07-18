@@ -81,6 +81,8 @@ send_message/
 # 截图和输出目录（运行时生成，不入库）
 engine/wechat_sender/outputs/
 engine/wechat_sender/screenshots/
+# 根目录调试截图（托盘闪烁分析等）
+outputs/
 # 头像模板（隐私数据，在 data/avatars/ 下，已被 data/ 忽略）
 
 # 临时验证脚本
