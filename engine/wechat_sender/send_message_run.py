@@ -298,9 +298,47 @@ def run_send_message(message, do_send=True):
     time.sleep(0.8)
 
     # 6. 输入消息（此时发送按钮变绿）
+    # 超长消息分段输入+发送，避免输入框滚动导致发送按钮位置变化
+    MAX_MSG_LENGTH = 500  # 微信输入框单次最大推荐长度
     print(f"\n[6] 输入消息: {message!r}")
-    input_text_via_clipboard(hwnd, message)
-    time.sleep(0.8)
+
+    if len(message) <= MAX_MSG_LENGTH:
+        # 短消息：一次性输入+发送
+        input_text_via_clipboard(hwnd, message)
+        time.sleep(0.8)
+    else:
+        # 长消息：分段输入+发送
+        print(f"    消息较长（{len(message)} 字符），分 {(len(message) + MAX_MSG_LENGTH - 1) // MAX_MSG_LENGTH} 段发送")
+        segments = [message[i:i+MAX_MSG_LENGTH] for i in range(0, len(message), MAX_MSG_LENGTH)]
+        for seg_idx, segment in enumerate(segments, 1):
+            print(f"    --- 第 {seg_idx}/{len(segments)} 段 ---")
+            input_text_via_clipboard(hwnd, segment)
+            time.sleep(0.8)
+
+            # 找发送按钮并发送本段
+            seg_img = screencap_window(hwnd)
+            if seg_img is None:
+                print(f"    ❌ 第 {seg_idx} 段截图失败")
+                return False
+            seg_cx, seg_cy, _ = find_send_button_by_ocr(seg_img)
+            if seg_cx is None:
+                seg_cx, seg_cy, _ = find_send_button_from_bottom_right(seg_img, session_right)
+            if seg_cx is None:
+                print(f"    ❌ 第 {seg_idx} 段未找到发送按钮")
+                return False
+            print(f"    第 {seg_idx} 段发送按钮: ({seg_cx}, {seg_cy})")
+            seg_offset_x, seg_offset_y = get_client_offset(hwnd)
+            seg_screen_x, seg_screen_y = client_to_screen(hwnd, seg_cx - seg_offset_x, seg_cy - seg_offset_y)
+            safe_set_foreground_window(hwnd)
+            time.sleep(0.3)
+            physical_click(seg_screen_x, seg_screen_y)
+            time.sleep(1.0)
+
+        # 所有分段发送完成，直接返回成功（跳过后续单次发送逻辑）
+        print("\n" + "=" * 60)
+        print("  阶段三完成（分段发送）")
+        print("=" * 60)
+        return True
 
     # 7. 重新截图（此时发送按钮是绿色）
     print("\n[7] 重新截图（发送按钮应变绿）")
