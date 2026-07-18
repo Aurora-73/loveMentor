@@ -514,6 +514,18 @@ mcp.tool(
     annotations={"readOnlyHint": True},
 )(tools_wechat.wechat_ocr)
 
+mcp.tool(
+    name="open_wechat_window",
+    description="【打开微信窗口】在微信已启动但窗口不可见（被关闭/最小化到托盘）时，"
+               "通过点击任务栏右下角托盘的微信绿色图标唤醒主窗口。"
+               "实现：HSV颜色匹配托盘区域→物理点击图标→轮询等待窗口出现。"
+               "基于录屏分析：闪烁周期约1.867秒，常态下图标稳定绿色，单次截图即可匹配。"
+               "使用场景：wechat_send失败提示'微信窗口未打开'时，先调用本工具唤醒窗口。"
+               "前置条件：微信进程已启动（Weixin.exe 在运行）。"
+               "参数：timeout（等待窗口出现的最大秒数，默认10.0）。"
+               "返回：success/action/window/elapsed。action 可能值：already_visible/tray_click/failed。",
+)(tools_wechat.open_wechat_window)
+
 # ── 注册头像获取工具 ────────────────────────────────────────────
 
 mcp.tool(

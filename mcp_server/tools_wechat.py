@@ -524,6 +524,120 @@ def wechat_send(name: str, message: str) -> dict:
         _wechat_op_lock.release()
 
 
+# ── 工具3: open_wechat_window ───────────────────────────────────
+
+def open_wechat_window(timeout: float = 10.0) -> dict:
+    """打开微信窗口（托盘图标唤醒）。
+
+    在微信进程已启动但主窗口不可见（被关闭/最小化到托盘）的情况下，
+    通过点击任务栏右下角托盘的微信绿色图标来唤醒主窗口。
+
+    实现原理：
+    1. 先检查微信窗口是否已存在，若存在直接返回成功
+    2. 定位任务栏右下角托盘区域（只扫描右侧 30%，避免全屏匹配）
+    3. 截图托盘区域，用 HSV 颜色匹配找微信绿色图标
+    4. 物理点击图标，轮询等待微信窗口出现
+
+    基于 5.5 秒托盘闪烁录屏分析：
+    - 闪烁周期约 1.867 秒（0.54 Hz）
+    - 常态下图标稳定绿色，颜色匹配即可定位（无需等待闪烁）
+    - 收到消息时图标闪烁，但位置固定，单次截图即可匹配
+
+    使用场景：
+    - wechat_send 失败提示"微信窗口未打开"时，先调用本工具唤醒窗口
+    - 微信被用户手动关闭窗口后，需要重新打开窗口
+    - 自动化流程中确保微信窗口可用
+
+    Args:
+        timeout: 等待微信窗口出现的最大秒数（默认 10.0）
+
+    Returns:
+        dict: {
+            "success": bool,
+            "message": str,           # 结果描述
+            "action": str,            # "already_visible" / "tray_click" / "failed"
+            "window": dict|None,      # 窗口信息 {"hwnd": int, "width": int, "height": int}
+            "elapsed": float|None,    # 唤醒耗时（秒，仅 tray_click 时有值）
+            "error": str|None,
+        }
+    """
+    _wechat_op_lock.acquire()
+    try:
+        from engine.wechat_sender.open_wechat_window import open_wechat_window_robust
+        from engine.wechat_sender.wechat_window_utils import find_wechat_window
+        import time
+
+        # 先检查窗口是否已可见
+        existing = find_wechat_window()
+        if existing and existing["width"] >= 500 and existing["height"] >= 400:
+            return {
+                "success": True,
+                "message": f"微信窗口已可见 ({existing['width']}x{existing['height']})，无需唤醒",
+                "action": "already_visible",
+                "window": {
+                    "hwnd": existing["hwnd"],
+                    "width": existing["width"],
+                    "height": existing["height"],
+                },
+                "elapsed": 0.0,
+                "error": None,
+            }
+
+        # 托盘点击唤醒
+        start_time = time.time()
+        success = open_wechat_window_robust(timeout=timeout)
+        elapsed = time.time() - start_time
+
+        if success:
+            window = find_wechat_window()
+            return {
+                "success": True,
+                "message": f"已通过托盘图标唤醒微信窗口（耗时 {elapsed:.1f}s）",
+                "action": "tray_click",
+                "window": {
+                    "hwnd": window["hwnd"] if window else 0,
+                    "width": window["width"] if window else 0,
+                    "height": window["height"] if window else 0,
+                },
+                "elapsed": round(elapsed, 2),
+                "error": None,
+            }
+        else:
+            return {
+                "success": False,
+                "message": (
+                    f"托盘点击唤醒失败（耗时 {elapsed:.1f}s）。"
+                    f"可能原因：1) 微信进程未启动  2) 托盘图标被隐藏到溢出区  "
+                    f"3) HSV 颜色匹配未命中（图标可能处于闪烁暗态）"
+                ),
+                "action": "failed",
+                "window": None,
+                "elapsed": round(elapsed, 2),
+                "error": "TRAY_CLICK_FAILED",
+            }
+
+    except ImportError as e:
+        return {
+            "success": False,
+            "message": f"依赖模块导入失败: {e}",
+            "action": "failed",
+            "window": None,
+            "elapsed": None,
+            "error": f"IMPORT_ERROR: {e}",
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"运行异常: {e}",
+            "action": "failed",
+            "window": None,
+            "elapsed": None,
+            "error": f"RUNTIME_ERROR: {traceback.format_exc()}",
+        }
+    finally:
+        _wechat_op_lock.release()
+
+
 # ── 工具2: wechat_ocr ───────────────────────────────────────────
 
 def wechat_ocr(region: str = "full", use_cache: bool = False) -> dict:
