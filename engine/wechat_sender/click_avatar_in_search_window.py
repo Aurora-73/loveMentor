@@ -600,8 +600,39 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
         print(f"    #{i}: ({x}, {y}) conf={s:.3f} scale={sc}px "
               f"距搜索框={dist:.0f}px")
 
-    target = min(points, key=lambda p: (p[0] - s_box_x) ** 2 + (p[1] - s_box_y) ** 2)
-    print(f"    选中(距搜索框最近): ({target[0]}, {target[1]}) "
+    # 改进：先按置信度筛选，再综合置信度和位置评分选择
+    # 搜索候选框中头像应在搜索框下方，y 坐标 > s_box_y 的匹配点优先
+    MIN_CONFIDENCE_FOR_SELECTION = 0.7
+    high_conf_points = [p for p in points if p[2] >= MIN_CONFIDENCE_FOR_SELECTION]
+    if not high_conf_points:
+        # 所有匹配点置信度都低于 0.7，回退到原逻辑（选最近）
+        print(f"    ⚠️ 所有匹配点置信度 < {MIN_CONFIDENCE_FOR_SELECTION}，用最近匹配点")
+        target = min(points, key=lambda p: (p[0] - s_box_x) ** 2 + (p[1] - s_box_y) ** 2)
+    else:
+        # 用加权评分：confidence_score * 0.6 + position_score * 0.4
+        # position_score：距搜索框越近、在搜索框下方，分数越高
+        max_dist = max(((p[0] - s_box_x) ** 2 + (p[1] - s_box_y) ** 2) ** 0.5
+                       for p in high_conf_points) or 1
+        best_score_val = -1
+        target = high_conf_points[0]
+        for p in high_conf_points:
+            x, y, conf, _ = p
+            dist = ((x - s_box_x) ** 2 + (y - s_box_y) ** 2) ** 0.5
+            # 位置分：距离归一化（越近越高），在搜索框下方加分
+            dist_score = 1.0 - (dist / max_dist)
+            below_bonus = 0.2 if y > s_box_y else 0.0  # 在搜索框下方加分
+            position_score = min(1.0, dist_score + below_bonus)
+            # 综合评分
+            total_score = conf * 0.6 + position_score * 0.4
+            print(f"    #?: ({x},{y}) conf={conf:.3f} dist={dist:.0f} "
+                  f"pos_score={position_score:.3f} total={total_score:.3f}")
+            if total_score > best_score_val:
+                best_score_val = total_score
+                target = p
+        print(f"    选中(综合评分最高): ({target[0]}, {target[1]}) "
+              f"conf={target[2]:.3f} scale={target[3]}px score={best_score_val:.3f}")
+
+    print(f"    最终选择: ({target[0]}, {target[1]}) "
           f"conf={target[2]:.3f} scale={target[3]}px")
 
     # 头像模板有效性检查：低置信度提示模板可能过期
