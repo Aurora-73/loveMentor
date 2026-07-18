@@ -513,33 +513,72 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
 
     print(f"    搜索栏屏幕坐标: ({screen_x}, {screen_y})")
     print("    safe_set_foreground_window + 点击中间栏激活焦点 + Ctrl+F + 输入 ...")
-    safe_set_foreground_window(hwnd_main)
+    fg_ok = safe_set_foreground_window(hwnd_main)
     time.sleep(0.3)
 
-    # 先点击主窗口中间栏中心，确保焦点在微信窗口上（Ctrl+F 依赖焦点）
-    # 中间栏中心 = 会话列表区域中心，点击此处不会触发任何按钮
-    h_img, w_img = pw_image.shape[:2]
-    mid_x = (nav_right + session_right) // 2
-    mid_y = h_img // 2
-    mid_screen_x, mid_screen_y = client_to_screen(
-        hwnd_main, mid_x - offset_x, mid_y - offset_y
-    )
-    physical_click(mid_screen_x, mid_screen_y)
-    time.sleep(0.3)
+    if not fg_ok:
+        # SetForegroundWindow 失败，用 PostMessage 方式（不需要窗口在前台）
+        print("    ⚠️ SetForegroundWindow 失败，改用 PostMessage 方式...")
+        WM_LBUTTONDOWN = 0x0201
+        WM_LBUTTONUP = 0x0202
+        WM_KEYDOWN = 0x0100
+        WM_KEYUP = 0x0101
+        WM_CHAR = 0x0102
+        MK_LBUTTON = 0x0001
+        VK_CONTROL = 0x11
+        VK_A = 0x41
+        VK_DELETE = 0x2E
 
-    # 用 Ctrl+F 快捷键打开搜索栏（比点击更可靠，不依赖精确位置）
-    VK_CONTROL = 0x11
-    KEYEVENTF_KEYUP = 0x0002
-    user32.keybd_event(VK_CONTROL, 0, 0, 0)
-    time.sleep(0.05)
-    user32.keybd_event(0x46, 0, 0, 0)  # 'F' 键
-    time.sleep(0.05)
-    user32.keybd_event(0x46, 0, KEYEVENTF_KEYUP, 0)
-    user32.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)
-    time.sleep(0.8)
+        # 1. PostMessage 点击搜索栏（客户区坐标），激活搜索框
+        click_lparam = (client_y << 16) | (client_x & 0xFFFF)
+        user32.PostMessageW(hwnd_main, WM_LBUTTONDOWN, MK_LBUTTON, click_lparam)
+        time.sleep(0.1)
+        user32.PostMessageW(hwnd_main, WM_LBUTTONUP, 0, click_lparam)
+        time.sleep(0.5)
 
-    # 输入联系人名
-    input_text_via_clipboard(hwnd_main, contact_name)
+        # 2. 清空搜索框（用 Backspace 删除，不用 Ctrl+A 因为 Qt 会把 A 当普通字符输入）
+        VK_BACK = 0x08
+        for _ in range(50):  # 最多删除 50 个字符
+            user32.PostMessageW(hwnd_main, WM_KEYDOWN, VK_BACK, 0)
+            time.sleep(0.01)
+            user32.PostMessageW(hwnd_main, WM_KEYUP, VK_BACK, 0)
+            time.sleep(0.01)
+        time.sleep(0.3)
+
+        # 3. PostMessage 发送 WM_CHAR 逐字符输入（不用 Ctrl+F，避免 F 被当作普通字符输入）
+        for ch in contact_name:
+            user32.PostMessageW(hwnd_main, WM_CHAR, ord(ch), 0)
+            time.sleep(0.05)
+        time.sleep(0.5)
+
+        print(f"    已通过 PostMessage 输入: {contact_name}")
+
+    else:
+        # SetForegroundWindow 成功，用原有方式
+        # 先点击主窗口中间栏中心，确保焦点在微信窗口上（Ctrl+F 依赖焦点）
+        # 中间栏中心 = 会话列表区域中心，点击此处不会触发任何按钮
+        h_img, w_img = pw_image.shape[:2]
+        mid_x = (nav_right + session_right) // 2
+        mid_y = h_img // 2
+        mid_screen_x, mid_screen_y = client_to_screen(
+            hwnd_main, mid_x - offset_x, mid_y - offset_y
+        )
+        physical_click(mid_screen_x, mid_screen_y)
+        time.sleep(0.3)
+
+        # 用 Ctrl+F 快捷键打开搜索栏（比点击更可靠，不依赖精确位置）
+        KEYEVENTF_KEYUP = 0x0002
+        user32.keybd_event(VK_CONTROL, 0, 0, 0)
+        time.sleep(0.05)
+        user32.keybd_event(0x46, 0, 0, 0)  # 'F' 键
+        time.sleep(0.05)
+        user32.keybd_event(0x46, 0, KEYEVENTF_KEYUP, 0)
+        user32.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)
+        time.sleep(0.8)
+
+        # 输入联系人名
+        input_text_via_clipboard(hwnd_main, contact_name)
+
     print("    等待 1.0 秒，让搜索候选框出现...")
     time.sleep(1.0)
 
@@ -686,8 +725,25 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
         cv2.imwrite(pre_click_path, pre_click_img)
         print(f"    点击前搜索候选框截图: {pre_click_path}")
 
-    print(f"    物理点击 ({click_screen_x}, {click_screen_y}) ...")
-    physical_click(click_screen_x, click_screen_y)
+    # 尝试用 SetForegroundWindow 激活搜索候选框窗口，如果失败则用 PostMessage 点击
+    fg_search_ok = safe_set_foreground_window(hwnd_search)
+    time.sleep(0.2)
+
+    if fg_search_ok:
+        print(f"    物理点击 ({click_screen_x}, {click_screen_y}) ...")
+        physical_click(click_screen_x, click_screen_y)
+    else:
+        # SetForegroundWindow 失败，用 SetCursorPos + mouse_event 点击屏幕坐标
+        # mouse_event 是全局的，点击会到达鼠标位置下的窗口，不需要窗口在前台
+        print(f"    ⚠️ SetForegroundWindow 失败，改用 SetCursorPos+mouse_event 点击 ({click_screen_x}, {click_screen_y}) ...")
+        MOUSEEVENTF_LEFTDOWN = 0x0002
+        MOUSEEVENTF_LEFTUP = 0x0004
+        user32.SetCursorPos(click_screen_x, click_screen_y)
+        time.sleep(0.1)
+        user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+        time.sleep(0.05)
+        user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+
     print("    等待 1.0 秒，让聊天界面出现...")  # 优化点1：1.5s → 1.0s
     time.sleep(1.0)
 
