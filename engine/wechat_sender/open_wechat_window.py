@@ -218,13 +218,12 @@ def _find_wechat_icon_in_tray(tray_img, tray_left, tray_top):
 
 
 def _physical_click(screen_x, screen_y):
-    """物理点击屏幕坐标。"""
-    user32.SetCursorPos(screen_x, screen_y)
-    time.sleep(0.1)
-    user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-    time.sleep(0.05)
-    user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-    time.sleep(0.1)
+    """物理点击屏幕坐标。
+
+    已委托给 human_sim.human_physical_click，托盘图标较小，用 2px 抖动半径。
+    """
+    from human_sim import human_physical_click
+    human_physical_click(screen_x, screen_y, jitter_radius=2)
     logger.info(f"   ✅ 已点击托盘图标: ({screen_x}, {screen_y})")
 
 

@@ -297,16 +297,14 @@ def safe_set_foreground_window(hwnd, max_retries=3):
 
 
 def physical_click(screen_x, screen_y):
-    """用 SetCursorPos + mouse_event 物理点击屏幕坐标"""
-    MOUSEEVENTF_LEFTDOWN = 0x0002
-    MOUSEEVENTF_LEFTUP = 0x0004
-    user32.SetCursorPos(screen_x, screen_y)
-    time.sleep(0.1)
-    user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-    time.sleep(0.05)
-    user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-    time.sleep(0.1)
-    logger.info(f"   物理点击屏幕坐标: ({screen_x}, {screen_y})")
+    """用 SetCursorPos + mouse_event 物理点击屏幕坐标。
+
+    已委托给 human_sim.human_physical_click，默认带 3px 随机抖动和随机点击间隔，
+    模拟人类点击行为，降低被封号风险。
+    """
+    # 延迟导入避免循环依赖
+    from human_sim import human_physical_click
+    human_physical_click(screen_x, screen_y, jitter_radius=3)
 
 
 def post_click(hwnd, client_x, client_y):
@@ -377,48 +375,12 @@ def set_clipboard_text(text):
 def input_text_via_clipboard(hwnd, text):
     """用剪贴板 + keybd_event Ctrl+V 输入文本（需要窗口在前台）。
 
-    会先 Ctrl+A 全选已有文字，再 Ctrl+V 粘贴，避免重复输入。
+    已委托给 human_sim.human_input_text，默认会把消息切成若干段，
+    以随机间隔逐段输入，模拟人类打字节奏，降低被封号风险。
     """
-    # 保存当前前台窗口
-    prev_hwnd = user32.GetForegroundWindow()
-
-    # 写入剪贴板（用 ctypes，避免 PowerShell 注入风险）
-    if not set_clipboard_text(text):
-        logger.warning(f"   ⚠️ 剪贴板设置失败，文本: {text}")
-        return False
-    time.sleep(0.2)
-
-    # 将微信设为前台
-    user32.SetForegroundWindow(hwnd)
-    time.sleep(0.3)
-
-    # 用 keybd_event 发送按键（全局键盘事件）
-    KEYEVENTF_KEYUP = 0x0002
-    VK_A = 0x41
-
-    # 先 Ctrl+A 全选（替换已有文字，避免重复输入）
-    user32.keybd_event(VK_CONTROL, 0, 0, 0)           # Ctrl down
-    time.sleep(0.05)
-    user32.keybd_event(VK_A, 0, 0, 0)                 # A down
-    time.sleep(0.05)
-    user32.keybd_event(VK_A, 0, KEYEVENTF_KEYUP, 0)   # A up
-    time.sleep(0.05)
-    user32.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)  # Ctrl up
-    time.sleep(0.1)
-
-    # Ctrl+V 粘贴
-    user32.keybd_event(VK_CONTROL, 0, 0, 0)           # Ctrl down
-    time.sleep(0.05)
-    user32.keybd_event(VK_V, 0, 0, 0)                 # V down
-    time.sleep(0.05)
-    user32.keybd_event(VK_V, 0, KEYEVENTF_KEYUP, 0)   # V up
-    time.sleep(0.05)
-    user32.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)  # Ctrl up
-    time.sleep(0.3)
-
-    logger.info(f"   已通过剪贴板+keybd_event 输入: {text}")
-
-    # 不恢复之前的前台窗口，让用户看到结果
+    # 延迟导入避免循环依赖
+    from human_sim import human_input_text
+    return human_input_text(hwnd, text)
 
 
 def find_search_bar(image, nav_right, session_right):

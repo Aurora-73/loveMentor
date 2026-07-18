@@ -686,18 +686,14 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
         cv2.imwrite(pre_click_path, pre_click_img)
         logger.info(f"    点击前搜索候选框截图: {pre_click_path}")
 
-    # 修复：直接用 SetCursorPos + mouse_event 点击头像，不调用 safe_set_foreground_window。
+    # 修复：直接用 human_physical_click 点击头像，不调用 safe_set_foreground_window。
     # 原因：safe_set_foreground_window 失败后会调用 click_taskbar_wechat（点击任务栏微信图标），
     #       这会激活微信主窗口并关闭搜索候选框，导致后续操作失败。
     # mouse_event 是全局的，点击会到达鼠标位置下的窗口，不需要窗口在前台。
+    # 防封号：使用 human_physical_click，带 3px 随机抖动和随机点击间隔。
     logger.info(f"    物理点击头像 ({click_screen_x}, {click_screen_y}) ...")
-    MOUSEEVENTF_LEFTDOWN = 0x0002
-    MOUSEEVENTF_LEFTUP = 0x0004
-    user32.SetCursorPos(click_screen_x, click_screen_y)
-    time.sleep(0.1)
-    user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-    time.sleep(0.05)
-    user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+    from human_sim import human_physical_click
+    human_physical_click(click_screen_x, click_screen_y, jitter_radius=3)
 
     logger.info("    等待 1.0 秒，让聊天界面出现...")  # 优化点1：1.5s → 1.0s
     time.sleep(1.0)

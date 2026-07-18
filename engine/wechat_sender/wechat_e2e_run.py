@@ -99,18 +99,13 @@ def close_window(hwnd):
 
 
 def physical_double_click(screen_x, screen_y):
-    """物理双击屏幕坐标"""
-    user32.SetCursorPos(screen_x, screen_y)
-    time.sleep(0.15)
-    user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-    time.sleep(0.05)
-    user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-    time.sleep(0.1)
-    user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-    time.sleep(0.05)
-    user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-    time.sleep(0.1)
-    logger.info(f"   物理双击屏幕坐标: ({screen_x}, {screen_y})")
+    """物理双击屏幕坐标。
+
+    已委托给 human_sim.human_physical_double_click，默认带 3px 随机抖动和随机间隔，
+    模拟人类双击行为，降低被封号风险。
+    """
+    from human_sim import human_physical_double_click
+    human_physical_double_click(screen_x, screen_y, jitter_radius=3)
 
 
 def handle_stage_2_history_window(attempt_idx, template_path):
