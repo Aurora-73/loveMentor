@@ -235,6 +235,142 @@ def rollback_wechat_state():
     time.sleep(0.3)
 
 
+def _file_hash(file_path):
+    """计算文件内容的 MD5 哈希（用于比较新旧头像是否相同）。"""
+    import hashlib
+    try:
+        with open(file_path, "rb") as f:
+            return hashlib.md5(f.read()).hexdigest()
+    except Exception:
+        return ""
+
+
+def _refresh_avatar_and_maybe_retry(contact_name, template_path, message):
+    """阶段一全部失败后，更新头像并检测变化，决定是否自动重试。
+
+    用户需求：
+    - 不要每次发消息都更新头像
+    - 连续重试失败后，返回失败消息前更新头像
+    - 检测新旧头像是否一样：
+      - 一样 → 不重试（头像不是问题），返回 False
+      - 不一样 → 自动重试发送流程，不通知 agent
+
+    Args:
+        contact_name: 联系人标识符（用于查询头像）
+        template_path: 原头像模板路径
+        message: 要发送的消息（重试时用）
+
+    Returns:
+        tuple (success: bool, new_template_path: str)
+        - success=True: 头像更新后重试成功
+        - success=False, new_template_path=template_path: 头像未变或重试仍失败
+    """
+    logger.info("\n[头像更新] 阶段一失败，尝试更新头像后重试...")
+
+    # 1. 记录旧头像 hash
+    old_hash = _file_hash(template_path) if os.path.exists(template_path) else ""
+    logger.info(f"   旧头像: {template_path} hash={old_hash[:8] if old_hash else 'N/A'}")
+
+    # 2. 强制更新头像
+    # 注意：contact_name 可能是搜索名（微信号/alias），avatar_fetcher 查不到时
+    # 回退用 template_path 的文件名（通常是 display_name）查询
+    try:
+        from engine.wechat_data.avatar_fetcher import get_avatar
+        new_path = get_avatar(contact_name, force_refresh=True)
+        if not new_path or not os.path.exists(new_path):
+            # 回退：用 template_path 的文件名（stem）作为标识符
+            fallback_name = os.path.splitext(os.path.basename(template_path))[0]
+            logger.info(f"   用搜索名 '{contact_name}' 查询失败，回退用 '{fallback_name}' 查询")
+            new_path = get_avatar(fallback_name, force_refresh=True)
+        if not new_path or not os.path.exists(new_path):
+            logger.warning(f"   ⚠️ 头像更新失败：未获取到 {contact_name} 的新头像")
+            return False, template_path
+        logger.info(f"   新头像: {new_path}")
+    except Exception as e:
+        logger.warning(f"   ⚠️ 头像更新异常: {e}")
+        return False, template_path
+
+    # 3. 比较新旧头像
+    new_hash = _file_hash(new_path)
+    logger.info(f"   新头像 hash={new_hash[:8] if new_hash else 'N/A'}")
+
+    if old_hash and old_hash == new_hash:
+        logger.info(f"   ℹ️ 新旧头像相同（hash 一致），头像未变化，无需重试")
+        return False, template_path
+
+    logger.info(f"   🔄 检测到头像已变化（hash 不同），自动重试发送流程...")
+
+    # 4. 头像变了，用新头像重新执行端到端流程
+    # 注意：不通知 agent，静默重试
+    # 先回滚微信状态
+    rollback_wechat_state()
+    time.sleep(1.0)
+
+    # 重新执行阶段一（只重试一次，避免无限循环）
+    logger.info("\n" + "#" * 60)
+    logger.info("#  [头像更新后重试] 阶段一：搜索+点击头像+绿色环验证")
+    logger.info("#" * 60)
+
+    retry_success = False
+    retry_target = None
+    retry_count_after = 0
+
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        if attempt > 1:
+            logger.info("\n[重试预备] 清理搜索栏残留状态 + 滚动+点击...")
+            KEYEVENTF_KEYUP = 0x0002
+            for _ in range(2):
+                user32.keybd_event(0x1B, 0, 0, 0)
+                time.sleep(0.05)
+                user32.keybd_event(0x1B, 0, KEYEVENTF_KEYUP, 0)
+                time.sleep(0.1)
+            time.sleep(0.3)
+            scroll_in_main_middle_column()
+            time.sleep(0.5)
+
+        success, target, count_after = run_one_attempt(
+            attempt, MAX_ATTEMPTS, do_click=True,
+            contact_name=contact_name, template_path=new_path,
+        )
+
+        if success:
+            retry_success = True
+            retry_target = target
+            retry_count_after = count_after
+            break
+        else:
+            logger.error(f"\n❌ [头像更新后] 第 {attempt} 次尝试失败")
+            if attempt < MAX_ATTEMPTS:
+                time.sleep(0.5)
+
+    if not retry_success:
+        logger.error(f"\n❌ [头像更新后] 阶段一仍然失败（{MAX_ATTEMPTS} 次尝试）")
+        rollback_wechat_state()
+        return False, new_path
+
+    logger.info(f"\n✅ [头像更新后] 阶段一成功（第 {attempt} 次尝试）")
+
+    # 阶段二
+    chat_count, chat_wins = count_chat_windows()
+    logger.info(f"   聊天窗口数: {chat_count}")
+    if chat_count == 2:
+        stage2_ok = handle_stage_2_history_window(attempt, new_path)
+        if not stage2_ok:
+            logger.error("   ❌ [头像更新后] 阶段二失败")
+            rollback_wechat_state()
+            return False, new_path
+
+    # 阶段三
+    stage3_ok = run_send_message(message, do_send=True)
+    if not stage3_ok:
+        logger.error("   ❌ [头像更新后] 阶段三失败")
+        rollback_wechat_state()
+        return False, new_path
+
+    logger.info("\n  ✅ [头像更新后] 端到端流程全部成功")
+    return True, new_path
+
+
 def run_e2e(message, contact_name, template_path):
     """端到端流程：阶段一 → 阶段二 → 阶段三
 
@@ -302,7 +438,15 @@ def run_e2e(message, contact_name, template_path):
 
     if not stage1_success:
         logger.error(f"\n❌ 阶段一失败：{MAX_ATTEMPTS} 次尝试全部失败")
-        rollback_wechat_state()
+        # 用户需求：连续重试失败后，更新头像并检测变化，决定是否自动重试
+        # - 头像未变 → 不重试（头像不是问题），直接返回失败
+        # - 头像变了 → 自动重试发送流程，不通知 agent
+        retry_success, new_template = _refresh_avatar_and_maybe_retry(
+            contact_name, template_path, message
+        )
+        if retry_success:
+            return True
+        # 头像未变或重试仍失败，返回失败
         return False
 
     logger.info(f"\n✅ 阶段一成功（第 {attempt_idx} 次尝试）")
@@ -371,3 +515,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

@@ -510,9 +510,9 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
         logger.info(f"    已通过 PostMessage 输入: {contact_name}")
 
     else:
-        # SetForegroundWindow 成功，用原有方式
+        # SetForegroundWindow 成功，用 Ctrl+F 快捷键打开搜索栏
+        # 用户确认：Ctrl+F 可直接打开微信搜索栏，是最佳方案（不依赖精确点击位置）
         # 先点击主窗口中间栏中心，确保焦点在微信窗口上（Ctrl+F 依赖焦点）
-        # 中间栏中心 = 会话列表区域中心，点击此处不会触发任何按钮
         h_img, w_img = pw_image.shape[:2]
         mid_x = (nav_right + session_right) // 2
         mid_y = h_img // 2
@@ -686,24 +686,18 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
         cv2.imwrite(pre_click_path, pre_click_img)
         logger.info(f"    点击前搜索候选框截图: {pre_click_path}")
 
-    # 尝试用 SetForegroundWindow 激活搜索候选框窗口，如果失败则用 PostMessage 点击
-    fg_search_ok = safe_set_foreground_window(hwnd_search)
-    time.sleep(0.2)
-
-    if fg_search_ok:
-        logger.info(f"    物理点击 ({click_screen_x}, {click_screen_y}) ...")
-        physical_click(click_screen_x, click_screen_y)
-    else:
-        # SetForegroundWindow 失败，用 SetCursorPos + mouse_event 点击屏幕坐标
-        # mouse_event 是全局的，点击会到达鼠标位置下的窗口，不需要窗口在前台
-        logger.warning(f"    ⚠️ SetForegroundWindow 失败，改用 SetCursorPos+mouse_event 点击 ({click_screen_x}, {click_screen_y}) ...")
-        MOUSEEVENTF_LEFTDOWN = 0x0002
-        MOUSEEVENTF_LEFTUP = 0x0004
-        user32.SetCursorPos(click_screen_x, click_screen_y)
-        time.sleep(0.1)
-        user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-        time.sleep(0.05)
-        user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+    # 修复：直接用 SetCursorPos + mouse_event 点击头像，不调用 safe_set_foreground_window。
+    # 原因：safe_set_foreground_window 失败后会调用 click_taskbar_wechat（点击任务栏微信图标），
+    #       这会激活微信主窗口并关闭搜索候选框，导致后续操作失败。
+    # mouse_event 是全局的，点击会到达鼠标位置下的窗口，不需要窗口在前台。
+    logger.info(f"    物理点击头像 ({click_screen_x}, {click_screen_y}) ...")
+    MOUSEEVENTF_LEFTDOWN = 0x0002
+    MOUSEEVENTF_LEFTUP = 0x0004
+    user32.SetCursorPos(click_screen_x, click_screen_y)
+    time.sleep(0.1)
+    user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+    time.sleep(0.05)
+    user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
 
     logger.info("    等待 1.0 秒，让聊天界面出现...")  # 优化点1：1.5s → 1.0s
     time.sleep(1.0)
@@ -842,4 +836,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
