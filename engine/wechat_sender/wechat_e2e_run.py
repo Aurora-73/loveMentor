@@ -312,13 +312,20 @@ def _refresh_avatar_and_maybe_retry(contact_name, template_path, message):
 
     for attempt in range(1, MAX_ATTEMPTS + 1):
         # 每次尝试前确保微信窗口存在
-        from wechat_window_utils import find_wechat_window as _find_wx
+        from wechat_window_utils import find_wechat_window as _find_wx, restore_wechat_windows
         if not _find_wx():
             logger.info(f"\n[头像更新后-窗口唤醒] 微信窗口不存在，尝试唤醒...")
             try:
                 from open_wechat_window import open_wechat_window_robust
                 if open_wechat_window_robust(timeout=10.0):
                     logger.info(f"   ✅ 微信窗口已唤醒")
+                    # 唤醒后立即保持窗口前台和可见，避免被系统自动隐藏
+                    wx_win = _find_wx()
+                    if wx_win:
+                        from click_search_and_input import safe_set_foreground_window
+                        restore_wechat_windows()
+                        safe_set_foreground_window(wx_win["hwnd"])
+                        logger.info(f"   ✅ 微信窗口已设为前台 (hwnd={wx_win['hwnd']})")
                     time.sleep(0.5)
             except Exception as e:
                 logger.warning(f"   ⚠️ 窗口唤醒异常: {e}")
@@ -413,18 +420,26 @@ def run_e2e(message, contact_name, template_path):
         attempt_idx = attempt
 
         # 每次尝试前确保微信窗口存在，不存在则通过托盘图标唤醒
-        from wechat_window_utils import find_wechat_window
+        from wechat_window_utils import find_wechat_window, restore_wechat_windows
         if not find_wechat_window():
             logger.info(f"\n[窗口唤醒] 微信窗口不存在，尝试通过托盘图标唤醒...")
             try:
                 from open_wechat_window import open_wechat_window_robust
                 if open_wechat_window_robust(timeout=10.0):
                     logger.info(f"   ✅ 微信窗口已唤醒")
+                    # 唤醒后立即保持窗口前台和可见，避免被系统自动隐藏
+                    from wechat_window_utils import find_wechat_window as _fw
+                    wx_win = _fw()
+                    if wx_win:
+                        from click_search_and_input import safe_set_foreground_window
+                        restore_wechat_windows()  # 恢复最小化的窗口
+                        safe_set_foreground_window(wx_win["hwnd"])  # 设为前台
+                        logger.info(f"   ✅ 微信窗口已设为前台 (hwnd={wx_win['hwnd']})")
                     time.sleep(0.5)
                 else:
                     logger.warning(f"   ⚠️ 微信窗口唤醒失败，继续尝试（可能 PrintWindow 仍能工作）")
             except Exception as e:
-                logger.warning(f"   ⚠️ 微信窗口唤醒异常: {e}")
+                logger.warning(f"   ⚠️ 窗口唤醒异常: {e}")
 
         if attempt > 1:
             logger.info("\n[重试预备] 清理搜索栏残留状态 + 滚动+点击...")
