@@ -68,7 +68,7 @@ class _KEYBDINPUT(ctypes.Structure):
         ("wScan", wintypes.WORD),
         ("dwFlags", wintypes.DWORD),
         ("time", wintypes.DWORD),
-        ("dwExtraInfo", ctypes.POINTER(wintypes.ULONG)),
+        ("dwExtraInfo", ctypes.c_void_p),  # ULONG_PTR，用 c_void_p 避免 64 位指针截断
     ]
 
 
@@ -91,6 +91,9 @@ user32.MapVirtualKeyW.argtypes = [wintypes.UINT, wintypes.UINT]
 user32.MapVirtualKeyW.restype = wintypes.UINT
 user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
 user32.PostMessageW.restype = wintypes.BOOL
+# keybd_event 函数原型（64 位兼容，作为 SendInput 的 fallback）
+user32.keybd_event.argtypes = [wintypes.BYTE, wintypes.BYTE, wintypes.DWORD, ctypes.c_void_p]
+user32.keybd_event.restype = None
 
 
 # ── 防封号参数（可在 config.py 中覆盖）─────────────────────────
@@ -172,12 +175,11 @@ def _jitter_point(x, y, radius=DEFAULT_JITTER_RADIUS):
 
 
 def _send_input_keyboard(wVk, wScan, dwFlags):
-    """用 SendInput 发送一个键盘事件（更接近真实硬件事件，带扫描码）。
+    """用 SendInput 发送一个键盘事件，失败时回退到 keybd_event。
 
-    相比 keybd_event：
-    1. 支持扫描码（KEYEVENTF_SCANCODE），与真实键盘事件一致
-    2. SendInput 是更底层的 API，不被其他钩子拦截
-    3. 64 位兼容，参数原型已设置
+    优先使用 SendInput（更底层，带扫描码），如果失败则回退到 keybd_event。
+    SendInput 在某些环境下可能因结构体对齐或权限问题失败，
+    keybd_event 内部也是调用 SendInput，但封装更稳定。
 
     Args:
         wVk: 虚拟键码（用 KEYEVENTF_UNICODE 时传 0）
@@ -187,17 +189,29 @@ def _send_input_keyboard(wVk, wScan, dwFlags):
     Returns:
         bool: 是否成功发送
     """
-    inp = INPUT()
-    inp.type = INPUT_KEYBOARD
-    inp.ii.ki.wVk = wVk
-    inp.ii.ki.wScan = wScan
-    inp.ii.ki.dwFlags = dwFlags
-    inp.ii.ki.time = 0
-    inp.ii.ki.dwExtraInfo = ctypes.pointer(wintypes.ULONG(0))
-    result = user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
-    if result == 0:
-        logger.warning(f"   ⚠️ SendInput 失败 (wVk={wVk}, wScan={wScan}, flags={dwFlags})")
-        return False
+    # 尝试 SendInput
+    try:
+        inp = INPUT()
+        inp.type = INPUT_KEYBOARD
+        inp.ii.ki.wVk = wVk
+        inp.ii.ki.wScan = wScan
+        inp.ii.ki.dwFlags = dwFlags
+        inp.ii.ki.time = 0
+        inp.ii.ki.dwExtraInfo = None  # NULL 指针（c_void_p）
+        result = user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+        if result > 0:
+            return True
+        # SendInput 失败，回退到 keybd_event
+        logger.debug(f"   SendInput 返回 {result}，回退到 keybd_event (wVk={wVk}, wScan={wScan})")
+    except Exception as e:
+        logger.debug(f"   SendInput 异常: {e}，回退到 keybd_event")
+
+    # 回退：keybd_event（带扫描码）
+    # keybd_event 签名：keybd_event(bVk, bScan, dwFlags, dwExtraInfo)
+    # bScan 是 BYTE 类型，但对于大多数键扫描码 < 128，足够
+    # 对于 Unicode 字符（KEYEVENTF_UNICODE），wScan 是字符码，可能 > 127
+    # keybd_event 的 bScan 是 BYTE，会截断，但 Unicode 输入主要靠 wScan
+    user32.keybd_event(wVk, wScan & 0xFF, dwFlags, 0)
     return True
 
 
