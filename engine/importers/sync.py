@@ -158,6 +158,30 @@ def run_sync(
         except Exception as e:
             logger.error(f"朋友圈同步失败: {e}")
 
+    # 7. 语音转文字（同步后自动批量识别，默认开启）
+    if config.weflow.voice_transcribe:
+        try:
+            from engine.importers.voice_transcriber import (
+                create_transcriber_from_config,
+                transcribe_voice_messages,
+            )
+            transcriber = create_transcriber_from_config(config)
+            if transcriber:
+                success, failed = transcribe_voice_messages(
+                    db,
+                    transcriber,
+                    limit=config.weflow.voice_transcribe_limit,
+                    session_id=session_id,
+                    verbose=verbose,
+                )
+                transcriber.close()
+                if verbose:
+                    logger.info(f"语音转文字: 成功 {success}，失败 {failed}")
+            else:
+                logger.warning("语音转文字：未找到 media_0.db，跳过（需运行 WCD 解密生成）")
+        except Exception as e:
+            logger.error(f"语音转文字失败: {e}")
+
     result.elapsed_seconds = time.time() - start_time
 
     # 6. 记录日志

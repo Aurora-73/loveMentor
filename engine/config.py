@@ -66,6 +66,9 @@ class WeFlowConfig:
         self.media_download: bool = d.get("media_download", False)
         self.sync_moments: bool = d.get("sync_moments", True)
         self.decrypted_db_dir: str = d.get("decrypted_db_dir", "")  # WCD 解密数据库目录（用于标签提取）
+        # 语音转文字（同步后自动批量识别 type=34 的语音消息）
+        self.voice_transcribe: bool = d.get("voice_transcribe", True)
+        self.voice_transcribe_limit: int = d.get("voice_transcribe_limit", 50)
 
 
 

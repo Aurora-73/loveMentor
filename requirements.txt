@@ -2,3 +2,6 @@ pyyaml>=6.0
 pytest>=8.0
 fastmcp>=2.0
 pydantic>=2.7
+# 语音转文字（sync.py 同步后自动识别 type=34 语音消息）
+faster-whisper>=1.0.0
+pysilk-mod>=1.6.4
