@@ -202,8 +202,7 @@ flowchart TD
 │   │   ├── image_utils.py               # 公共图像工具（imread_unicode）
 │   │   ├── click_search_and_input.py    # 物理点击+剪贴板输入
 │   │   ├── human_sim.py                 # 人类模拟（点击抖动+逐字输入）
-│   │   ├── test_current_wechat.py       # 窗口枚举+PrintWindow 截图
-│   │   ├── test_stage_2_history.py      # 阶段二单独测试脚本
+│   │   ├── window_capture.py            # 窗口枚举+PrintWindow 截图（find_wechat_window/screencap_window）
 │   │   ├── config.py                    # 配置（阈值集中管理）
 │   │   ├── logger.py                    # 分级日志
 │   │   ├── wechat_window_utils.py       # 窗口工具（restore_wechat_windows）

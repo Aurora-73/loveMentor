@@ -45,7 +45,7 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 from dynamic_detector import WeChatLayoutDetector  # noqa: E402
-from test_current_wechat import find_wechat_window, screencap_window  # noqa: E402
+from window_capture import find_wechat_window, screencap_window  # noqa: E402
 from wechat_window_utils import find_largest_wechat_window  # noqa: E402  统一窗口枚举
 from click_search_and_input import (  # noqa: E402
     get_client_offset,

@@ -38,7 +38,7 @@ from click_avatar_in_search_window import (  # noqa: E402
     MAX_RETRIES,
 )
 from send_message_run import run_send_message  # noqa: E402
-from test_current_wechat import screencap_window  # noqa: E402
+from window_capture import screencap_window  # noqa: E402
 from wechat_window_utils import count_chat_windows, find_history_chat_window  # noqa: E402  统一窗口枚举
 from click_search_and_input import client_to_screen, physical_click, safe_set_foreground_window, get_client_offset  # noqa: E402
 
@@ -302,7 +302,7 @@ def rollback_wechat_state():
 
     # 步骤 3：主窗口置顶
     try:
-        from test_current_wechat import find_wechat_window
+        from window_capture import find_wechat_window
         from click_search_and_input import safe_set_foreground_window
         main_win = find_wechat_window()
         if main_win:
@@ -504,7 +504,7 @@ def _verify_chat_header_display_name(contact_profile, image=None):
         img = image
         logger.info("   使用传入的截图（避免重复截图）")
     else:
-        from test_current_wechat import find_wechat_window, screencap_window
+        from window_capture import find_wechat_window, screencap_window
         window = find_wechat_window()
         if window is None:
             logger.warning("   ⚠️ 未找到微信窗口，跳过 display_name 验证")

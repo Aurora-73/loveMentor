@@ -30,7 +30,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from dynamic_detector import WeChatLayoutDetector
-from test_current_wechat import find_wechat_window, screencap_window
+from window_capture import find_wechat_window, screencap_window
 
 from logger import get_logger  # noqa: E402
 logger = get_logger(__name__)
@@ -210,7 +210,7 @@ def click_taskbar_wechat(max_wait=5.0):
         foreground_hwnd = user32.GetForegroundWindow()
         if foreground_hwnd:
             # 检查前台窗口是否是微信
-            from test_current_wechat import find_wechat_window
+            from window_capture import find_wechat_window
             wechat_window = find_wechat_window()
             if wechat_window and wechat_window["hwnd"] == foreground_hwnd:
                 elapsed = time.time() - start_time

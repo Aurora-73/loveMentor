@@ -15,7 +15,7 @@
   - wechat_window_utils.check_login_status（登录检查）
   - wechat_window_utils.ensure_wechat_window_width（宽度调整）
   - wechat_window_utils.find_wechat_window（窗口查找）
-  - test_current_wechat.find_wechat_window（窗口查找，兼容）
+  - window_capture.find_wechat_window（窗口查找，兼容）
 
 回退顺序（v2 修正：先轻后重）：
 1. 托盘唤醒（open_wechat_window_robust）
@@ -74,7 +74,7 @@ def ensure_wechat_window(max_wait: float = 15.0) -> dict:
     except Exception:
         pass
 
-    from engine.wechat_sender.test_current_wechat import find_wechat_window
+    from engine.wechat_sender.window_capture import find_wechat_window
 
     # 1. 检查微信进程是否在运行
     process_running = is_wechat_running()

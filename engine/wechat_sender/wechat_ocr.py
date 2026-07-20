@@ -82,7 +82,7 @@ def ocr_wechat_window(region: str = "full", use_cache: bool = False) -> dict:
 
     # 导入截图和布局检测
     import cv2
-    from engine.wechat_sender.test_current_wechat import find_wechat_window, screencap_window
+    from engine.wechat_sender.window_capture import find_wechat_window, screencap_window
     from engine.wechat_sender.dynamic_detector import WeChatLayoutDetector
 
     # 获取微信窗口

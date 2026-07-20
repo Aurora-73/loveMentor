@@ -14,9 +14,9 @@
 6. 验证窗口数变为 1
 
 用法：
-    python E:\\Code\\MaaFramework\\examples\\wechat_auto\\test_stage_2_history.py [联系人名]
+    python tests/test_stage_2_history.py [联系人名]
 
-    联系人名默认 [REDACTED]，模板路径为 E:\\Code\\MaaFramework\\templates\\<联系人名>.jpg
+    联系人名默认 [REDACTED]，模板路径为 data/avatars/<联系人名>.jpg
 """
 import os
 import sys
@@ -28,19 +28,22 @@ try:
 except Exception:
     pass
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from wechat_e2e_run import (  # noqa: E402
+# 添加项目根目录到 sys.path（用于 from engine.wechat_sender.xxx import 的绝对导入）
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+from engine.wechat_sender.wechat_e2e_run import (  # noqa: E402
     count_chat_windows,
     handle_stage_2_history_window,
     TEMPLATES_DIR,
 )
 
-from logger import get_logger  # noqa: E402
+from engine.wechat_sender.logger import get_logger  # noqa: E402
 logger = get_logger(__name__)
 
 
 def main():
-    output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
+    output_dir = os.path.join(_PROJECT_ROOT, "data", "outputs", "test_stage_2")
     os.makedirs(output_dir, exist_ok=True)
 
     # 联系人名（命令行参数，默认 [REDACTED]）
@@ -73,7 +76,7 @@ def main():
         logger.info("      （会弹出独立的'搜索聊天记录'窗口）")
         logger.info("   3. 确认'搜索聊天记录'窗口可见且包含对方头像")
         logger.info("   4. 重新运行本脚本：")
-        logger.info(f"      python E:\\Code\\loveMentor\\send_message\\test_stage_2_history.py {contact_name}")
+        logger.info(f"      python tests/test_stage_2_history.py {contact_name}")
         return False
 
     logger.info("\n✅ 已是 2 窗口状态，开始执行阶段二逻辑")

@@ -46,7 +46,7 @@ from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from dynamic_detector import WeChatLayoutDetector  # noqa: E402
-from test_current_wechat import find_wechat_window, screencap_window  # noqa: E402
+from window_capture import find_wechat_window, screencap_window  # noqa: E402
 from wechat_window_utils import (  # noqa: E402  统一窗口枚举
     find_search_candidate_window,
     find_search_candidate_windows,
