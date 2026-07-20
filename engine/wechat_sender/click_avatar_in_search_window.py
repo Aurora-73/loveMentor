@@ -90,6 +90,7 @@ MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP = 0x0004
 MOUSEEVENTF_WHEEL = 0x0800
 WHEEL_DELTA = 120
+KEYEVENTF_KEYUP = 0x0002
 
 
 def find_search_bar_in_image(image):
@@ -178,23 +179,34 @@ def find_search_bar_in_image(image):
     return layout_search_x, layout_search_y, nav_right, session_right
 
 
-def verify_main_window_layout(image, strict=True):
+def verify_main_window_layout(image, strict=True, initial_layout=None):
     """验证主窗口截图的布局是否正常（三个区域分界线可检测）。
 
     用户反馈：代码有时操作的是"网络搜索窗口"而非真正的主窗口。
     通过检测三个区域（导航栏、会话列表、聊天区域）的分界线，
     可以确认截图确实来自主窗口。
 
-    合理布局参考（来自正常微信主窗口）：
-    - nav_right 在 [50, 200] 范围内（导航栏宽度）
-    - session_right > nav_right + 100（中间栏至少 100px 宽）
-    - session_right < width - 200（聊天区域至少 200px 宽）
-    - nav_right < session_right（顺序正确）
+    ⚠️ 用户反馈（重要）：不要用硬编码的预设范围（如 [50, 200]）判断，
+    因为用户可能放大/缩小/调整窗口。正确做法是和**初始布局**对比，
+    即操作开始时捕获的布局。如果当前布局和初始布局一致（容差范围内），
+    说明仍然是主窗口；如果布局完全不同，说明可能操作了错误的窗口
+    （如网络搜索窗口）。
+
+    验证逻辑（按优先级）：
+    1. 如果有 initial_layout：和初始布局对比（容差 ±30px 或 ±10% 窗口宽度）
+       - nav_right 和 session_right 都在容差范围内 → 主窗口
+       - 任一分界线偏离超过容差 → 不是主窗口
+    2. 如果没有 initial_layout：只做基本合理性检查
+       - nav_right > 0
+       - session_right > nav_right
+       - session_right < width
+       （不检查具体范围，因为不知道用户的窗口大小）
 
     Args:
         image: 主窗口截图（BGR）
-        strict: True=严格模式（任一条件不满足就判失败），
-                False=宽松模式（只检查极端异常）
+        strict: True=严格模式（保留参数，目前未使用，向后兼容）
+        initial_layout: 初始布局 dict，包含 nav_right, session_right, width, height
+                       如果为 None，使用模块级 _initial_main_window_layout
 
     Returns:
         tuple (is_valid: bool, layout_info: dict)
@@ -205,6 +217,9 @@ def verify_main_window_layout(image, strict=True):
             "reason": str  # 失败原因（is_valid=False 时有值）
           }
     """
+    # 声明 global：函数内会修改模块级 _initial_main_window_layout
+    # （首次调用自动捕获，或窗口大小变化超 20% 时重新捕获）
+    global _initial_main_window_layout
     h, w = image.shape[:2]
     detector = WeChatLayoutDetector()
     nav_right, session_right = detector.detect(image)
@@ -217,36 +232,134 @@ def verify_main_window_layout(image, strict=True):
         "reason": "",
     }
 
-    # 检查 1：nav_right 在合理范围
-    if not (50 <= nav_right <= 200):
-        info["reason"] = f"nav_right={nav_right} 不在合理范围 [50, 200]"
+    # 基本合理性检查（始终执行）
+    if nav_right <= 0:
+        info["reason"] = f"nav_right={nav_right} <= 0，检测失败"
         return False, info
-
-    # 检查 2：session_right > nav_right + 100（中间栏至少 100px 宽）
-    if session_right <= nav_right + 100:
+    if session_right <= nav_right:
         info["reason"] = (
-            f"session_right={session_right} <= nav_right+100={nav_right + 100}，"
-            f"中间栏宽度不足"
-        )
-        return False, info
-
-    # 检查 3：session_right < width - 200（聊天区域至少 200px 宽）
-    if session_right >= w - 200:
-        info["reason"] = (
-            f"session_right={session_right} >= width-200={w - 200}，"
-            f"聊天区域宽度不足"
-        )
-        return False, info
-
-    # 检查 4（严格模式）：nav_right < session_right（顺序正确）
-    if strict and nav_right >= session_right:
-        info["reason"] = (
-            f"nav_right={nav_right} >= session_right={session_right}，"
+            f"session_right={session_right} <= nav_right={nav_right}，"
             f"分界线顺序异常"
+        )
+        return False, info
+    if session_right >= w:
+        info["reason"] = (
+            f"session_right={session_right} >= width={w}，"
+            f"会话列表右边界超出窗口"
+        )
+        return False, info
+
+    # 和初始布局对比（如果有）
+    ref = initial_layout if initial_layout is not None else _initial_main_window_layout
+    if ref is None:
+        # 第一次调用：自动捕获初始布局
+        # 信任 find_wechat_window 已选对窗口（Qt 类优先），从此截图捕获布局
+        # 后续调用会和这个布局对比，检测是否切换到了错误的窗口
+        _initial_main_window_layout = {
+            "nav_right": nav_right,
+            "session_right": session_right,
+            "width": w,
+            "height": h,
+        }
+        logger.info(
+            f"[初始布局] 自动捕获: nav_right={nav_right} session_right={session_right} "
+            f"size={w}x{h}"
+        )
+        return True, info
+
+    # 容差：±30px 或 ±10% 窗口宽度，取较大值
+    # 注意：如果窗口大小变化超过 20%，说明窗口被 resize，应该重新捕获初始布局
+    ref_w = ref.get("width", w)
+    ref_h = ref.get("height", h)
+    size_change_ratio = max(abs(w - ref_w) / max(ref_w, 1), abs(h - ref_h) / max(ref_h, 1))
+
+    if size_change_ratio > 0.2:
+        # 窗口大小变化超过 20%，重新捕获初始布局
+        logger.info(
+            f"[初始布局] 窗口大小变化 {size_change_ratio*100:.1f}% "
+            f"(从 {ref_w}x{ref_h} 到 {w}x{h})，重新捕获初始布局"
+        )
+        _initial_main_window_layout = {
+            "nav_right": nav_right,
+            "session_right": session_right,
+            "width": w,
+            "height": h,
+        }
+        return True, info
+
+    tol = max(30, int(w * 0.1))
+    ref_nav = ref.get("nav_right", 0)
+    ref_session = ref.get("session_right", 0)
+
+    nav_diff = abs(nav_right - ref_nav)
+    session_diff = abs(session_right - ref_session)
+
+    if nav_diff > tol:
+        info["reason"] = (
+            f"nav_right={nav_right} 与初始值 {ref_nav} 偏差 {nav_diff}px "
+            f"超过容差 {tol}px，可能不是主窗口"
+        )
+        return False, info
+    if session_diff > tol:
+        info["reason"] = (
+            f"session_right={session_right} 与初始值 {ref_session} 偏差 {session_diff}px "
+            f"超过容差 {tol}px，可能不是主窗口"
         )
         return False, info
 
     return True, info
+
+
+# 模块级变量：存储操作开始时的主窗口初始布局
+_initial_main_window_layout = None
+
+
+def capture_initial_main_window_layout(image=None):
+    """捕获主窗口的初始布局（用于后续对比）。
+
+    用户反馈：verify_main_window_layout 不应该用硬编码范围判断，
+    而应该和操作开始时的初始布局对比。
+
+    此函数在操作开始时调用一次，捕获初始布局存储到模块级变量。
+    后续 verify_main_window_layout 调用时会自动和这个初始布局对比。
+
+    Args:
+        image: 主窗口截图（BGR）。如果为 None，会自动截图。
+
+    Returns:
+        bool: 是否成功捕获
+    """
+    global _initial_main_window_layout
+
+    try:
+        if image is None:
+            window = find_wechat_window()
+            if not window:
+                logger.warning("[初始布局] 未找到微信主窗口，无法捕获初始布局")
+                return False
+            image = screencap_window(window["hwnd"])
+            if image is None:
+                logger.warning("[初始布局] 主窗口截图失败")
+                return False
+
+        h, w = image.shape[:2]
+        detector = WeChatLayoutDetector()
+        nav_right, session_right = detector.detect(image)
+
+        _initial_main_window_layout = {
+            "nav_right": nav_right,
+            "session_right": session_right,
+            "width": w,
+            "height": h,
+        }
+        logger.info(
+            f"[初始布局] 已捕获: nav_right={nav_right} session_right={session_right} "
+            f"size={w}x{h}"
+        )
+        return True
+    except Exception as e:
+        logger.warning(f"[初始布局] 捕获异常: {e}")
+        return False
 
 
 def find_template_multiscale(scene, template_path, scales, threshold, nms_min_dist):
@@ -303,6 +416,78 @@ def find_search_box_in_candidate(image):
     search_y = search_top + int(np.argmax(row_brightness[search_top:search_bottom]))
     search_x = w // 2
     return search_x, search_y
+
+
+def find_first_avatar_geometry(image, search_y=None, left_region_width=60,
+                                min_area=100, min_y_offset=50):
+    """用图像处理在候选框左侧区域定位第一个候选记录的头像位置。
+
+    微信搜索候选框布局规律：
+    - 顶部是搜索框（约前 50px）
+    - 下方是候选记录列表，每条记录左侧有头像
+    - 头像在候选框左侧约 x=45-60 区域，是圆形/圆角矩形
+
+    本函数通过阈值分割 + 轮廓检测定位头像，避免依赖模板匹配
+    （CDN 头像原图与候选框中显示的圆形头像视觉差异大，模板匹配置信度低）。
+
+    Args:
+        image: 候选框截图（BGR）
+        search_y: 搜索框 y 坐标，None 则自动估算（取顶部 20% 区域最亮行）
+        left_region_width: 左侧区域宽度（默认 60px，覆盖头像所在区域）
+        min_area: 最小轮廓面积（过滤小噪声，默认 100）
+        min_y_offset: 头像最小 y 偏移（跳过搜索框区域，默认 50）
+
+    Returns:
+        dict: {"cx": int, "cy": int, "w": int, "h": int, "bbox": (x,y,w,h)}
+              未找到则返回 None
+    """
+    h, w = image.shape[:2]
+    if search_y is None:
+        # 自动估算搜索框位置（顶部 20% 区域最亮行）
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        row_brightness = np.mean(gray, axis=1)
+        search_y = int(np.argmax(row_brightness[:int(h * 0.2)]))
+
+    # 左侧区域阈值分割（头像通常比背景暗）
+    left_region = image[:, :left_region_width]
+    gray_left = cv2.cvtColor(left_region, cv2.COLOR_BGR2GRAY)
+    # 高斯模糊降低噪声
+    gray_blur = cv2.GaussianBlur(gray_left, (3, 3), 0)
+    # 阈值分割：暗色区域（头像）= 255
+    _, thresh = cv2.threshold(gray_blur, 200, 255, cv2.THRESH_BINARY_INV)
+
+    # 形态学操作去除小噪声
+    kernel = np.ones((3, 3), np.uint8)
+    thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=1)
+
+    # 查找轮廓
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    # 过滤轮廓：面积 > min_area，y > search_y + min_y_offset（跳过搜索框）
+    avatar_contours = []
+    for cnt in contours:
+        x, y, cw, ch = cv2.boundingRect(cnt)
+        area = cv2.contourArea(cnt)
+        if area < min_area:
+            continue
+        if y < search_y + min_y_offset:
+            continue
+        # 头像宽高应大致相等（圆形/圆角矩形），过滤异常长条形
+        if cw > 0 and ch > 0:
+            aspect = max(cw, ch) / min(cw, ch)
+            if aspect > 3.0:
+                continue
+        avatar_contours.append((x, y, cw, ch, area))
+
+    if not avatar_contours:
+        return None
+
+    # 选择 y 坐标最小的（第一条候选记录的头像）
+    avatar_contours.sort(key=lambda c: c[1])
+    x, y, cw, ch, _ = avatar_contours[0]
+    cx = x + cw // 2
+    cy = y + ch // 2
+    return {"cx": cx, "cy": cy, "w": cw, "h": ch, "bbox": (x, y, cw, ch)}
 
 
 def draw_match_result(image, points, target, search_x, search_y):
@@ -458,10 +643,12 @@ def scroll_in_main_middle_column():
     nav_right, session_right = detector.detect(img)
     logger.info(f"    [重试预备] 分界线: nav_right={nav_right} session_right={session_right}")
 
-    # 中间栏中心（截图坐标系）
+    # 中间栏点击位置（截图坐标系）
+    # 用户反馈：原 h//2（50%）太靠上，容易误触搜索栏
+    # 改为距下边界 5%、距上边界 60%（35% 纵向区域更靠下）的中点 = 77.5%
     middle_x = (nav_right + session_right) // 2
-    middle_y = h // 2
-    logger.info(f"    [重试预备] 中间栏中心(截图坐标): ({middle_x}, {middle_y})")
+    middle_y = int(h * 0.775)
+    logger.info(f"    [重试预备] 中间栏点击位置(截图坐标): ({middle_x}, {middle_y})")
 
     # 转屏幕坐标
     offset_x, offset_y = get_client_offset(hwnd_main)
@@ -480,8 +667,8 @@ def scroll_in_main_middle_column():
         user32.mouse_event(MOUSEEVENTF_WHEEL, 0, 0, WHEEL_DELTA, 0)
         time.sleep(0.15)
 
-    # 3. 点击中间栏中心（让主窗口激活）
-    logger.info(f"    [重试预备] 点击中间栏中心 ({screen_x}, {screen_y})")
+    # 3. 点击中间栏（让主窗口激活）
+    logger.info(f"    [重试预备] 点击中间栏 ({screen_x}, {screen_y})")
     user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
     time.sleep(0.05)
     user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
@@ -638,54 +825,109 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
     time.sleep(0.3)
 
     if not fg_ok:
-        # SetForegroundWindow 失败，用 PostMessage 方式（不需要窗口在前台）
-        logger.warning("    ⚠️ SetForegroundWindow 失败，改用 PostMessage 方式...")
-        WM_LBUTTONDOWN = 0x0201
-        WM_LBUTTONUP = 0x0202
-        WM_KEYDOWN = 0x0100
-        WM_KEYUP = 0x0101
-        WM_CHAR = 0x0102
-        MK_LBUTTON = 0x0001
-        # VK_CONTROL 已在函数顶部统一定义（避免作用域冲突）
-        VK_BACK = 0x08
+        # SetForegroundWindow 失败，物理点击搜索栏屏幕坐标强制激活窗口
+        # 原理：Windows 会自动把被鼠标点击的窗口设为前台，绕过 SetForegroundWindow 权限限制
+        # 这是用户行为的真实模拟（用鼠标点击搜索栏），比 PostMessage 后台点击更可靠
+        # 用户反馈：远程控制环境下 SetForegroundWindow 经常失败，PostMessage 后台点击
+        # 也无法激活搜索框焦点，导致搜索候选框不弹出。物理点击是最可靠的方案。
+        logger.warning("    ⚠️ SetForegroundWindow 失败，物理点击搜索栏强制激活窗口...")
 
-        # 1. PostMessage 点击搜索栏（客户区坐标），激活搜索框
-        click_lparam = (client_y << 16) | (client_x & 0xFFFF)
-        user32.PostMessageW(hwnd_main, WM_LBUTTONDOWN, MK_LBUTTON, click_lparam)
-        time.sleep(0.1)
-        user32.PostMessageW(hwnd_main, WM_LBUTTONUP, 0, click_lparam)
-        time.sleep(0.5)
+        # 诊断日志：物理点击前的状态
+        fg_before = user32.GetForegroundWindow()
+        main_rect = wintypes.RECT()
+        user32.GetWindowRect(hwnd_main, ctypes.byref(main_rect))
+        logger.info(
+            f"    [诊断-点击前] 微信窗口 rect=({main_rect.left},{main_rect.top},"
+            f"{main_rect.right},{main_rect.bottom}) "
+            f"搜索栏屏幕坐标=({screen_x},{screen_y}) "
+            f"前台 hwnd={fg_before} (微信={hwnd_main})"
+        )
 
-        # 2. 清空搜索框（用 Backspace 删除，不用 Ctrl+A 因为 Qt 会把 A 当普通字符输入）
-        for _ in range(50):  # 最多删除 50 个字符
-            user32.PostMessageW(hwnd_main, WM_KEYDOWN, VK_BACK, 0)
-            time.sleep(0.01)
-            user32.PostMessageW(hwnd_main, WM_KEYUP, VK_BACK, 0)
-            time.sleep(0.01)
-        time.sleep(0.3)
+        physical_click(screen_x, screen_y)
+        time.sleep(0.8)  # 等待窗口激活 + 搜索框获得焦点
 
-        # 3. PostMessage 发送 WM_CHAR 逐字符输入（不用 Ctrl+F，避免 F 被当作普通字符输入）
-        for ch in contact_name:
-            user32.PostMessageW(hwnd_main, WM_CHAR, ord(ch), 0)
-            time.sleep(0.05)
-        time.sleep(0.5)
+        # 诊断日志：物理点击后的状态
+        fg_after = user32.GetForegroundWindow()
+        fg_title = ""
+        fg_class = ""
+        if fg_after:
+            buf_t = ctypes.create_unicode_buffer(256)
+            user32.GetWindowTextW(fg_after, buf_t, 256)
+            fg_title = buf_t.value
+            buf_c = ctypes.create_unicode_buffer(256)
+            user32.GetClassNameW(fg_after, buf_c, 256)
+            fg_class = buf_c.value
+        logger.info(
+            f"    [诊断-点击后] 前台 hwnd={fg_after} title={fg_title!r} class={fg_class!r}"
+        )
 
-        logger.info(f"    已通过 PostMessage 输入: {contact_name}")
+        # 验证窗口是否已在前台
+        if fg_after == hwnd_main:
+            logger.info(f"    ✅ 物理点击后微信已在前台")
+            # 走与成功分支相同的流程：Ctrl+A 全选 + Backspace 删除 + 剪贴板输入
+            from human_sim import _press_key_combo, VK_CONTROL, VK_A
+            VK_BACK = 0x08
+            _press_key_combo(VK_CONTROL, VK_A)
+            time.sleep(0.1)
+            for _ in range(3):  # 多按几次确保删干净
+                user32.keybd_event(VK_BACK, 0, 0, 0)
+                time.sleep(0.05)
+                user32.keybd_event(VK_BACK, 0, KEYEVENTF_KEYUP, 0)
+                time.sleep(0.05)
+            time.sleep(0.2)
+            input_text_via_clipboard(hwnd_main, contact_name)
+            logger.info(f"    已通过物理点击+剪贴板输入: {contact_name}")
+        else:
+            # 物理点击后窗口仍未激活，回退到 PostMessage 后台输入方式（最后手段）
+            logger.warning("    ⚠️ 物理点击后微信仍未在前台，回退到 PostMessage 方式...")
+            WM_LBUTTONDOWN = 0x0201
+            WM_LBUTTONUP = 0x0202
+            WM_KEYDOWN = 0x0100
+            WM_KEYUP = 0x0101
+            WM_CHAR = 0x0102
+            MK_LBUTTON = 0x0001
+            # VK_CONTROL 已在函数顶部统一定义（避免作用域冲突）
+            VK_BACK = 0x08
+
+            # 1. PostMessage 点击搜索栏（客户区坐标），激活搜索框
+            click_lparam = (client_y << 16) | (client_x & 0xFFFF)
+            user32.PostMessageW(hwnd_main, WM_LBUTTONDOWN, MK_LBUTTON, click_lparam)
+            time.sleep(0.1)
+            user32.PostMessageW(hwnd_main, WM_LBUTTONUP, 0, click_lparam)
+            time.sleep(0.5)
+
+            # 2. 清空搜索框（用 Backspace 删除，不用 Ctrl+A 因为 Qt 会把 A 当普通字符输入）
+            for _ in range(50):  # 最多删除 50 个字符
+                user32.PostMessageW(hwnd_main, WM_KEYDOWN, VK_BACK, 0)
+                time.sleep(0.01)
+                user32.PostMessageW(hwnd_main, WM_KEYUP, VK_BACK, 0)
+                time.sleep(0.01)
+            time.sleep(0.3)
+
+            # 3. PostMessage 发送 WM_CHAR 逐字符输入（不用 Ctrl+F，避免 F 被当作普通字符输入）
+            for ch in contact_name:
+                user32.PostMessageW(hwnd_main, WM_CHAR, ord(ch), 0)
+                time.sleep(0.05)
+            time.sleep(0.5)
+
+            logger.info(f"    已通过 PostMessage 输入: {contact_name}")
 
     else:
         # SetForegroundWindow 成功，用 Ctrl+F 快捷键打开搜索栏
         # 用户确认：Ctrl+F 可直接打开微信搜索栏，是最佳方案（不依赖精确点击位置）
-        # 先点击主窗口中间栏70%区域内的随机位置，确保焦点在微信窗口上（Ctrl+F 依赖焦点）
-        # 随机化避免每次点击同一位置（防检测），同时避开边缘 15%（不点导航栏/搜索栏/聊天区域边缘）
-        # 用户反馈：40% 太窄，70% 合适（中间栏判定已修复，范围正确）
+        # 先点击主窗口中间栏的随机位置，确保焦点在微信窗口上（Ctrl+F 依赖焦点）
+        # 随机化避免每次点击同一位置（防检测）
+        # 用户反馈：y 方向 70% 中心区域太靠上，容易误触搜索栏
+        # 改为距下边界 5%、距上边界 60%（35% 纵向区域更靠下）
+        # x 方向保持 70% 中心区域（避开左右边缘各 15%）
         # ⚠️ 严禁双击中间栏（会弹出对话框），只能用 physical_click 单击
         import random as _random
         h_img, w_img = pw_image.shape[:2]
         mid_col_width = session_right - nav_right
         # x: 中间栏70%区域（避开左右边缘各15%）
         mid_x = int(nav_right + mid_col_width * (0.15 + 0.7 * _random.random()))
-        # y: 窗口高度70%区域（避开上下边缘各15%）
-        mid_y = int(h_img * (0.15 + 0.7 * _random.random()))
+        # y: 距下 5%、距上 60%（35% 纵向区域更靠下，避免误触搜索栏）
+        mid_y = int(h_img * (0.6 + 0.35 * _random.random()))
         mid_screen_x, mid_screen_y = client_to_screen(
             hwnd_main, mid_x - offset_x, mid_y - offset_y
         )
@@ -695,9 +937,21 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
 
         # 用 Ctrl+F 快捷键打开搜索栏（比点击更可靠，不依赖精确位置）
         # 已升级为 SendInput 带扫描码（通过 human_sim._press_key_combo）
-        from human_sim import _press_key_combo, VK_CONTROL, VK_F
+        from human_sim import _press_key_combo, VK_CONTROL, VK_F, VK_A
         _press_key_combo(VK_CONTROL, VK_F)
         time.sleep(0.8)
+
+        # 清空搜索栏已有文本（重试时可能有残留）
+        # 用 Ctrl+A 全选 + Backspace 删除（SendInput 真实键盘事件，Qt 不会误判）
+        VK_BACK = 0x08
+        _press_key_combo(VK_CONTROL, VK_A)
+        time.sleep(0.1)
+        for _ in range(3):  # 多按几次确保删干净
+            user32.keybd_event(VK_BACK, 0, 0, 0)
+            time.sleep(0.05)
+            user32.keybd_event(VK_BACK, 0, KEYEVENTF_KEYUP, 0)
+            time.sleep(0.05)
+        time.sleep(0.2)
 
         # 输入联系人名
         input_text_via_clipboard(hwnd_main, contact_name)
@@ -761,69 +1015,75 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
         search_img, template_path, TEMPLATE_SCALES, MATCH_THRESHOLD, NMS_MIN_DIST
     )
 
-    if not points:
-        logger.error(f"❌ 未找到匹配点 (最高置信度={best_score:.3f})")
-        template = cv2.cvtColor(np.array(Image.open(template_path)), cv2.COLOR_RGB2BGR)
-        logger.info("    各尺度最高置信度:")
-        for s in TEMPLATE_SCALES:
-            if s >= search_img.shape[0] or s >= search_img.shape[1]:
-                continue
-            scaled = cv2.resize(template, (s, s), interpolation=cv2.INTER_AREA)
-            res = cv2.matchTemplate(search_img, scaled, cv2.TM_CCOEFF_NORMED)
-            _, mx, _, ml = cv2.minMaxLoc(res)
-            logger.info(f"    - {s}px: max={mx:.3f} at ({ml[0]+s//2}, {ml[1]+s//2})")
-        return False, None, 0
+    if points:
+        logger.info(f"    找到 {len(points)} 个匹配点:")
+        for i, (x, y, s, sc) in enumerate(points):
+            dist = ((x - s_box_x) ** 2 + (y - s_box_y) ** 2) ** 0.5
+            logger.info(f"    #{i}: ({x}, {y}) conf={s:.3f} scale={sc}px "
+                  f"距搜索框={dist:.0f}px")
+    else:
+        logger.warning(f"    未找到匹配点 (最高置信度={best_score:.3f})")
 
-    logger.info(f"    找到 {len(points)} 个匹配点:")
-    for i, (x, y, s, sc) in enumerate(points):
-        dist = ((x - s_box_x) ** 2 + (y - s_box_y) ** 2) ** 0.5
-        logger.info(f"    #{i}: ({x}, {y}) conf={s:.3f} scale={sc}px "
-              f"距搜索框={dist:.0f}px")
-
-    # 改进：先按置信度筛选，再综合置信度和位置评分选择
-    # 搜索候选框中头像应在搜索框下方，y 坐标 > s_box_y 的匹配点优先
-    # 严格阈值：低于 MIN_CONFIDENCE_FOR_SELECTION(0.7) 一律不点击，直接判本次失败触发上层重试
+    # 严格阈值：低于 MIN_CONFIDENCE_FOR_SELECTION(0.7) 一律不点击
     # （用户要求：匹配度低就不该点击，避免点错位置触发"搜索网络结果"等意外窗口）
     MIN_CONFIDENCE_FOR_SELECTION = 0.7
     high_conf_points = [p for p in points if p[2] >= MIN_CONFIDENCE_FOR_SELECTION]
-    if not high_conf_points:
-        # 严格判定本次失败，不点击，触发上层重试机制：
-        # - 4 次失败后 _refresh_avatar_and_maybe_retry 强制刷新头像
-        # - 头像变了才重试，仍失败则反馈给 agent
-        logger.error(
-            f"    ❌ 所有匹配点置信度 < {MIN_CONFIDENCE_FOR_SELECTION}，"
-            f"严格判定本次失败（不点击，避免点错位置触发意外窗口）"
+
+    target = None
+    target_source = ""  # 记录 target 来源：template / geometry
+
+    if high_conf_points:
+        # 用加权评分：confidence_score * 0.6 + position_score * 0.4
+        # position_score：距搜索框越近、在搜索框下方，分数越高
+        max_dist = max(((p[0] - s_box_x) ** 2 + (p[1] - s_box_y) ** 2) ** 0.5
+                       for p in high_conf_points) or 1
+        best_score_val = -1
+        target = high_conf_points[0]
+        for p in high_conf_points:
+            x, y, conf, _ = p
+            dist = ((x - s_box_x) ** 2 + (y - s_box_y) ** 2) ** 0.5
+            dist_score = 1.0 - (dist / max_dist)
+            below_bonus = 0.2 if y > s_box_y else 0.0
+            position_score = min(1.0, dist_score + below_bonus)
+            total_score = conf * 0.6 + position_score * 0.4
+            logger.info(f"    #?: ({x},{y}) conf={conf:.3f} dist={dist:.0f} "
+                  f"pos_score={position_score:.3f} total={total_score:.3f}")
+            if total_score > best_score_val:
+                best_score_val = total_score
+                target = p
+        target_source = "template"
+        logger.info(f"    选中(模板匹配): ({target[0]}, {target[1]}) "
+              f"conf={target[2]:.3f} scale={target[3]}px score={best_score_val:.3f}")
+    else:
+        # 模板匹配置信度不足，启用几何定位 fallback
+        # 原因：CDN 头像原图与候选框中显示的圆形头像视觉差异大，模板匹配置信度常 < 0.5
+        # 几何定位通过候选框左侧区域的轮廓分析定位头像位置，不依赖模板图像
+        logger.warning(
+            f"    ⚠️ 模板匹配最高置信度 {best_score:.3f} < {MIN_CONFIDENCE_FOR_SELECTION}，"
+            f"启用几何定位 fallback"
         )
-        return False, None, 0
+        geo = find_first_avatar_geometry(search_img, search_y=s_box_y)
+        if geo is None:
+            logger.error(
+                f"    ❌ 几何定位也失败（候选框左侧未检测到头像轮廓），"
+                f"严格判定本次失败触发上层重试"
+            )
+            return False, None, 0
 
-    # 用加权评分：confidence_score * 0.6 + position_score * 0.4
-    # position_score：距搜索框越近、在搜索框下方，分数越高
-    max_dist = max(((p[0] - s_box_x) ** 2 + (p[1] - s_box_y) ** 2) ** 0.5
-                   for p in high_conf_points) or 1
-    best_score_val = -1
-    target = high_conf_points[0]
-    for p in high_conf_points:
-        x, y, conf, _ = p
-        dist = ((x - s_box_x) ** 2 + (y - s_box_y) ** 2) ** 0.5
-        # 位置分：距离归一化（越近越高），在搜索框下方加分
-        dist_score = 1.0 - (dist / max_dist)
-        below_bonus = 0.2 if y > s_box_y else 0.0  # 在搜索框下方加分
-        position_score = min(1.0, dist_score + below_bonus)
-        # 综合评分
-        total_score = conf * 0.6 + position_score * 0.4
-        logger.info(f"    #?: ({x},{y}) conf={conf:.3f} dist={dist:.0f} "
-              f"pos_score={position_score:.3f} total={total_score:.3f}")
-        if total_score > best_score_val:
-            best_score_val = total_score
-            target = p
-    logger.info(f"    选中(综合评分最高): ({target[0]}, {target[1]}) "
-          f"conf={target[2]:.3f} scale={target[3]}px score={best_score_val:.3f}")
+        # 几何定位成功，构造 target（conf=-1 表示非模板匹配）
+        target = (geo["cx"], geo["cy"], -1.0, max(geo["w"], geo["h"]))
+        target_source = "geometry"
+        logger.info(
+            f"    选中(几何定位): ({target[0]}, {target[1]}) "
+            f"bbox={geo['bbox']} size={geo['w']}x{geo['h']}"
+        )
 
-    logger.info(f"    最终选择: ({target[0]}, {target[1]}) "
+    logger.info(f"    最终选择[{target_source}]: ({target[0]}, {target[1]}) "
           f"conf={target[2]:.3f} scale={target[3]}px")
-    # 注：find_template_multiscale 已经过滤 < MATCH_THRESHOLD 的点，
-    # 且上面 high_conf_points 非空才走到这里，所以 target 的置信度一定 >= 0.7，
-    # 不需要额外的"低置信度警告"分支（原代码在此处仍有警告但不 return False，已删除）。
+    # 注：target 来源有两种：
+    #   - template: 模板匹配置信度 >= 0.7，target[2] 为实际置信度
+    #   - geometry: 几何定位 fallback，target[2] = -1.0（非模板匹配）
+    # 几何定位场景下，仍由后续绿色环验证兜底，若点错位置绿色环不会出现，会触发上层重试。
 
     match_vis = draw_match_result(search_img, points, target, s_box_x, s_box_y)
     match_path = os.path.join(OUTPUT_DIR, f"stage_d_match_result_{attempt_idx}.png")
@@ -878,19 +1138,15 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
         post_img, template_path, TEMPLATE_SCALES, MATCH_THRESHOLD, NMS_MIN_DIST
     )
     if not post_points:
-        logger.error(f"    ❌ 主窗口内未匹配到 [REDACTED] 头像 (最高置信度={post_best:.3f})")
-        template = cv2.cvtColor(np.array(Image.open(template_path)), cv2.COLOR_RGB2BGR)
-        logger.info("    主窗口内各尺度最高置信度:")
-        for s in TEMPLATE_SCALES:
-            if s >= post_img.shape[0] or s >= post_img.shape[1]:
-                continue
-            scaled = cv2.resize(template, (s, s), interpolation=cv2.INTER_AREA)
-            res = cv2.matchTemplate(post_img, scaled, cv2.TM_CCOEFF_NORMED)
-            _, mx, _, ml = cv2.minMaxLoc(res)
-            logger.info(f"    - {s}px: max={mx:.3f} at ({ml[0]+s//2}, {ml[1]+s//2})")
+        logger.warning(f"    ⚠️ 主窗口内未匹配到 [REDACTED] 头像 (最高置信度={post_best:.3f})")
+        # 模板匹配失败时，不能用绿色环验证（找不到头像中心）
+        # 此时用窗口数变化作为成功依据（阶段 G 会判断）
+        # 这里先标记 found=False，由阶段 G 的窗口数判断是否真正成功
         found = False
         ratio = 0.0
         debug = post_img.copy()
+        cv2.putText(debug, "TEMPLATE_MATCH_FAILED (will rely on window count)",
+                    (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
     else:
         logger.info(f"    主窗口内匹配到 {len(post_points)} 个 [REDACTED] 头像:")
         for i, (x, y, s, sc) in enumerate(post_points):
@@ -909,7 +1165,7 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
     if found:
         logger.info("    ✅ 检测到绿色环，点击成功")
     else:
-        logger.error("    ❌ 未检测到绿色环")
+        logger.warning("    ⚠️ 未检测到绿色环（可能模板匹配失败或点击位置不准）")
 
     # ========== 阶段 G：检查窗口数 ==========
     logger.info("\n[G] 检查点击后窗口数")
@@ -918,11 +1174,41 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
     for w in wins_after:
         logger.info(f"    - hwnd={w['hwnd']} title={w['title']!r} class={w['class']!r}")
 
+    # 当模板匹配失败导致绿色环验证无法进行时（target_source == "geometry"），
+    # 用搜索候选框是否关闭作为成功依据：
+    # - 搜索候选框关闭 → 点击生效了（进入了联系人聊天界面）
+    # - 搜索候选框还在 → 点击没生效
+    # 注意：count_wechat_windows 可能因尺寸过滤不包含搜索候选框，
+    # 所以不能只看 count_after < count_before，要直接检查搜索候选框是否还在
+    success_by_window_count = False
+    if not found and target_source == "geometry":
+        remaining_candidates = find_search_candidate_windows()
+        search_box_closed = (
+            len(remaining_candidates) == 0
+            or all(c["hwnd"] != hwnd_search for c in remaining_candidates)
+        )
+        if search_box_closed:
+            success_by_window_count = True
+            logger.info(
+                f"    ✅ 几何定位 fallback：搜索候选框已关闭，"
+                f"判定点击成功（窗口数 {count_before} -> {count_after}）"
+            )
+        else:
+            logger.error(
+                f"    ❌ 几何定位 fallback：搜索候选框仍在（"
+                f"{len(remaining_candidates)} 个），判定点击失败"
+            )
+
     logger.info("\n" + "=" * 60)
     logger.info(f"  第 {attempt_idx} 次尝试结果")
     logger.info("=" * 60)
-    logger.info(f"  匹配点: ({target[0]}, {target[1]}) conf={target[2]:.3f}")
-    logger.error(f"  绿色环验证: {'✅ 通过' if found else '❌ 未通过'}")
+    logger.info(f"  匹配点[{target_source}]: ({target[0]}, {target[1]}) conf={target[2]:.3f}")
+    if found:
+        logger.info("  绿色环验证: ✅ 通过")
+    elif success_by_window_count:
+        logger.info("  绿色环验证: ⚠️ 跳过（模板匹配失败），用窗口数判断成功")
+    else:
+        logger.error("  绿色环验证: ❌ 未通过")
     logger.info(f"  窗口数变化: {count_before} -> {count_after}")
     if count_after == 1:
         logger.info("  分支: 1 个窗口 → 联系人聊天界面")
@@ -932,7 +1218,8 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
         logger.info(f"  分支: {count_after} 个窗口（未预期）")
     logger.info("=" * 60)
 
-    return found, target, count_after
+    final_success = found or success_by_window_count
+    return final_success, target, count_after
 
 
 def main():

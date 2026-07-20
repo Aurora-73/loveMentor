@@ -81,9 +81,12 @@ def _avatar_local_path(identifier: str, wxid: str = "") -> Path:
 
 
 def _find_cached_avatar(identifier: str, wxid: str = "") -> Path | None:
-    """在本地缓存中查找头像，支持多种命名和格式（.jpg 优先，.png 兼容）。
+    """在本地缓存中查找头像，仅按 wxid 和 alias(微信号) 查找（不再用 display_name）。
 
-    查找顺序：wxid.jpg → identifier.jpg → wxid.png → identifier.png → 模糊匹配
+    查找顺序：wxid.jpg → identifier.jpg → wxid.png → identifier.png
+
+    注意：identifier 应为微信号（alias），不再支持 display_name 模糊匹配，
+          避免同名联系人（display_name 相同）导致头像错配。
     """
     # 优先查找 .jpg 格式（wechat_send 需要）
     if wxid:
@@ -92,19 +95,12 @@ def _find_cached_avatar(identifier: str, wxid: str = "") -> Path | None:
             if p.exists():
                 return p
 
-    # 按 identifier 查找
+    # 按 identifier（微信号）查找
     if identifier:
         for ext in (_AVATAR_EXT, ".png"):
             p = AVATARS_DIR / f"{_safe_filename(identifier)}{ext}"
             if p.exists():
                 return p
-
-    # 模糊匹配（identifier 可能是 displayName，缓存文件可能是旧格式）
-    if identifier:
-        safe = _safe_filename(identifier)
-        for f in AVATARS_DIR.iterdir():
-            if f.suffix.lower() in (".jpg", ".png") and safe in f.stem:
-                return f
 
     return None
 
@@ -157,39 +153,6 @@ def _update_avatar_meta(wxid: str, display_name: str, avatar_url: str, file_path
         "downloaded_at": int(__import__("time").time()),
     }
     _save_avatar_meta(meta)
-
-
-def _create_display_name_copy(wxid_path: Path, display_name: str, wxid: str) -> Path | None:
-    """创建按 display_name 命名的头像副本（供 wechat_send 模板匹配使用）。
-
-    wechat_send 需要 data/avatars/<name>.jpg，而主文件按 wxid 命名。
-    此函数创建 display_name.jpg 副本。
-
-    Returns:
-        副本路径，失败返回 None
-    """
-    if not wxid_path.exists() or not display_name or display_name == wxid:
-        return None
-
-    # 如果 display_name 和 wxid 相同，不需要副本
-    safe_name = _safe_filename(display_name)
-    if safe_name == _safe_filename(wxid):
-        return None
-
-    copy_path = AVATARS_DIR / f"{safe_name}{_AVATAR_EXT}"
-
-    # 如果副本已存在且与源文件相同，跳过
-    if copy_path.exists():
-        if copy_path.stat().st_size == wxid_path.stat().st_size:
-            return copy_path
-
-    try:
-        import shutil
-        shutil.copy2(wxid_path, copy_path)
-        return copy_path
-    except Exception as e:
-        logger.warning(f"创建 display_name 副本失败: {e}")
-        return None
 
 
 def _is_cdn_url(url: str) -> bool:
@@ -277,32 +240,47 @@ def _create_client(config: Config):
 # ── 本地 DB 查询 ──────────────────────────────────────────────────────
 
 def _query_local_avatar(conn: sqlite3.Connection, identifier: str) -> dict | None:
-    """从本地 core.db 查询联系人头像 URL。
+    """从本地 core.db 查询联系人信息（即使 avatar_url 为空也返回）。
 
-    匹配顺序：display_name > remark > nickname > alias > id(wxid)
+    匹配顺序：alias > id(wxid) > display_name > remark > nickname
+    （alias 和 wxid 唯一，优先匹配；display_name 可能重名，靠后）
+
+    重要：即使 avatar_url 为空也会返回，调用方需要根据 wxid 进一步查询
+    contacts.json 等其他数据源获取 avatarUrl。
 
     Returns:
-        {"wxid": ..., "display_name": ..., "avatar_url": ...} 或 None
+        {"wxid": ..., "display_name": ..., "alias": ..., "avatar_url": ...} 或 None
+        avatar_url 可能为空字符串
     """
-    # 先精确匹配
-    for field in ("display_name", "remark", "nickname", "alias", "id"):
+    # 精确匹配（不要求 avatar_url 非空）
+    for field in ("alias", "id", "display_name", "remark", "nickname"):
         row = conn.execute(
-            f"SELECT id, display_name, avatar_url FROM contacts "
-            f"WHERE {field} = ? AND avatar_url IS NOT NULL AND avatar_url != ''",
+            f"SELECT id, display_name, alias, avatar_url FROM contacts "
+            f"WHERE {field} = ?",
             (identifier,),
         ).fetchone()
         if row:
-            return {"wxid": row["id"], "display_name": row["display_name"], "avatar_url": row["avatar_url"]}
+            return {
+                "wxid": row["id"],
+                "display_name": row["display_name"],
+                "alias": row["alias"] if row["alias"] else "",
+                "avatar_url": row["avatar_url"] if row["avatar_url"] else "",
+            }
 
-    # 模糊匹配（LIKE）
-    for field in ("display_name", "remark", "nickname", "alias"):
+    # 模糊匹配（LIKE）— 仅在 display_name/remark/nickname/alias 中查找
+    for field in ("alias", "display_name", "remark", "nickname"):
         row = conn.execute(
-            f"SELECT id, display_name, avatar_url FROM contacts "
-            f"WHERE {field} LIKE ? AND avatar_url IS NOT NULL AND avatar_url != ''",
+            f"SELECT id, display_name, alias, avatar_url FROM contacts "
+            f"WHERE {field} LIKE ?",
             (f"%{identifier}%",),
         ).fetchone()
         if row:
-            return {"wxid": row["id"], "display_name": row["display_name"], "avatar_url": row["avatar_url"]}
+            return {
+                "wxid": row["id"],
+                "display_name": row["display_name"],
+                "alias": row["alias"] if row["alias"] else "",
+                "avatar_url": row["avatar_url"] if row["avatar_url"] else "",
+            }
 
     return None
 
@@ -313,7 +291,7 @@ def _query_api_avatar(client, keyword: str) -> dict | None:
     """通过 WeFlow/WCD API 按关键词搜索联系人头像。
 
     Returns:
-        {"wxid": ..., "display_name": ..., "avatar_url": ...} 或 None
+        {"wxid": ..., "display_name": ..., "alias": ..., "avatar_url": ...} 或 None
     """
     try:
         contacts = client.list_contacts(keyword=keyword, limit=20)
@@ -332,6 +310,7 @@ def _query_api_avatar(client, keyword: str) -> dict | None:
                 return {
                     "wxid": c.get("username", ""),
                     "display_name": c.get("displayName", ""),
+                    "alias": c.get("alias", "") or "",
                     "avatar_url": c.get("avatarUrl", ""),
                 }
 
@@ -343,6 +322,7 @@ def _query_api_avatar(client, keyword: str) -> dict | None:
                 return {
                     "wxid": c.get("username", ""),
                     "display_name": c.get("displayName", ""),
+                    "alias": c.get("alias", "") or "",
                     "avatar_url": c.get("avatarUrl", ""),
                 }
 
@@ -352,6 +332,7 @@ def _query_api_avatar(client, keyword: str) -> dict | None:
         return {
             "wxid": c.get("username", ""),
             "display_name": c.get("displayName", ""),
+            "alias": c.get("alias", "") or "",
             "avatar_url": c.get("avatarUrl", ""),
         }
 
@@ -388,35 +369,181 @@ def _load_weflow_cache() -> dict:
     return _weflow_cache or {}
 
 
-def _query_weflow_cache(identifier: str) -> dict | None:
-    """从 WeFlow contacts.json 缓存中查找联系人头像（CDN 直链）。
+def _url_priority(url: str) -> int:
+    """URL 类型优先级：数字越大优先级越高。
 
-    优先返回 CDN URL，跳过本地代理 URL。
+    CDN URL（qlogo.cn）是微信实时头像，优先级最高。
+    代理 URL（127.0.0.1）需要本地服务，优先级中。
+    data URL（base64）通常是从本地 DB 导出的过时缓存，优先级最低。
+    其他 HTTP URL 按代理 URL 级别处理。
+    """
+    if not url:
+        return 0
+    if "qlogo.cn" in url or "qlogo" in url:  # CDN URL
+        return 3
+    if url.startswith("data:"):  # data URL（可能是过时缓存）
+        return 1
+    return 2  # 代理 URL 或其他 HTTP URL
+
+
+def _query_weflow_cache(identifier: str) -> dict | None:
+    """从 WeFlow contacts.json 缓存中查找联系人头像。
+
+    按 URL 类型优先级返回：CDN URL > 代理 URL > data URL。
+
+    当存在多个同名联系人时（例如用户删好友重新添加导致 wxid 变化），
+    旧 wxid 的 data URL 会被新 wxid 的 CDN URL 取代，避免取到过时头像。
 
     Returns:
-        {"wxid": ..., "display_name": ..., "avatar_url": ...} 或 None
+        {"wxid": ..., "display_name": ..., "alias": ..., "avatar_url": ...} 或 None
     """
     cache = _load_weflow_cache()
     if not cache:
         return None
 
-    # 精确匹配
+    # 精确匹配：收集所有匹配项，按 URL 优先级排序
+    exact_matches = []
     for wxid, info in cache.items():
         display_name = info.get("displayName", "")
-        if identifier in (wxid, display_name, info.get("remark", ""), info.get("nickname", "")):
+        alias = info.get("alias", "") or ""
+        if identifier in (wxid, display_name, alias, info.get("remark", ""), info.get("nickname", "")):
             url = info.get("avatarUrl", "")
             if url:
-                return {"wxid": wxid, "display_name": display_name, "avatar_url": url}
+                exact_matches.append({
+                    "wxid": wxid,
+                    "display_name": display_name,
+                    "alias": alias,
+                    "avatar_url": url,
+                    "_priority": _url_priority(url),
+                })
 
-    # 模糊匹配
+    if exact_matches:
+        exact_matches.sort(key=lambda x: x["_priority"], reverse=True)
+        best = exact_matches[0]
+        if len(exact_matches) > 1:
+            url_type = {3: "CDN", 2: "代理/HTTP", 1: "data"}.get(best["_priority"], "?")
+            logger.info(
+                f"contacts.json 精确匹配 {len(exact_matches)} 条，"
+                f"选择优先级最高的: wxid={best['wxid']} URL类型={url_type}"
+            )
+        return {
+            "wxid": best["wxid"],
+            "display_name": best["display_name"],
+            "alias": best["alias"],
+            "avatar_url": best["avatar_url"],
+        }
+
+    # 模糊匹配：同样收集所有匹配项，按 URL 优先级排序
+    fuzzy_matches = []
     for wxid, info in cache.items():
         display_name = info.get("displayName", "")
+        alias = info.get("alias", "") or ""
         if display_name and identifier in display_name:
             url = info.get("avatarUrl", "")
             if url:
-                return {"wxid": wxid, "display_name": display_name, "avatar_url": url}
+                fuzzy_matches.append({
+                    "wxid": wxid,
+                    "display_name": display_name,
+                    "alias": alias,
+                    "avatar_url": url,
+                    "_priority": _url_priority(url),
+                })
+
+    if fuzzy_matches:
+        fuzzy_matches.sort(key=lambda x: x["_priority"], reverse=True)
+        best = fuzzy_matches[0]
+        if len(fuzzy_matches) > 1:
+            url_type = {3: "CDN", 2: "代理/HTTP", 1: "data"}.get(best["_priority"], "?")
+            logger.info(
+                f"contacts.json 模糊匹配 {len(fuzzy_matches)} 条，"
+                f"选择优先级最高的: wxid={best['wxid']} URL类型={url_type}"
+            )
+        return {
+            "wxid": best["wxid"],
+            "display_name": best["display_name"],
+            "alias": best["alias"],
+            "avatar_url": best["avatar_url"],
+        }
 
     return None
+
+
+# ── WeFlow CDP 数据源（强制刷新单个联系人头像 URL） ────────────────────
+
+def _query_avatar_via_weflow_cdp(
+    identifier: str,
+    wxid_hint: str = "",
+    *,
+    force_refresh: bool = True,
+) -> dict | None:
+    """通过 CDP 调用 WeFlow 的 refreshContactAvatar 拿最新头像 URL。
+
+    数据源优先级最高的"实时"查询：绕过 WeFlow L1/L2 TTL 缓存，
+    直接从 wcdb 数据库读取最新 avatarUrl，并增量写回 contacts.json。
+
+    Args:
+        identifier: 联系人标识符（display_name / alias / wxid）
+        wxid_hint: 已知的 wxid（如果有，直接用；没有则用 search_contact 反查）
+        force_refresh: True=强制调 refreshContactAvatar 绕过 WeFlow 缓存；
+                       False=仅当其他数据源都没拿到 URL 时才用
+
+    Returns:
+        dict: { wxid, display_name, alias, avatar_url } 或 None
+    """
+    try:
+        # 延迟导入，避免在 WeFlow 未启动时报错
+        import os
+        import sys
+        # 把项目根目录加到 sys.path（确保能 import mcp_server.weflow_cdp）
+        project_root = _PROJECT_ROOT.parent if hasattr(_PROJECT_ROOT, "parent") else _PROJECT_ROOT
+        # _PROJECT_ROOT 是 Path，是 loveMentor 根目录
+        project_root_str = str(_PROJECT_ROOT)
+        if project_root_str not in sys.path:
+            sys.path.insert(0, project_root_str)
+        from mcp_server.weflow_cdp import refresh_contact_avatar, search_contact
+    except ImportError as e:
+        logger.debug(f"weflow_cdp 模块不可用: {e}")
+        return None
+    except Exception as e:
+        logger.debug(f"导入 weflow_cdp 异常: {e}")
+        return None
+
+    wxid = wxid_hint or ""
+    if not wxid:
+        # 用 search_contact 反查 wxid
+        search_result = search_contact(identifier, limit=5)
+        if not search_result.get("success") or not search_result.get("contacts"):
+            logger.debug(f"CDP search_contact('{identifier}') 无结果")
+            return None
+        # 取第一个匹配
+        first = search_result["contacts"][0]
+        wxid = first.get("username", "")
+        if not wxid:
+            return None
+        logger.info(f"CDP search_contact 反查到 wxid={wxid} (displayName={first.get('displayName', '')})")
+
+    # 调用 refreshContactAvatar 强制刷新
+    refresh_result = refresh_contact_avatar(wxid)
+    if not refresh_result.get("success"):
+        logger.warning(
+            f"CDP refreshContactAvatar('{wxid}') 失败: {refresh_result.get('error', 'unknown')}"
+        )
+        return None
+
+    avatar_url = refresh_result.get("avatarUrl", "")
+    display_name = refresh_result.get("displayName", "") or identifier
+    # alias 不能从 refresh_result 拿到，先用空字符串（不强制需要）
+    if not avatar_url:
+        logger.warning(f"CDP refreshContactAvatar('{wxid}') 返回空 avatarUrl")
+        return None
+
+    logger.info(f"CDP refreshContactAvatar 命中: {display_name} ({wxid}) url={avatar_url[:60]}...")
+    return {
+        "wxid": wxid,
+        "display_name": display_name,
+        "alias": "",  # refreshContactAvatar 不返回 alias
+        "avatar_url": avatar_url,
+    }
 
 
 # ── 公开接口 ──────────────────────────────────────────────────────────
@@ -440,6 +567,11 @@ def get_avatar(
     - check_update=True（默认）: 比较 URL，变化才下载
     - check_update=False: 有缓存就返回，不检查更新
 
+    头像文件命名规则（重要）：
+    - 主文件：data/avatars/<wxid>.jpg（wxid 唯一）
+    - 副本：data/avatars/<alias>.jpg（微信号唯一，供 wechat_send 用微信号定位头像）
+    - 不再用 display_name 作为文件名，避免同名联系人头像互相覆盖
+
     Args:
         identifier: 联系人名称或标识符（display_name / remark / nickname / alias / wxid）
         config: 全局配置（None 时自动加载）
@@ -458,6 +590,7 @@ def get_avatar(
     avatar_url = None
     wxid = ""
     display_name = identifier
+    alias = ""
 
     # 1a. 查询本地 DB
     conn = get_db(config.db_path)
@@ -470,13 +603,28 @@ def get_avatar(
         avatar_url = local_result["avatar_url"]
         wxid = local_result["wxid"]
         display_name = local_result["display_name"] or identifier
-        logger.info(f"本地 DB 命中: {display_name} ({wxid})")
+        alias = local_result.get("alias", "") or ""
+        logger.info(f"本地 DB 命中: {display_name} ({wxid}) alias={alias or 'N/A'}")
 
-        # 如果 DB 中的 URL 是代理 URL，尝试用 contacts.json 获取 CDN URL
-        if avatar_url and _is_proxy_url(avatar_url):
-            cache_result = _query_weflow_cache(wxid) or _query_weflow_cache(display_name)
+        # 联邦查询：DB 提供身份（wxid/alias），contacts.json 提供 avatarUrl
+        # 场景1: DB 中 avatar_url 为空（未同步）→ 用 wxid 查 contacts.json 兜底
+        # 场景2: DB 中是代理 URL → 用 wxid 查 contacts.json 获取 CDN URL
+        if not avatar_url:
+            # 场景1: DB 无 avatar_url，用 wxid 查 contacts.json
+            if wxid:
+                cache_result = _query_weflow_cache(wxid)
+                if cache_result:
+                    avatar_url = cache_result["avatar_url"]
+                    if not alias and cache_result.get("alias"):
+                        alias = cache_result["alias"]
+                    logger.info(f"DB 无 avatar_url，从 contacts.json 兜底 (wxid={wxid})")
+        elif _is_proxy_url(avatar_url):
+            # 场景2: 代理 URL，尝试用 contacts.json 获取 CDN URL
+            cache_result = _query_weflow_cache(wxid) or _query_weflow_cache(alias) or _query_weflow_cache(display_name)
             if cache_result and _is_cdn_url(cache_result["avatar_url"]):
                 avatar_url = cache_result["avatar_url"]
+                if not alias and cache_result.get("alias"):
+                    alias = cache_result["alias"]
                 logger.info(f"代理 URL → CDN URL: {display_name}")
 
     # 1b. API 查询（如果 DB 没找到）
@@ -488,7 +636,8 @@ def get_avatar(
                 avatar_url = api_result["avatar_url"]
                 wxid = api_result["wxid"]
                 display_name = api_result["display_name"] or identifier
-                logger.info(f"API 命中: {display_name} ({wxid})")
+                alias = api_result.get("alias", "") or ""
+                logger.info(f"API 命中: {display_name} ({wxid}) alias={alias or 'N/A'}")
         else:
             logger.info(f"WeFlow API 不可用: {config.weflow.base_url}，尝试 contacts.json 缓存...")
 
@@ -499,14 +648,37 @@ def get_avatar(
             avatar_url = cache_result["avatar_url"]
             wxid = cache_result["wxid"]
             display_name = cache_result["display_name"] or identifier
-            logger.info(f"contacts.json 命中: {display_name} ({wxid})")
+            alias = cache_result.get("alias", "") or ""
+            logger.info(f"contacts.json 命中: {display_name} ({wxid}) alias={alias or 'N/A'}")
+
+    # 1d. WeFlow CDP 强制刷新（force_refresh=True 时优先使用，覆盖之前数据源的 URL）
+    # 这是最可靠的数据源：直接从 wcdb 数据库读最新 avatarUrl，绕过 L1/L2 TTL 缓存
+    # 场景1: force_refresh=True → 即使用其他数据源已拿到 URL，也调 CDP 拿真正最新的
+    # 场景2: 其他数据源都没拿到 URL → 用 CDP 兜底（用 identifier 反查 wxid）
+    if force_refresh and wxid:
+        cdp_result = _query_avatar_via_weflow_cdp(identifier, wxid_hint=wxid, force_refresh=True)
+        if cdp_result:
+            avatar_url = cdp_result["avatar_url"]
+            if cdp_result.get("display_name"):
+                display_name = cdp_result["display_name"]
+            # alias 保留之前的值（CDP 不返回 alias）
+            logger.info(f"force_refresh=True，已通过 CDP 强制刷新 {display_name} ({wxid}) 的头像 URL")
+    elif not avatar_url:
+        # 兜底：用 identifier 反查 wxid，再调 CDP 强制刷新
+        cdp_result = _query_avatar_via_weflow_cdp(identifier, wxid_hint=wxid, force_refresh=True)
+        if cdp_result:
+            avatar_url = cdp_result["avatar_url"]
+            wxid = cdp_result["wxid"]
+            display_name = cdp_result["display_name"] or identifier
+            logger.info(f"CDP 兜底命中: {display_name} ({wxid})")
 
     if not avatar_url:
         logger.warning(f"未找到联系人 {identifier} 的头像 URL")
         return None
 
     # 2. 检查本地缓存 + URL 变化检测
-    cached = _find_cached_avatar(display_name, wxid)
+    # 注意：用 alias（而不是 display_name）作为 identifier 查找缓存
+    cached = _find_cached_avatar(alias, wxid)
     if cached and not force_refresh:
         if not check_update:
             # 不检查更新，直接返回缓存
@@ -518,26 +690,23 @@ def get_avatar(
             logger.info(f"头像未变化（URL 一致）: {cached.name}")
             return str(cached)
 
-        logger.info(f"头像 URL 已变化，重新下载: {display_name}")
+        logger.info(f"头像 URL 已变化，重新下载: {display_name} (alias={alias or 'N/A'})")
 
     # 3. 如果是代理 URL 且没有 CDN URL，直接尝试下载代理 URL
     if avatar_url and _is_proxy_url(avatar_url):
-        save_path = _avatar_local_path(display_name, wxid)
+        save_path = _avatar_local_path(alias or display_name, wxid)
         if _download_avatar(avatar_url, save_path):
             size_kb = save_path.stat().st_size // 1024
             logger.info(f"头像保存成功（代理）: {save_path.name} ({size_kb} KB)")
             if wxid:
                 _update_avatar_meta(wxid, display_name, avatar_url, save_path)
-            # 创建按 display_name 命名的副本（供 wechat_send 使用）
-            if display_name and display_name != wxid:
-                _create_display_name_copy(save_path, display_name, wxid)
             return str(save_path)
         logger.warning(f"代理 URL 下载失败: {display_name}")
         return None
 
     # 4. 下载头像（CDN URL 或 data URL）
-    save_path = _avatar_local_path(display_name, wxid)
-    logger.info(f"下载头像: {display_name} -> {save_path.name}")
+    save_path = _avatar_local_path(alias or display_name, wxid)
+    logger.info(f"下载头像: {display_name} (alias={alias or 'N/A'}) -> {save_path.name}")
 
     if _download_avatar(avatar_url, save_path):
         size_kb = save_path.stat().st_size // 1024
@@ -545,9 +714,6 @@ def get_avatar(
         # 更新元数据
         if wxid:
             _update_avatar_meta(wxid, display_name, avatar_url, save_path)
-        # 创建按 display_name 命名的副本（供 wechat_send 使用）
-        if display_name and display_name != wxid:
-            _create_display_name_copy(save_path, display_name, wxid)
         return str(save_path)
 
     logger.warning(f"头像下载失败: {display_name}")
@@ -654,6 +820,7 @@ def batch_download_avatars(
                 contacts.append({
                     "username": wxid,
                     "displayName": info.get("displayName", ""),
+                    "alias": info.get("alias", "") or "",
                     "avatarUrl": info.get("avatarUrl", ""),
                 })
             source = "contacts.json"
@@ -671,13 +838,15 @@ def batch_download_avatars(
 
         total += 1
         display_name = c.get("displayName", "") or wxid
+        alias = c.get("alias", "") or ""
         avatar_url = c.get("avatarUrl", "")
 
         if not avatar_url:
             no_url += 1
             continue
 
-        save_path = _avatar_local_path(display_name, wxid)
+        # 主文件用 wxid 命名
+        save_path = _avatar_local_path(alias or display_name, wxid)
 
         if not force_refresh and save_path.exists():
             skipped += 1

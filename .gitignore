@@ -69,11 +69,13 @@ desktop.ini
 *.swp
 *.swo
 *~
+scripts/
 
 selected.json
 .mcp.json
 # 对话日志
 log.log
+logs/
 
 # ===================== 微信自动化运行时产物 =====================
 # 原始 send_message 目录（已迁移到 engine/wechat_sender/）

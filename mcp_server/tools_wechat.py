@@ -5,13 +5,16 @@
 
 前置条件：
 - 微信（Weixin.exe）已运行并登录
-- 联系人头像模板已存放在 data/avatars/<联系人名>.jpg
+- 联系人头像模板已存放在 data/avatars/<微信号>.jpg（用微信号而非显示名，避免同名冲突）
 - 依赖：OpenCV, numpy, PIL（已随项目安装）
 """
 
 import os
 import sys
+import logging
 import traceback
+
+logger = logging.getLogger(__name__)
 
 # 确保项目根目录在 sys.path 中
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -448,8 +451,8 @@ def wechat_send(name: str, message: str) -> dict:
     """向微信联系人自动发送消息。
 
     通过视觉识别自动化操作微信 PC 客户端：
-    1. 解析联系人标识符 → 微信号（alias）用于搜索（微信号唯一，避免重名）
-    2. 搜索联系人（需 data/avatars/<display_name>.jpg 头像模板）
+    1. 解析联系人标识符 → 微信号（alias）用于搜索和头像定位（微信号唯一，避免重名）
+    2. 搜索联系人（需 data/avatars/<微信号>.jpg 头像模板）
     3. 点击头像进入聊天界面
     4. 输入消息并点击发送
 
@@ -462,9 +465,12 @@ def wechat_send(name: str, message: str) -> dict:
     - 若按昵称匹配到多个联系人 → 拒绝发送，返回匹配列表
     - 示例：wechat_send('[REDACTED]', '你好') → 数据库查找 [REDACTED] 的微信号 → 用微信号搜索
 
-    头像自动获取逻辑（内部封装，agent 无需关心）：
-    - 本地有头像 → 直接用本地头像
-    - 本地无头像 → 立即调用 avatar_fetcher 获取并保存
+    头像定位逻辑（重要：用微信号而非显示名）：
+    - 头像模板文件名用微信号（alias），不用 display_name
+    - 原因：同名联系人 display_name 相同会导致头像文件互相覆盖
+    - avatar_fetcher 下载头像时创建 <alias>.jpg 副本供这里使用
+    - 本地有 <alias>.jpg → 直接用
+    - 本地无 <alias>.jpg → 立即调用 avatar_fetcher 获取并保存
     - 阶段一 4 次失败后 → 强制刷新头像，头像变了才重试（hash 比对）
 
     录屏功能（诊断失败用）：
@@ -568,45 +574,42 @@ def _wechat_send_impl(name: str, message: str) -> dict:
             }
 
         search_term = resolution["search_term"]   # 微信号（用于搜索）
-        display_name = resolution["display_name"]  # 显示名（用于头像模板）
-        alias = resolution["alias"]
+        display_name = resolution["display_name"]  # 显示名（OCR 文字识别用）
+        alias = resolution["alias"]                # 微信号（内部唯一标识）
+        wxid = resolution["id"]                    # wxid（唯一，用于头像模板命名）
 
-        # ── 步骤 2: 定位头像模板（用 display_name 查找）──
+        # ── 步骤 2: 定位头像模板（统一用 wxid 查找，唯一不会冲突）──
+        # 重要：
+        # - 不能用 display_name 作为文件名，因为同名联系人会互相覆盖
+        # - 不再用 alias 副本，统一用 wxid 命名（avatar_fetcher 不再创建 alias 副本）
+        # - wxid 是微信内部唯一标识，比微信号（alias）更稳定（alias 可改，wxid 不可改）
         avatars_dir = os.path.join(_PROJECT_ROOT, "data", "avatars")
-        template_path = os.path.join(avatars_dir, f"{display_name}.jpg")
+        template_path = os.path.join(avatars_dir, f"{wxid}.jpg") if wxid else ""
 
-        # 如果原始名找不到，尝试安全文件名（emoji 等特殊字符被替换为 _）
-        if not os.path.exists(template_path):
-            safe_name = "".join(
-                c if c.isalnum() or c in "._-" else "_" for c in display_name
-            )[:50]
-            safe_path = os.path.join(avatars_dir, f"{safe_name}.jpg")
-            if os.path.exists(safe_path):
-                template_path = safe_path
-
-        # 如果头像模板不存在，先尝试用 avatar_fetcher 获取头像
-        if not os.path.exists(template_path):
+        # 如果头像模板不存在，先尝试用 avatar_fetcher 获取头像（用 wxid 查询）
+        if not template_path or not os.path.exists(template_path):
             try:
                 from engine.wechat_data.avatar_fetcher import get_avatar
-                # 优先用 alias 查询（微信号唯一），回退到 display_name
-                fetch_identifier = alias if alias else display_name
+                # 用 wxid 查询（wxid 唯一，不会冲突）
+                # 重要：force_refresh=True 会触发 avatar_fetcher 内部调用
+                # mcp_server.weflow_cdp.refresh_contact_avatar(wxid)，
+                # 通过 CDP 强制刷新 WeFlow 的 L1/L2 头像缓存，从 wcdb 数据库
+                # 读取最新 avatarUrl。不需要在这里显式调 CDP。
+                fetch_identifier = wxid if wxid else (alias if alias else display_name)
                 fetched_path = get_avatar(fetch_identifier, force_refresh=True)
-                if not fetched_path or not os.path.exists(fetched_path):
-                    # 回退：用 display_name 查询
-                    if alias:
-                        fetched_path = get_avatar(display_name, force_refresh=True)
                 if fetched_path and os.path.exists(fetched_path):
                     template_path = fetched_path
                 else:
+                    id_hint = f"（wxid: {wxid}）" if wxid else ""
                     return {
                         "success": False,
                         "message": (
-                            f"头像模板不存在且自动获取失败: data/avatars/{display_name}.jpg。"
-                            f"请手动将联系人头像保存为 data/avatars/{display_name}.jpg"
+                            f"头像模板不存在且自动获取失败: data/avatars/{wxid}.jpg{id_hint}。"
+                            f"请手动将联系人头像保存为 data/avatars/<wxid>.jpg"
                         ),
                         "contact": display_name,
                         "search_term": search_term,
-                        "template": template_path,
+                        "template": template_path or "",
                         "attempts": 0,
                         "error": "TEMPLATE_NOT_FOUND",
                         "window_restored": False,
@@ -618,7 +621,7 @@ def _wechat_send_impl(name: str, message: str) -> dict:
                     "message": f"头像模板不存在且获取异常: {e}",
                     "contact": display_name,
                     "search_term": search_term,
-                    "template": template_path,
+                    "template": template_path or "",
                     "attempts": 0,
                     "error": "TEMPLATE_FETCH_ERROR",
                     "window_restored": False,

@@ -33,6 +33,7 @@ from click_avatar_in_search_window import (  # noqa: E402
     run_one_attempt,
     scroll_in_main_middle_column,
     find_template_multiscale,
+    capture_initial_main_window_layout,
     MAX_ATTEMPTS,
     MAX_RETRIES,
 )
@@ -221,10 +222,13 @@ def rollback_wechat_state():
     1. 关闭意外窗口（"搜索网络结果"窗口、Chrome_WidgetWin_0 内嵌浏览器窗口）
     2. 关闭搜索候选框（避免重试时累加操作到搜索框）
     3. 主窗口置顶（确保下次操作的是主窗口）
-    4. 点击主窗口中间栏激活焦点（清除搜索栏输入框内容）
 
     ⚠️ 不按 Esc 键：微信"关闭主面板"快捷键默认是 Esc，按 Esc 会关闭主窗口
        导致下次重试时 find_wechat_window 找不到窗口，全部 attempt 失败。
+
+    ⚠️ 不点击中间栏：测试发现点击中间栏中心会触发微信 mini 模式
+       （nav_right 从 149 变成 41），导致 verify_main_window_layout 判失败。
+       搜索栏残留文本由下次 attempt 的 search bar 点击逻辑负责清空。
     """
     logger.info("\n[回滚] 清理微信残留状态（关闭意外窗口+搜索候选框+主窗口置顶）...")
 
@@ -267,13 +271,6 @@ def rollback_wechat_state():
     except Exception as e:
         logger.warning(f"    [回滚] 主窗口置顶异常: {e}")
 
-    # 步骤 4：点击主窗口中间栏，激活焦点（清除搜索栏输入框内容）
-    try:
-        scroll_in_main_middle_column()
-    except Exception as e:
-        logger.warning(f"    [回滚] 点击中间栏失败: {e}")
-    time.sleep(0.3)
-
 
 def _file_hash(file_path):
     """计算文件内容的 MD5 哈希（用于比较新旧头像是否相同）。"""
@@ -312,18 +309,27 @@ def _refresh_avatar_and_maybe_retry(contact_name, template_path, message):
     logger.info(f"   旧头像: {template_path} hash={old_hash[:8] if old_hash else 'N/A'}")
 
     # 2. 强制更新头像
-    # 注意：contact_name 可能是搜索名（微信号/alias），avatar_fetcher 查不到时
-    # 回退用 template_path 的文件名（通常是 display_name）查询
+    # 注意：template_path 现在是 <wxid>.jpg（统一用 wxid 命名）
+    # 从 template_path 反推 wxid 作为查询标识符
+    # avatar_fetcher.get_avatar(force_refresh=True) 内部会调用
+    # mcp_server.weflow_cdp.refresh_contact_avatar(wxid)，通过 CDP 强制刷新
+    # WeFlow 的 L1/L2 头像缓存，从 wcdb 数据库读取最新 avatarUrl。
+    # 不再调用 CDP clearAvatarCache（旧方案），因为那会清空 contacts.json 导致 API 找不到联系人。
     try:
         from engine.wechat_data.avatar_fetcher import get_avatar
-        new_path = get_avatar(contact_name, force_refresh=True)
+        # 从 template_path 反推 wxid（stem 就是 wxid）
+        wxid = os.path.splitext(os.path.basename(template_path))[0]
+        logger.info(f"   从 template_path 反推 wxid: {wxid}")
+        # 优先用 wxid 查询，回退到 contact_name（兼容旧模板）
+        fetch_identifier = wxid if wxid else contact_name
+        new_path = get_avatar(fetch_identifier, force_refresh=True)
         if not new_path or not os.path.exists(new_path):
-            # 回退：用 template_path 的文件名（stem）作为标识符
-            fallback_name = os.path.splitext(os.path.basename(template_path))[0]
-            logger.info(f"   用搜索名 '{contact_name}' 查询失败，回退用 '{fallback_name}' 查询")
-            new_path = get_avatar(fallback_name, force_refresh=True)
+            # 回退：用 contact_name 查询
+            if contact_name and contact_name != fetch_identifier:
+                logger.info(f"   用 wxid '{wxid}' 查询失败，回退用 '{contact_name}' 查询")
+                new_path = get_avatar(contact_name, force_refresh=True)
         if not new_path or not os.path.exists(new_path):
-            logger.warning(f"   ⚠️ 头像更新失败：未获取到 {contact_name} 的新头像")
+            logger.warning(f"   ⚠️ 头像更新失败：未获取到 {fetch_identifier} 的新头像")
             return False, template_path
         logger.info(f"   新头像: {new_path}")
     except Exception as e:
@@ -381,6 +387,7 @@ def _refresh_avatar_and_maybe_retry(contact_name, template_path, message):
 
         if attempt > 1:
             # 用户反馈：失败重试时必须先回滚状态（与 run_e2e 主循环保持一致）
+            # 注意：回滚只在重试前调用一次，不在失败后立即调用（避免重复回滚触发 mini 模式）
             logger.info("\n[头像更新后-重试预备] 回滚微信状态...")
             rollback_wechat_state()
             time.sleep(0.5)
@@ -397,11 +404,7 @@ def _refresh_avatar_and_maybe_retry(contact_name, template_path, message):
             break
         else:
             logger.error(f"\n❌ [头像更新后] 第 {attempt} 次尝试失败")
-            if attempt < MAX_ATTEMPTS:
-                # 失败后立即回滚状态
-                logger.info(f"   [头像更新后-失败处理] 立即回滚状态...")
-                rollback_wechat_state()
-                time.sleep(0.5)
+            # 不在此处回滚，留到下次重试前统一回滚（避免重复回滚）
 
     if not retry_success:
         logger.error(f"\n❌ [头像更新后] 阶段一仍然失败（{MAX_ATTEMPTS} 次尝试）")
@@ -457,6 +460,28 @@ def run_e2e(message, contact_name, template_path):
     logger.info("#  阶段一：搜索+点击头像+绿色环验证（含重试）")
     logger.info("#" * 60)
 
+    # 确保微信窗口宽度足够大（用户反馈：窗口化 658px 宽度时只有两栏，无法走三栏流程）
+    # 通过 SetWindowPos 增大窗口宽度恢复三栏布局（等同于用户拖动右边界向右放大）
+    # 必须在 capture_initial_main_window_layout 之前调用，否则捕获的初始布局仍是两栏
+    from wechat_window_utils import ensure_wechat_window_width
+    width_result = ensure_wechat_window_width(min_width=1000)
+    logger.info(
+        f"[窗口宽度] hwnd={width_result['hwnd']} "
+        f"old={width_result['old_width']}px new={width_result['new_width']}px "
+        f"resized={width_result['was_resized']} success={width_result['success']} "
+        f"| {width_result['reason']}"
+    )
+    if not width_result["success"]:
+        logger.warning(
+            f"   ⚠️ 微信窗口宽度调整失败，可能继续以两栏模式运行，"
+            f"阶段一搜索栏定位可能失败"
+        )
+    time.sleep(0.3)  # 等待窗口稳定
+
+    # 捕获主窗口初始布局（用户反馈：不要用硬编码范围判断，要和初始布局对比）
+    # 在操作开始时捕获一次，后续 verify_main_window_layout 会自动和它对比
+    capture_initial_main_window_layout()
+
     stage1_success = False
     final_count_after = 0
     final_target = None
@@ -501,7 +526,7 @@ def run_e2e(message, contact_name, template_path):
             # - 关闭意外窗口（搜索网络结果等）
             # - 关闭搜索候选框（避免重试时累加操作到搜索框）
             # - 主窗口置顶
-            # - 清除搜索栏输入
+            # 注意：回滚只在重试前调用一次，不在失败后立即调用（避免重复回滚触发 mini 模式）
             logger.info("\n[重试预备] 回滚微信状态（关闭意外窗口+搜索候选框+主窗口置顶）...")
             rollback_wechat_state()
             time.sleep(0.5)
@@ -513,11 +538,7 @@ def run_e2e(message, contact_name, template_path):
 
         if not success:
             logger.error(f"\n❌ 第 {attempt} 次尝试失败")
-            if attempt < MAX_ATTEMPTS:
-                # 失败后立即回滚状态（避免下次重试累加操作）
-                logger.info(f"   [失败处理] 立即回滚状态，准备第 {attempt + 1} 次尝试...")
-                rollback_wechat_state()
-                time.sleep(0.5)
+            # 不在此处回滚，留到下次重试前统一回滚（避免重复回滚）
             continue
 
         # 绿色环验证成功

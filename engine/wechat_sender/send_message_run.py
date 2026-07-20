@@ -24,6 +24,7 @@
     python examples/wechat_auto/send_message_run.py "你好，这是测试消息"
 """
 import os
+import re
 import sys
 import time
 
@@ -411,14 +412,19 @@ def verify_message_sent(image, message, session_right):
         # OCR 识别
         results = ocr_image_array(chat_region, use_cache=False)
 
-        # 准备匹配：去掉空格和换行，提高匹配容错
-        message_clean = message.replace(' ', '').replace('\n', '')
+        # 准备匹配：去除标点符号，只保留中英文和数字
+        # 原因：OCR 识别结果常丢失下划线、+、_ 等标点，导致完全匹配失败
+        def _normalize_text(text):
+            text = text.replace(' ', '').replace('\n', '')
+            # 去除所有标点符号（保留中英文、数字）
+            return re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9]', '', text)
+
+        message_clean = _normalize_text(message)
 
         # 检查是否包含发送的消息
         for r in results:
-            text_clean = r.text.replace(' ', '').replace('\n', '')
+            text_clean = _normalize_text(r.text)
             # 完全匹配或消息内容包含在 OCR 文字中
-            # 注意：不使用 text_clean in message_clean，避免短文本误匹配长消息
             if text_clean == message_clean or message_clean in text_clean:
                 logger.info(f"    [OCR] 找到匹配: {r.text!r} (center=({r.center_x + session_right}, {r.center_y}), conf={r.confidence:.3f})")
                 return True
@@ -430,7 +436,7 @@ def verify_message_sent(image, message, session_right):
             segment = message_clean[max(0, mid-5):mid+5]
             if len(segment) >= 4:
                 for r in results:
-                    text_clean = r.text.replace(' ', '').replace('\n', '')
+                    text_clean = _normalize_text(r.text)
                     if segment in text_clean:
                         logger.info(f"    [OCR] 分段匹配: {r.text!r} 包含 {segment!r}")
                         return True

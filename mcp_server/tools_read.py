@@ -523,12 +523,416 @@ def wcd_start(timeout: int = 90) -> dict:
         return {"error": "TOOL_ERROR", "message": str(e), "suggestion": "请检查 WCD 配置和依赖"}
 
 
+# WeFlow CDP 端口（固定为 9222，用于不重启清缓存）
+WEFLOW_CDP_PORT = 9222
+
+
+def _check_cdp_enabled(port: int = WEFLOW_CDP_PORT) -> tuple[bool, dict]:
+    """检查 WeFlow 是否开启了 CDP（Chrome DevTools Protocol）端口。
+
+    用于不重启 WeFlow 清缓存的方案：
+    通过 CDP 调用 ipcRenderer.invoke('cache:clearAll') 清头像缓存。
+
+    Args:
+        port: CDP 端口号，默认 9222
+
+    Returns:
+        tuple (enabled: bool, info: dict)
+        - enabled: CDP 是否可用
+        - info: 包含 Browser/Protocol-Version 等信息（enabled=True 时）或错误信息
+    """
+    import json
+    import urllib.request
+    try:
+        url = f"http://127.0.0.1:{port}/json/version"
+        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            if resp.status != 200:
+                return False, {"error": f"HTTP {resp.status}"}
+            body = resp.read().decode("utf-8", errors="ignore")
+            try:
+                data = json.loads(body)
+            except json.JSONDecodeError:
+                return False, {"error": "invalid JSON"}
+            if "Browser" in data or "webSocketDebuggerUrl" in data:
+                return True, data
+            return False, {"error": "not CDP response", "body": body[:200]}
+    except Exception as e:
+        return False, {"error": str(e)}
+
+
+# ── CDP WebSocket 客户端（纯 Python 标准库实现，无新依赖） ──
+
+
+def _cdp_ws_call(ws_url: str, method: str, params: dict | None = None,
+                 timeout: float = 10.0) -> dict:
+    """通过 WebSocket 调用 CDP 命令（纯 Python 标准库实现）。
+
+    Args:
+        ws_url: ws://127.0.0.1:9222/... 格式的 WebSocket URL
+        method: CDP 方法名，如 "Runtime.evaluate"
+        params: 方法参数 dict
+        timeout: 超时秒数
+
+    Returns:
+        dict: CDP 响应的 result 字段
+
+    Raises:
+        RuntimeError: 握手失败 / 连接关闭 / CDP 返回 error
+    """
+    import base64
+    import json as _json
+    import os
+    import socket
+    import struct
+    import urllib.parse
+
+    parsed = urllib.parse.urlparse(ws_url)
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or 80
+    path = parsed.path or "/"
+    if parsed.query:
+        path += "?" + parsed.query
+
+    sock = socket.create_connection((host, port), timeout=timeout)
+    try:
+        sock.settimeout(timeout)
+
+        # 1. WebSocket 握手
+        ws_key = base64.b64encode(os.urandom(16)).decode("ascii")
+        handshake = (
+            f"GET {path} HTTP/1.1\r\n"
+            f"Host: {host}:{port}\r\n"
+            f"Upgrade: websocket\r\n"
+            f"Connection: Upgrade\r\n"
+            f"Sec-WebSocket-Key: {ws_key}\r\n"
+            f"Sec-WebSocket-Version: 13\r\n"
+            f"\r\n"
+        )
+        sock.sendall(handshake.encode("ascii"))
+
+        # 读取握手响应
+        resp_buf = b""
+        while b"\r\n\r\n" not in resp_buf:
+            chunk = sock.recv(4096)
+            if not chunk:
+                raise RuntimeError("CDP handshake closed before completion")
+            resp_buf += chunk
+
+        status_line = resp_buf.split(b"\r\n", 1)[0]
+        if b" 101 " not in status_line:
+            raise RuntimeError(f"CDP handshake failed: {status_line.decode('ascii', errors='replace')}")
+
+        # 多读的字节作为后续帧的 buffer
+        leftover = resp_buf.split(b"\r\n\r\n", 1)[1] if b"\r\n\r\n" in resp_buf else b""
+
+        # 2. 发送 CDP 命令
+        # 注意：CDP 协议要求 id 为数字（Chrome 实测字符串 id 会无响应）
+        # 每次调用都是新连接，固定用 1 不会冲突
+        msg_id = 1
+        cmd_payload = _json.dumps({
+            "id": msg_id,
+            "method": method,
+            "params": params or {},
+        }).encode("utf-8")
+        _cdp_ws_send_frame(sock, cmd_payload, opcode=0x1)  # text frame
+
+        # 3. 接收响应（最多等 timeout 秒）
+        buffer = bytearray(leftover)
+        deadline_check = 0
+        import time
+        start_time = time.time()
+        while True:
+            if time.time() - start_time > timeout:
+                raise RuntimeError(f"CDP response timeout after {timeout}s")
+            payload, buffer = _cdp_ws_recv_frame(sock, buffer)
+            if payload is None:
+                continue  # ping/pong/fragment header
+
+            try:
+                msg = _json.loads(payload.decode("utf-8"))
+            except _json.JSONDecodeError:
+                continue
+
+            if msg.get("id") != msg_id:
+                continue  # 其他 id 的消息（如事件通知），跳过
+
+            if "error" in msg:
+                raise RuntimeError(f"CDP error: {msg['error']}")
+            return msg.get("result", {})
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
+
+
+def _cdp_ws_send_frame(sock, payload: bytes, opcode: int = 0x1):
+    """发送 WebSocket frame（masked，客户端必须 mask）。"""
+    import os
+    import struct
+    mask_key = os.urandom(4)
+
+    first_byte = 0x80 | opcode  # FIN=1
+    payload_len = len(payload)
+
+    if payload_len < 126:
+        header = struct.pack("!BB", first_byte, 0x80 | payload_len)
+    elif payload_len < 65536:
+        header = struct.pack("!BBH", first_byte, 0x80 | 126, payload_len)
+    else:
+        header = struct.pack("!BBQ", first_byte, 0x80 | 127, payload_len)
+
+    masked = bytearray(payload_len)
+    for i in range(payload_len):
+        masked[i] = payload[i] ^ mask_key[i % 4]
+
+    sock.sendall(header + mask_key + bytes(masked))
+
+
+def _cdp_ws_recv_frame(sock, buffer: bytearray) -> tuple[bytes | None, bytearray]:
+    """接收 WebSocket frame。返回 (payload, new_buffer)。
+
+    payload 为 None 表示非数据帧（ping/pong/close）或分片延续帧（暂不支持）。
+    """
+    import struct
+
+    # 至少 2 字节
+    while len(buffer) < 2:
+        chunk = sock.recv(4096)
+        if not chunk:
+            raise RuntimeError("CDP connection closed")
+        buffer += chunk
+
+    first_byte = buffer[0]
+    second_byte = buffer[1]
+
+    opcode = first_byte & 0x0F
+    masked = (second_byte & 0x80) != 0
+    payload_len = second_byte & 0x7F
+
+    offset = 2
+
+    if payload_len == 126:
+        while len(buffer) < offset + 2:
+            buffer += sock.recv(4096)
+        payload_len = struct.unpack("!H", buffer[offset:offset + 2])[0]
+        offset += 2
+    elif payload_len == 127:
+        while len(buffer) < offset + 8:
+            buffer += sock.recv(4096)
+        payload_len = struct.unpack("!Q", buffer[offset:offset + 8])[0]
+        offset += 8
+
+    mask_key = b""
+    if masked:
+        while len(buffer) < offset + 4:
+            buffer += sock.recv(4096)
+        mask_key = bytes(buffer[offset:offset + 4])
+        offset += 4
+
+    # 读取 payload
+    while len(buffer) < offset + payload_len:
+        chunk = sock.recv(4096)
+        if not chunk:
+            raise RuntimeError("CDP connection closed")
+        buffer += chunk
+
+    payload = bytes(buffer[offset:offset + payload_len])
+    new_buffer = bytearray(buffer[offset + payload_len:])
+
+    if masked:
+        payload = bytes(payload[i] ^ mask_key[i % 4] for i in range(len(payload)))
+
+    # 控制帧处理
+    if opcode == 0x9:  # ping -> 自动回 pong
+        _cdp_ws_send_frame(sock, payload, opcode=0xA)
+        return None, new_buffer
+    elif opcode == 0xA:  # pong
+        return None, new_buffer
+    elif opcode == 0x8:  # close
+        return None, new_buffer
+    elif opcode == 0x0:  # continuation（暂不支持分片）
+        return None, new_buffer
+
+    return payload, new_buffer
+
+
+def _cdp_runtime_evaluate(ws_url: str, expression: str,
+                          await_promise: bool = True,
+                          timeout: float = 15.0) -> dict:
+    """通过 CDP Runtime.evaluate 执行 JavaScript 表达式。
+
+    Args:
+        ws_url: WebSocket 调试 URL
+        expression: JavaScript 表达式（如果是 Promise，需设 await_promise=True）
+        await_promise: 是否等待 Promise 完成
+        timeout: 超时秒数
+
+    Returns:
+        dict: 包含 success/value/error 字段
+    """
+    try:
+        result = _cdp_ws_call(
+            ws_url,
+            "Runtime.evaluate",
+            {
+                "expression": expression,
+                "awaitPromise": await_promise,
+                "returnByValue": True,
+            },
+            timeout=timeout,
+        )
+        # result 结构：{"result": {"type": ..., "value": ..., "subtype": ...}}
+        inner = result.get("result", {})
+        if inner.get("subtype") == "error" or "exceptionDetails" in result:
+            exception = result.get("exceptionDetails", {})
+            return {
+                "success": False,
+                "error": "JavaScript exception",
+                "details": exception,
+            }
+        return {
+            "success": True,
+            "value": inner.get("value"),
+            "type": inner.get("type"),
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def _refresh_weflow_avatar_cache_via_cdp() -> dict:
+    """通过 CDP 调用 WeFlow 的 cache:clearAvatarCache IPC，清头像缓存（不重启 WeFlow）。
+
+    前置条件：
+      - WeFlow 以 --remote-debugging-port=9222 启动（CDP 已开启）
+      - WeFlow 源码已修改并重新构建（包含 cache:clearAvatarCache IPC handler）
+
+    清理范围：
+      L2: chatService.avatarCache（主进程内存）
+      L3: contactCacheService -> contacts.json（持久化）
+      L4: avatarFileCacheService PNG 文件 LRU
+    不清 L1（wcdbCore.avatarUrlCache worker 内存），等 10 分钟 TTL 自动失效。
+
+    什么时候用：wechat_send 获取头像前调用，确保拿到最新头像。
+    返回什么：dict 含 success/message/cdp_used/eval_result 字段。
+    边界是什么：仅清头像缓存，不关闭 DB，不清消息/emoji。
+    """
+    import json
+    import urllib.request
+
+    # 1. 检查 CDP 是否开启
+    cdp_enabled, cdp_info = _check_cdp_enabled()
+    if not cdp_enabled:
+        return {
+            "success": False,
+            "message": f"WeFlow CDP 未开启（端口 {WEFLOW_CDP_PORT}），无法通过 CDP 清缓存",
+            "cdp_used": False,
+            "eval_result": None,
+            "cdp_error": cdp_info.get("error", "unknown"),
+            "suggestion": (
+                f"调 weflow_start 自动开启 CDP（端口 {WEFLOW_CDP_PORT}）后重试，"
+                f"或手动用 WeFlow.exe --remote-debugging-port=9222 启动"
+            ),
+        }
+
+    # 2. 获取 WeFlow renderer 页面列表
+    try:
+        url = f"http://127.0.0.1:{WEFLOW_CDP_PORT}/json"
+        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            pages = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"获取 CDP 页面列表失败: {e}",
+            "cdp_used": False,
+            "eval_result": None,
+        }
+
+    # 3. 找一个 type=page 的页面（WeFlow 主窗口）
+    target_page = None
+    for page in pages:
+        if page.get("type") == "page":
+            target_page = page
+            break
+
+    if not target_page:
+        return {
+            "success": False,
+            "message": f"CDP 未找到 type=page 的页面（pages={len(pages)}）",
+            "cdp_used": False,
+            "eval_result": None,
+            "pages": [{"type": p.get("type"), "url": p.get("url", "")[:100]} for p in pages],
+        }
+
+    ws_url = target_page.get("webSocketDebuggerUrl")
+    if not ws_url:
+        return {
+            "success": False,
+            "message": "CDP 页面缺少 webSocketDebuggerUrl",
+            "cdp_used": False,
+            "eval_result": None,
+        }
+
+    # 4. 通过 CDP Runtime.evaluate 调用 window.electronAPI.cache.clearAvatarCache()
+    #    先检查 API 是否存在（WeFlow 是否已重新构建包含新 IPC）
+    js_expr = (
+        "(function() {"
+        "  if (!window.electronAPI || !window.electronAPI.cache "
+        "      || typeof window.electronAPI.cache.clearAvatarCache !== 'function') {"
+        "    return { success: false, error: 'clearAvatarCache API not available', "
+        "             hint: 'WeFlow 需重新构建以包含 cache:clearAvatarCache IPC' };"
+        "  }"
+        "  return window.electronAPI.cache.clearAvatarCache().then(function(r) {"
+        "    return { success: true, raw: r };"
+        "  }).catch(function(e) {"
+        "    return { success: false, error: String(e) };"
+        "  });"
+        "})()"
+    )
+
+    eval_result = _cdp_runtime_evaluate(ws_url, js_expr, await_promise=True, timeout=15.0)
+
+    if not eval_result.get("success"):
+        return {
+            "success": False,
+            "message": f"CDP Runtime.evaluate 失败: {eval_result.get('error', 'unknown')}",
+            "cdp_used": True,
+            "eval_result": eval_result,
+            "ws_url": ws_url,
+        }
+
+    inner_value = eval_result.get("value") or {}
+    if not inner_value.get("success"):
+        return {
+            "success": False,
+            "message": f"WeFlow clearAvatarCache 调用失败: {inner_value.get('error', 'unknown')}",
+            "cdp_used": True,
+            "eval_result": eval_result,
+            "ws_url": ws_url,
+            "hint": inner_value.get("hint", ""),
+        }
+
+    return {
+        "success": True,
+        "message": "已通过 CDP 调用 clearAvatarCache 清头像缓存（L2/L3/L4）",
+        "cdp_used": True,
+        "eval_result": eval_result,
+        "ws_url": ws_url,
+        "raw": inner_value.get("raw"),
+    }
+
+
 def weflow_status() -> dict:
-    """检查 WeFlow 后端在线状态。
+    """检查 WeFlow 后端在线状态（含 CDP 检测）。
 
     什么时候用：同步前确认 WeFlow 是否已启动。
-    返回什么：dict 含 online/message/suggestion 字段。
+    返回什么：dict 含 online/cdp_enabled/message/suggestion 字段。
     边界是什么：只读检查，不启动进程。
+
+    CDP 用途：开启 CDP 后可不重启 WeFlow 清头像缓存（通过 ipcRenderer.invoke('cache:clearAll')）。
+    未开启 CDP 时，刷新头像需要重启 WeFlow（用 weflow_start 自动重启会带上 CDP 参数）。
     """
     try:
         from engine.importers.weflow_client import WeFlowClient
@@ -538,6 +942,7 @@ def weflow_status() -> dict:
             if config.weflow.backend != "weflow":
                 return {
                     "online": False,
+                    "cdp_enabled": False,
                     "backend": config.weflow.backend,
                     "message": f"当前后端是 {config.weflow.backend}，非 WeFlow",
                     "suggestion": "无需 WeFlow 检查",
@@ -548,14 +953,25 @@ def weflow_status() -> dict:
                 timeout=5,
             )
             online = client.health()
+            # 同时检查 CDP 端口
+            cdp_enabled, cdp_info = _check_cdp_enabled()
             if online:
+                suggestion = None
+                if not cdp_enabled:
+                    suggestion = (
+                        f"WeFlow 在线但未开启 CDP（端口 {WEFLOW_CDP_PORT}）。"
+                        f"刷新头像需重启 WeFlow，或调 weflow_start 重启（自动加 CDP 参数）"
+                    )
                 return {
                     "online": True,
-                    "message": "WeFlow 后端在线，可以正常同步",
-                    "suggestion": None,
+                    "cdp_enabled": cdp_enabled,
+                    "cdp_port": WEFLOW_CDP_PORT if cdp_enabled else None,
+                    "message": "WeFlow 后端在线" + ("，CDP 已开启" if cdp_enabled else "，CDP 未开启"),
+                    "suggestion": suggestion,
                 }
             return {
                 "online": False,
+                "cdp_enabled": False,
                 "message": "WeFlow 后端未响应",
                 "suggestion": "请手动启动 WeFlow（D:\\WeFlow\\WeFlow.exe），或用 weflow_start 工具",
             }
@@ -565,12 +981,23 @@ def weflow_status() -> dict:
         return {"error": "TOOL_ERROR", "message": str(e), "suggestion": "请检查 WeFlow 配置"}
 
 
-def weflow_start(timeout: int = 60) -> dict:
-    """启动 WeFlow 后端进程并等待健康检查通过。
+def weflow_start(timeout: int = 60, force_restart_without_cdp: bool = True) -> dict:
+    """启动 WeFlow 后端进程并等待健康检查通过（自动开启 CDP）。
 
     什么时候用：weflow_status 显示 offline 时调此工具启动 WeFlow。
-    返回什么：dict 含 success/message/already_running 字段。
-    边界是什么：如果 WeFlow 已在运行，直接返回成功。启动后进程持续运行。
+    返回什么：dict 含 success/message/already_running/cdp_enabled 字段。
+    边界是什么：
+    - 如果 WeFlow 已在运行且 CDP 已开启，直接返回成功
+    - 如果 WeFlow 已在运行但 CDP 未开启，按 force_restart_without_cdp 决定是否杀进程重启
+    - 启动时自动加 --remote-debugging-port=9222 参数开启 CDP
+    - 启动后进程持续运行，CDP 端口持续可用
+
+    CDP 用途：开启 CDP 后可通过 ipcRenderer.invoke('cache:clearAll') 不重启清头像缓存。
+
+    Args:
+        timeout: 健康检查超时秒数
+        force_restart_without_cdp: True=已在运行但 CDP 未开启时杀进程重启（默认）；
+                                    False=不重启，返回 CDP 未开启警告
     """
     import platform
     import subprocess
@@ -594,13 +1021,43 @@ def weflow_start(timeout: int = 60) -> dict:
                 timeout=5,
             )
 
-            # 1. 已在运行则直接返回
+            # 1. 已在运行 → 检查 CDP 状态
             if client.health():
-                return {
-                    "success": True,
-                    "already_running": True,
-                    "message": "WeFlow 后端已在运行，无需重复启动",
-                }
+                cdp_enabled, _ = _check_cdp_enabled()
+                if cdp_enabled:
+                    return {
+                        "success": True,
+                        "already_running": True,
+                        "cdp_enabled": True,
+                        "cdp_port": WEFLOW_CDP_PORT,
+                        "message": "WeFlow 后端已在运行，CDP 已开启",
+                    }
+                # CDP 未开启
+                if not force_restart_without_cdp:
+                    return {
+                        "success": True,
+                        "already_running": True,
+                        "cdp_enabled": False,
+                        "message": "WeFlow 后端已在运行，但 CDP 未开启",
+                        "suggestion": (
+                            f"调 weflow_start(force_restart_without_cdp=True) 杀进程重启加 CDP，"
+                            f"或手动关闭 WeFlow 后重调 weflow_start"
+                        ),
+                    }
+                # 杀进程重启加 CDP
+                try:
+                    subprocess.run(
+                        ['taskkill', '/F', '/IM', 'WeFlow.exe'],
+                        capture_output=True, text=True, timeout=15,
+                        encoding='utf-8', errors='ignore'
+                    )
+                    time.sleep(2)  # 等进程完全退出
+                except Exception as e:
+                    return {
+                        "success": False,
+                        "message": f"杀 WeFlow 进程失败: {e}",
+                        "suggestion": "请手动关闭 WeFlow 后重调 weflow_start",
+                    }
 
             # 2. 定位 WeFlow.exe
             weflow_exe = Path("D:/WeFlow/WeFlow.exe")
@@ -611,23 +1068,33 @@ def weflow_start(timeout: int = 60) -> dict:
                     "suggestion": "请确认 WeFlow 已安装到 D:\\WeFlow\\",
                 }
 
-            # 3. 启动进程
+            # 3. 启动进程（加 --remote-debugging-port 参数开启 CDP）
             proc = subprocess.Popen(
-                [str(weflow_exe)],
+                [str(weflow_exe), f"--remote-debugging-port={WEFLOW_CDP_PORT}"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
 
-            # 4. 轮询健康检查
+            # 4. 轮询健康检查 + CDP 端口
             start_time = time.time()
             while time.time() - start_time < timeout:
                 time.sleep(2)
                 if client.health():
+                    cdp_enabled, cdp_info = _check_cdp_enabled()
                     elapsed = time.time() - start_time
+                    if not cdp_enabled:
+                        # HTTP 在线但 CDP 还没就绪，多等一会
+                        cdp_enabled, cdp_info = _check_cdp_enabled()
                     return {
                         "success": True,
                         "already_running": False,
-                        "message": f"WeFlow 后端启动成功（耗时 {elapsed:.1f}s）",
+                        "cdp_enabled": cdp_enabled,
+                        "cdp_port": WEFLOW_CDP_PORT if cdp_enabled else None,
+                        "message": (
+                            f"WeFlow 后端启动成功（耗时 {elapsed:.1f}s），"
+                            f"CDP {'已开启' if cdp_enabled else '未开启'}"
+                        ),
+                        "suggestion": None if cdp_enabled else "CDP 端口未就绪，可调 weflow_status 复查",
                     }
                 if proc.poll() is not None:
                     return {

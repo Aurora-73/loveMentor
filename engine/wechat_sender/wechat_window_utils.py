@@ -53,6 +53,14 @@ user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintyp
 user32.GetWindowThreadProcessId.restype = wintypes.DWORD
 user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
 user32.ShowWindow.restype = wintypes.BOOL
+user32.SetWindowPos.argtypes = [
+    wintypes.HWND, wintypes.HWND,
+    ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+    wintypes.UINT,
+]
+user32.SetWindowPos.restype = wintypes.BOOL
+user32.IsIconic.argtypes = [wintypes.HWND]
+user32.IsIconic.restype = wintypes.BOOL
 
 # 窗口最小尺寸阈值（过滤托盘图标等小窗口）
 WECHAT_MIN_WIDTH = 500
@@ -694,3 +702,118 @@ def restore_wechat_windows():
             user32.ShowWindow(w["hwnd"], SW_SHOW)
             count += 1
     return count
+
+
+# 确保微信窗口宽度的最小阈值（用户反馈：窗口化 658px→两栏，1186px→三栏）
+# 1000 介于两者之间，是恢复三栏的安全阈值
+WECHAT_THREE_COLUMN_MIN_WIDTH = 1000
+
+
+def ensure_wechat_window_width(min_width=WECHAT_THREE_COLUMN_MIN_WIDTH, hwnd=None):
+    """确保微信窗口宽度足够大，避免窗口化时只有两栏。
+
+    用户反馈：微信窗口横向宽度太小时只显示两栏（导航+聊天，无会话列表），
+    导致 dynamic_detector 误判三栏、阶段一搜索栏定位失败。
+    通过 SetWindowPos 增大窗口宽度恢复三栏布局（等同于用户拖动右边界向右放大）。
+
+    经验数据：
+    - 窗口化 658x869 → 两栏（导航+聊天，无会话列表）
+    - 窗口化 1186x946 → 三栏（nav_right=42, session_right=509）
+    - 阈值 min_width=1000 介于两者之间
+
+    Args:
+        min_width: 最小宽度阈值（默认 1000）
+        hwnd: 微信窗口句柄，None 则自动查找
+
+    Returns:
+        dict: {
+            "success": bool,       # 最终窗口宽度是否 >= min_width
+            "hwnd": int,           # 窗口句柄
+            "old_width": int,      # 调整前宽度
+            "new_width": int,      # 调整后宽度
+            "was_resized": bool,   # 是否触发了 SetWindowPos 调整
+            "reason": str,         # 说明文字
+        }
+    """
+    import time
+
+    result = {
+        "success": False, "hwnd": 0,
+        "old_width": 0, "new_width": 0,
+        "was_resized": False, "reason": "",
+    }
+
+    if hwnd is None:
+        win = find_wechat_window()
+        if not win:
+            result["reason"] = "未找到微信窗口"
+            return result
+        hwnd = win["hwnd"]
+
+    result["hwnd"] = hwnd
+
+    # 获取当前窗口位置和尺寸
+    rect = wintypes.RECT()
+    if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+        result["reason"] = "GetWindowRect 失败"
+        return result
+
+    cur_left = rect.left
+    cur_top = rect.top
+    cur_width = rect.right - rect.left
+    cur_height = rect.bottom - rect.top
+    result["old_width"] = cur_width
+    result["new_width"] = cur_width
+
+    # 最小化先恢复（IsIconic 判断是否最小化）
+    if user32.IsIconic(hwnd):
+        SW_RESTORE = 9
+        user32.ShowWindow(hwnd, SW_RESTORE)
+        time.sleep(0.3)
+        if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+            result["reason"] = "恢复最小化后 GetWindowRect 失败"
+            return result
+        cur_left = rect.left
+        cur_top = rect.top
+        cur_width = rect.right - rect.left
+        cur_height = rect.bottom - rect.top
+        result["old_width"] = cur_width
+        result["new_width"] = cur_width
+
+    if cur_width >= min_width:
+        result["success"] = True
+        result["reason"] = f"宽度 {cur_width}px 已 >= {min_width}px，无需调整"
+        return result
+
+    # 宽度不够，用 SetWindowPos 增大（保持 left/top/height 不变，只增大宽度）
+    # SWP_NOZORDER (0x0004): 保持 Z 顺序不变
+    # SWP_NOACTIVATE (0x0010): 不激活窗口（避免抢占前台）
+    SWP_NOZORDER = 0x0004
+    SWP_NOACTIVATE = 0x0010
+    ok = user32.SetWindowPos(
+        hwnd, None,
+        cur_left, cur_top, min_width, cur_height,
+        SWP_NOZORDER | SWP_NOACTIVATE,
+    )
+    if not ok:
+        result["reason"] = f"SetWindowPos 失败 (cur={cur_width}, target={min_width})"
+        return result
+
+    result["was_resized"] = True
+    time.sleep(0.3)  # 等待窗口重绘
+
+    # 验证最终尺寸
+    if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+        result["reason"] = "SetWindowPos 后 GetWindowRect 失败"
+        return result
+
+    new_width = rect.right - rect.left
+    result["new_width"] = new_width
+
+    if new_width >= min_width:
+        result["success"] = True
+        result["reason"] = f"已从 {cur_width}px 调整到 {new_width}px"
+    else:
+        result["reason"] = f"调整后宽度 {new_width}px 仍 < {min_width}px（微信可能限制最小宽度）"
+
+    return result
