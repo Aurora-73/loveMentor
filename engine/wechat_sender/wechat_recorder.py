@@ -391,6 +391,54 @@ class WechatRecorder:
         return None
 
 
+# ── 录屏包装器（从 mcp_server/tools_wechat.py 迁移）──────────────
+
+def with_recording(operation_name, func, *args, **kwargs):
+    """执行微信操作并录屏（统一录屏逻辑，供所有操作微信的 MCP 工具使用）。
+
+    在 MCP 工具层使用，统一处理录屏启动/停止/清理逻辑：
+    - 操作前自动开始录屏（BitBlt + OpenCV VideoWriter，5 FPS）
+    - 操作成功 → 自动删除录屏
+    - 操作失败 → 保留录屏 7 天，路径加入返回值的 recording_path 字段
+    - 录屏路径：data/outputs/recordings/wechat_<op>_<timestamp>_<contact>.mp4
+    - ⚠️ 录屏文件在 data/ 目录下，已被 .gitignore 忽略
+
+    Args:
+        operation_name: 操作名称（用于录屏文件命名，如 "wechat_send"）
+        func: 要执行的函数（返回 dict）
+        *args, **kwargs: 函数参数
+
+    Returns:
+        dict: func 的返回值，添加 recording_path 字段
+              - 成功时 recording_path = None（录屏已删除）
+              - 失败时 recording_path = 录屏文件路径（保留 7 天）
+    """
+    import traceback
+
+    recorder = WechatRecorder(contact_name=operation_name)
+    recorder.start()
+    result = None
+    try:
+        result = func(*args, **kwargs)
+    except Exception as e:
+        result = {
+            "success": False,
+            "message": f"录屏包装层异常: {e}",
+            "error": f"WRAPPER_ERROR: {traceback.format_exc()}",
+            "recording_path": None,
+        }
+    finally:
+        recorder.stop()
+        if result and isinstance(result, dict):
+            if result.get("success"):
+                recorder.discard()
+                result["recording_path"] = None
+            else:
+                kept_path = recorder.keep()
+                result["recording_path"] = kept_path
+    return result
+
+
 if __name__ == "__main__":
     # 命令行测试：录制 5 秒
     recorder = WechatRecorder(contact_name="test")

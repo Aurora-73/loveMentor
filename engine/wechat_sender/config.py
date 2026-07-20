@@ -75,6 +75,15 @@ HOUGH_CIRCLE_CENTER_DIST_RATIO = 0.3  # 圆心距头像中心的最大距离比�
 # OCR 匹配"发送"文字的最大长度
 SEND_TEXT_MAX_LENGTH = 4
 
+# 微信发送按钮颜色（用户澄清：RGB(0, 195, 117) = BGR(117, 195, 0)）
+SEND_BTN_BGR = (117, 195, 0)  # 用 tuple 避免 uint8 溢出
+
+# 发送按钮颜色容差
+SEND_BTN_TOLERANCE = 30
+
+# 输入框位置：距底部 80px（输入框中心的大概位置）
+INPUT_BOX_OFFSET_FROM_BOTTOM = 80
+
 
 # ── 消息发送 ──────────────────────────────────────────────────
 

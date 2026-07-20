@@ -14,7 +14,17 @@ class WeChatLayoutDetector:
         self.nav_bar_right = 0
         self.session_list_right = 0
 
-    def detect(self, image):
+    def detect(self, image, debug: bool = False, output_path: str = None):
+        """检测微信界面布局（导航栏/会话列表/聊天区域边界）。
+
+        Args:
+            image: BGR 图像（numpy 数组）
+            debug: True 则保存标注图（默认 False，避免文件写入副作用）
+            output_path: 自定义标注图保存路径（仅 debug=True 时生效），
+                         默认 "screenshots/layout_analysis.png"
+        Returns:
+            tuple (nav_right, session_right)
+        """
         h, w = image.shape[:2]
         logger.info(f"图片尺寸: {w}x{h}")
 
@@ -42,19 +52,20 @@ class WeChatLayoutDetector:
         logger.info(f"  会话列表: {nav_right}-{session_right} ({session_right-nav_right}px)")
         logger.info(f"  聊天区域: {session_right}-{w} ({w-session_right}px)")
 
-        # 标注边界
-        debug_image = image.copy()
-        cv2.line(debug_image, (nav_right, 0), (nav_right, h), (0, 255, 0), 3)
-        cv2.line(debug_image, (session_right, 0), (session_right, h), (0, 0, 255), 3)
+        # 标注边界（仅在 debug 模式下保存，避免生产环境的文件写入副作用）
+        if debug:
+            debug_image = image.copy()
+            cv2.line(debug_image, (nav_right, 0), (nav_right, h), (0, 255, 0), 3)
+            cv2.line(debug_image, (session_right, 0), (session_right, h), (0, 0, 255), 3)
 
-        cv2.putText(debug_image, f"Nav: {nav_right}px", (10, 40),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
-        cv2.putText(debug_image, f"Session: {session_right}px", (10, 80),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
+            cv2.putText(debug_image, f"Nav: {nav_right}px", (10, 40),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
+            cv2.putText(debug_image, f"Session: {session_right}px", (10, 80),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
 
-        output_path = "screenshots/layout_analysis.png"
-        cv2.imwrite(output_path, debug_image)
-        logger.info(f"\n标注图已保存: {output_path}")
+            save_path = output_path or "screenshots/layout_analysis.png"
+            cv2.imwrite(save_path, debug_image)
+            logger.info(f"\n标注图已保存: {save_path}")
 
         return nav_right, session_right
 
@@ -147,7 +158,7 @@ def main():
         return
 
     detector = WeChatLayoutDetector()
-    detector.detect(image)
+    detector.detect(image, debug=True)
 
     logger.info("\n✅ 完成，请查看 screenshots/layout_analysis.png")
 

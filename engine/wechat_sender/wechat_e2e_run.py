@@ -148,6 +148,47 @@ def handle_stage_2_history_window(attempt_idx, template_path):
     points, best_score = find_template_multiscale(
         img, template_path, TEMPLATE_SCALES, MATCH_THRESHOLD, NMS_MIN_DIST
     )
+
+    # v3.0 改进：历史聊天窗口头像匹配失败 → 刷新头像并重新匹配
+    # 场景：能进入阶段二说明阶段一已成功（点击了正确的联系人），所以联系人是对的
+    #       阶段一用的可能是旧头像模板，历史聊天窗口里的头像是最新的 → 刷新头像
+    # 用户需求："OCR 认为匹配到了，但头像匹配认为没匹配到，应该都更新头像"
+    # 阶段二虽然没有独立 OCR 验证，但阶段一的 OCR 验证已确认联系人
+    if not points:
+        logger.info(
+            f"    🔄 [v3.0-Stage2] 历史聊天窗口头像匹配失败 (best={best_score:.3f})，"
+            f"刷新头像并重新匹配..."
+        )
+        try:
+            import os as _os
+            avatar_filename = _os.path.basename(template_path)
+            wxid_guess = _os.path.splitext(avatar_filename)[0]
+            from engine.wechat_data.avatar_fetcher import get_avatar
+            new_avatar_path = get_avatar(wxid_guess, force_refresh=True)
+            if new_avatar_path and _os.path.exists(new_avatar_path):
+                logger.info(f"    ✅ 头像已刷新: {new_avatar_path}")
+                # 用新模板重新匹配
+                points, best_score = find_template_multiscale(
+                    img, new_avatar_path, TEMPLATE_SCALES,
+                    MATCH_THRESHOLD, NMS_MIN_DIST
+                )
+                if points:
+                    logger.info(
+                        f"    ✅ [v3.0-Stage2] 刷新后历史聊天窗口匹配成功 "
+                        f"(best={best_score:.3f})"
+                    )
+                    # 更新 template_path 指向新头像
+                    template_path = new_avatar_path
+                else:
+                    logger.warning(
+                        f"    ⚠️ [v3.0-Stage2] 刷新后历史聊天窗口仍匹配失败 "
+                        f"(best={best_score:.3f})"
+                    )
+            else:
+                logger.warning(f"    ⚠️ [v3.0-Stage2] 头像刷新失败")
+        except Exception as e:
+            logger.warning(f"    ⚠️ [v3.0-Stage2] 刷新头像异常: {e}")
+
     if not points:
         logger.error(f"    ❌ 历史聊天窗口内未匹配到头像 (最高置信度={best_score:.3f})")
         return False
@@ -282,7 +323,8 @@ def _file_hash(file_path):
         return ""
 
 
-def _refresh_avatar_and_maybe_retry(contact_name, template_path, message):
+def _refresh_avatar_and_maybe_retry(contact_name, template_path, message,
+                                   contact_profile=None):
     """阶段一全部失败后，更新头像并检测变化，决定是否自动重试。
 
     用户需求：
@@ -296,6 +338,8 @@ def _refresh_avatar_and_maybe_retry(contact_name, template_path, message):
         contact_name: 联系人标识符（用于查询头像）
         template_path: 原头像模板路径
         message: 要发送的消息（重试时用）
+        contact_profile: ContactProfile 实例（可选，v3.0 新增）
+            - 传给 run_one_attempt 用于阶段 F 的 OCR display_name 回退验证
 
     Returns:
         tuple (success: bool, new_template_path: str)
@@ -395,6 +439,7 @@ def _refresh_avatar_and_maybe_retry(contact_name, template_path, message):
         success, target, count_after = run_one_attempt(
             attempt, MAX_ATTEMPTS, do_click=True,
             contact_name=contact_name, template_path=new_path,
+            contact_profile=contact_profile,
         )
 
         if success:
@@ -434,13 +479,84 @@ def _refresh_avatar_and_maybe_retry(contact_name, template_path, message):
     return True, new_path
 
 
-def run_e2e(message, contact_name, template_path):
+def _verify_chat_header_display_name(contact_profile, image=None):
+    """用 font_matcher 验证聊天界面顶部的 display_name（v3.0 新增）。
+
+    在阶段二完成后调用，截图当前聊天界面，用字体匹配验证顶部 display_name。
+    失败只记录警告，不阻断流程（增强验证，提升可信度）。
+
+    Args:
+        contact_profile: ContactProfile 实例（必须包含 display_name）
+        image: 可选，已有的聊天界面截图（BGR numpy 数组）。
+               None 时自动截图。传入可避免重复截图。
+
+    Returns:
+        bool: True=验证通过，False=验证失败（不阻断主流程）
+    """
+    display_name = contact_profile.display_name
+    if not display_name:
+        return False
+
+    logger.info(f"\n[阶段 2.5] display_name 验证: {display_name!r}")
+
+    # 截图当前聊天界面（或使用传入的截图）
+    if image is not None:
+        img = image
+        logger.info("   使用传入的截图（避免重复截图）")
+    else:
+        from test_current_wechat import find_wechat_window, screencap_window
+        window = find_wechat_window()
+        if window is None:
+            logger.warning("   ⚠️ 未找到微信窗口，跳过 display_name 验证")
+            return False
+
+        img = screencap_window(window["hwnd"])
+        if img is None:
+            logger.warning("   ⚠️ 截图失败，跳过 display_name 验证")
+            return False
+
+    # 保存截图供调试
+    debug_path = os.path.join(OUTPUT_DIR, "stage_2_5_chat_header.png")
+    cv2.imwrite(debug_path, img)
+    logger.info(f"   截图: {debug_path}")
+
+    # 用 font_matcher 在聊天标题区域匹配 display_name
+    try:
+        from font_matcher import get_font_matcher
+        matcher = get_font_matcher()  # 单例，避免重复加载字库
+        match = matcher.find_in_chat_header(img, display_name, threshold=0.75)
+        if match:
+            conf = match.get("confidence", 0)
+            cx = match.get("center_x", 0)
+            cy = match.get("center_y", 0)
+            logger.info(
+                f"   ✅ display_name 验证通过: {display_name!r} "
+                f"conf={conf:.4f} pos=({cx}, {cy})"
+            )
+            return True
+        else:
+            logger.warning(
+                f"   ⚠️ display_name 验证失败: 未在聊天标题区域匹配到 {display_name!r}"
+            )
+            logger.info("   （可能原因：display_name 含特殊字符、字号不匹配、"
+                        "窗口未完全切换到聊天界面）")
+            return False
+    except ImportError:
+        logger.warning("   ⚠️ font_matcher 模块不可用，跳过 display_name 验证")
+        return False
+
+
+def run_e2e(message, contact_name, template_path, contact_profile=None):
     """端到端流程：阶段一 → 阶段二 → 阶段三
 
     Args:
         message: 要发送的消息内容
         contact_name: 联系人昵称（用于搜索栏输入）
         template_path: 联系人头像模板路径
+        contact_profile: ContactProfile 实例（可选，v3.0 新增）
+            - 包含 display_name/alias/wxid 等精确特征
+            - 用于 font_matcher 验证聊天标题、template_matcher 验证 UI 元素
+            - None 时回退到原有行为（仅靠 contact_name + template_path）
     """
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -452,6 +568,8 @@ def run_e2e(message, contact_name, template_path):
     logger.info(f"  联系人: {contact_name!r}")
     logger.info(f"  模板: {template_path}")
     logger.info(f"  消息: {message!r}")
+    if contact_profile is not None:
+        logger.info(f"  联系人特征: {contact_profile}")
     logger.info(f"  最多尝试次数: {MAX_ATTEMPTS}（初次 + {MAX_RETRIES} 次重试）")
     logger.info("=" * 60)
 
@@ -534,6 +652,7 @@ def run_e2e(message, contact_name, template_path):
         success, target, count_after = run_one_attempt(
             attempt, MAX_ATTEMPTS, do_click=True,
             contact_name=contact_name, template_path=template_path,
+            contact_profile=contact_profile,
         )
 
         if not success:
@@ -553,7 +672,8 @@ def run_e2e(message, contact_name, template_path):
         # - 头像未变 → 不重试（头像不是问题），直接返回失败
         # - 头像变了 → 自动重试发送流程，不通知 agent
         retry_success, new_template = _refresh_avatar_and_maybe_retry(
-            contact_name, template_path, message
+            contact_name, template_path, message,
+            contact_profile=contact_profile,
         )
         if retry_success:
             return True
@@ -590,6 +710,15 @@ def run_e2e(message, contact_name, template_path):
     else:
         logger.warning(f"   ⚠️ 未预期的窗口数: {chat_count}，尝试继续进入阶段三")
 
+    # ========== 阶段 2.5：display_name 验证（v3.0 新增，非阻断） ==========
+    # 用 font_matcher 在聊天界面顶部验证 display_name
+    # 失败只记录警告，不阻断流程（增强验证，不是必须）
+    if contact_profile is not None and contact_profile.display_name:
+        try:
+            _verify_chat_header_display_name(contact_profile)
+        except Exception as e:
+            logger.warning(f"   ⚠️ display_name 验证异常: {e}（不阻断流程）")
+
     # ========== 阶段三：输入+发送消息 ==========
     logger.info("\n" + "#" * 60)
     logger.info("#  阶段三：输入+发送消息")
@@ -605,6 +734,249 @@ def run_e2e(message, contact_name, template_path):
     logger.info("  ✅ 端到端流程全部成功")
     logger.info("=" * 60)
     return True
+
+
+# ── 业务编排：发送消息（从 mcp_server/tools_wechat.py 迁移）──────────────
+
+def send_message_with_retry(name: str, message: str) -> dict:
+    """发送消息完整业务编排（不含录屏，由 MCP 工具层包装）。
+
+    流程：
+    1. 解析联系人（resolve_contact）→ 获取微信号/wxid/display_name
+    2. 同步最新 display_name（WeFlow API + 数据库更新）
+    3. 定位头像模板（本地 → avatar_fetcher 自动获取）
+    4. 确保微信窗口可见（ensure_wechat_window）
+    5. 构建 ContactProfile + 调用 run_e2e
+    6. 返回标准化的结果 dict
+
+    头像自动获取逻辑：
+    - 本地有头像 → 直接用
+    - 本地无头像 → 立即调用 avatar_fetcher 获取并保存
+
+    Args:
+        name: 联系人标识符（微信号/wxid/昵称/备注名 均可）
+        message: 要发送的消息内容
+
+    Returns:
+        dict: {
+            "success": bool,
+            "message": str,
+            "contact": str,
+            "search_term": str,
+            "template": str,
+            "attempts": int,
+            "error": str|None,
+            "window_restored": bool,
+            "matches": list|None,
+        }
+    """
+    import traceback
+    from engine.wechat_sender.contact_profile import resolve_contact, ContactProfile
+    from engine.wechat_sender.ensure_window import ensure_wechat_window
+
+    # ── 步骤 1: 解析联系人，获取微信号 ──
+    resolution = resolve_contact(name)
+    if not resolution["success"]:
+        # 匹配失败（未找到 / 多匹配），拒绝发送
+        return {
+            "success": False,
+            "message": resolution["message"],
+            "contact": name,
+            "search_term": name,
+            "template": "",
+            "attempts": 0,
+            "error": resolution["error"],
+            "window_restored": False,
+            "matches": resolution["matches"] if resolution["match_count"] > 1 else None,
+        }
+
+    search_term = resolution["search_term"]   # 微信号（用于搜索）
+    display_name = resolution["display_name"]  # 显示名（OCR 文字识别用）
+    alias = resolution["alias"]                # 微信号（内部唯一标识）
+    wxid = resolution["id"]                    # wxid（唯一，用于头像模板命名）
+
+    # ── 步骤 1.5: 同步最新 display_name（v3.0 新增） ──
+    # 用户决策：OCR display_name 验证作为主要验证方式，必须保证 display_name 是最新的
+    # WeFlow API 查询很轻量（~0.05s），每次发送前都同步
+    # 如果 WeFlow API 不可用或查询失败，静默回退到数据库中的 display_name（不阻断流程）
+    if wxid:
+        try:
+            from engine.config import load_config
+            from engine.importers.weflow_client import WeFlowClient
+            config = load_config()
+            client = WeFlowClient(
+                base_url=config.weflow.base_url,
+                token=config.weflow.token,
+                timeout=min(config.weflow.timeout, 5),  # 限制 5s，避免卡住
+            )
+            contacts = client.list_contacts(keyword=wxid, limit=5)
+            # 精确匹配 wxid（避免 keyword 模糊匹配到其他联系人）
+            matched = [c for c in contacts if c.get("username") == wxid]
+            if matched:
+                latest_info = matched[0]
+                latest_display_name = latest_info.get("displayName") or latest_info.get("nickname")
+                if latest_display_name and latest_display_name != display_name:
+                    logger.info(
+                        f"[display_name 同步] 数据库={display_name!r} → WeFlow 最新={latest_display_name!r}，已更新"
+                    )
+                    # 更新数据库
+                    import sqlite3
+                    DB_PATH = os.path.join(_PROJECT_ROOT, "data", "raw", "core.db")
+                    conn = sqlite3.connect(DB_PATH)
+                    try:
+                        conn.execute(
+                            "UPDATE contacts SET display_name = ?, nickname = ?, updated_at = strftime('%s','now') WHERE id = ?",
+                            (latest_display_name, latest_info.get("nickname"), wxid),
+                        )
+                        conn.commit()
+                    finally:
+                        conn.close()
+                    # 更新 resolution 和本地变量
+                    display_name = latest_display_name
+                    resolution["display_name"] = latest_display_name
+                elif latest_display_name:
+                    logger.info(f"[display_name 同步] 数据库已是最新: {display_name!r}")
+            else:
+                logger.warning(f"[display_name 同步] WeFlow 未找到 wxid={wxid}，使用数据库 display_name={display_name!r}")
+        except Exception as e:
+            logger.warning(
+                f"[display_name 同步] 查询 WeFlow 失败: {e}，使用数据库 display_name={display_name!r}"
+            )
+
+    # ── 步骤 2: 定位头像模板（统一用 wxid 查找，唯一不会冲突）──
+    # 重要：
+    # - 不能用 display_name 作为文件名，因为同名联系人会互相覆盖
+    # - 不再用 alias 副本，统一用 wxid 命名（avatar_fetcher 不再创建 alias 副本）
+    # - wxid 是微信内部唯一标识，比微信号（alias）更稳定（alias 可改，wxid 不可改）
+    avatars_dir = os.path.join(_PROJECT_ROOT, "data", "avatars")
+    template_path = os.path.join(avatars_dir, f"{wxid}.jpg") if wxid else ""
+
+    # 如果头像模板不存在，先尝试用 avatar_fetcher 获取头像（用 wxid 查询）
+    if not template_path or not os.path.exists(template_path):
+        try:
+            from engine.wechat_data.avatar_fetcher import get_avatar
+            # 用 wxid 查询（wxid 唯一，不会冲突）
+            # 重要：force_refresh=True 会触发 avatar_fetcher 内部调用
+            # mcp_server.weflow_cdp.refresh_contact_avatar(wxid)，
+            # 通过 CDP 强制刷新 WeFlow 的 L1/L2 头像缓存，从 wcdb 数据库
+            # 读取最新 avatarUrl。不需要在这里显式调 CDP。
+            fetch_identifier = wxid if wxid else (alias if alias else display_name)
+            fetched_path = get_avatar(fetch_identifier, force_refresh=True)
+            if fetched_path and os.path.exists(fetched_path):
+                template_path = fetched_path
+            else:
+                id_hint = f"（wxid: {wxid}）" if wxid else ""
+                return {
+                    "success": False,
+                    "message": (
+                        f"头像模板不存在且自动获取失败: data/avatars/{wxid}.jpg{id_hint}。"
+                        f"请手动将联系人头像保存为 data/avatars/<wxid>.jpg"
+                    ),
+                    "contact": display_name,
+                    "search_term": search_term,
+                    "template": template_path or "",
+                    "attempts": 0,
+                    "error": "TEMPLATE_NOT_FOUND",
+                    "window_restored": False,
+                    "matches": None,
+                }
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"头像模板不存在且获取异常: {e}",
+                "contact": display_name,
+                "search_term": search_term,
+                "template": template_path or "",
+                "attempts": 0,
+                "error": "TEMPLATE_FETCH_ERROR",
+                "window_restored": False,
+                "matches": None,
+            }
+
+    # 设置 DPI 感知
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        pass
+
+    # 确保微信窗口可见（修复：后台运行无窗口时打开窗口）
+    window_result = ensure_wechat_window()
+    window_restored = window_result.get("action") == "restored"
+
+    if not window_result["success"]:
+        return {
+            "success": False,
+            "message": f"微信窗口不可用: {window_result['message']}",
+            "contact": display_name,
+            "search_term": search_term,
+            "template": template_path,
+            "attempts": 0,
+            "error": "WINDOW_NOT_AVAILABLE",
+            "window_restored": window_restored,
+            "matches": None,
+        }
+
+    # 构建 ContactProfile（v3.0 新增：把 resolve_contact 的结果打包传递给下游）
+    # 让各阶段能用 display_name 做字体匹配、用 alias 做微信号验证
+    contact_profile = ContactProfile.from_resolution(resolution, avatar_path=template_path)
+
+    # 执行端到端发送（用微信号 search_term 搜索，用 template_path 匹配头像）
+    try:
+        success = run_e2e(message, search_term, template_path, contact_profile=contact_profile)
+    except ImportError as e:
+        return {
+            "success": False,
+            "message": f"依赖模块导入失败: {e}",
+            "contact": name,
+            "search_term": name,
+            "template": "",
+            "attempts": 0,
+            "error": "IMPORT_ERROR",
+            "window_restored": False,
+            "matches": None,
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"运行异常: {e}",
+            "contact": name,
+            "search_term": name,
+            "template": "",
+            "attempts": 0,
+            "error": f"RUNTIME_ERROR: {traceback.format_exc()}",
+            "window_restored": False,
+            "matches": None,
+        }
+
+    if success:
+        msg = f"消息已成功发送给 {display_name}"
+        if alias:
+            msg += f"（微信号: {alias}）"
+        if window_restored:
+            msg += "（已自动恢复微信窗口）"
+        return {
+            "success": True,
+            "message": msg,
+            "contact": display_name,
+            "search_term": search_term,
+            "template": template_path,
+            "attempts": 1,
+            "error": None,
+            "window_restored": window_restored,
+            "matches": None,
+        }
+    else:
+        return {
+            "success": False,
+            "message": f"发送失败（端到端流程未成功，详见日志）",
+            "contact": display_name,
+            "search_term": search_term,
+            "template": template_path,
+            "attempts": 4,
+            "error": "E2E_FLOW_FAILED",
+            "window_restored": window_restored,
+            "matches": None,
+        }
 
 
 def main():

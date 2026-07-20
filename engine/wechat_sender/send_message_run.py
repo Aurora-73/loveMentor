@@ -40,6 +40,10 @@ import cv2
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# 添加项目根目录到 sys.path（用于 from engine.wechat_sender.xxx import 的绝对导入）
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 from dynamic_detector import WeChatLayoutDetector  # noqa: E402
 from test_current_wechat import find_wechat_window, screencap_window  # noqa: E402
 from wechat_window_utils import find_largest_wechat_window  # noqa: E402  统一窗口枚举
@@ -54,20 +58,26 @@ from click_search_and_input import (  # noqa: E402
 from logger import get_logger  # noqa: E402
 logger = get_logger(__name__)
 
+# 统一配置（从 config.py 导入，避免散落）
+from config import (  # noqa: E402
+    SEND_BTN_BGR,
+    SEND_BTN_TOLERANCE,
+    INPUT_BOX_OFFSET_FROM_BOTTOM,
+)
+
 user32 = ctypes.windll.user32
 
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
 
-# 微信发送按钮颜色（用户澄清：RGB(0, 195, 117) = BGR(117, 195, 0)）
-SEND_BTN_BGR = (117, 195, 0)  # 用 tuple 避免 uint8 溢出
-SEND_BTN_TOLERANCE = 30
-
-# 输入框位置：距底部 80px（输入框中心的大概位置）
-INPUT_BOX_OFFSET_FROM_BOTTOM = 80
-
 
 def find_send_button_by_ocr(image):
-    """用 OCR 识别"发送"文字定位发送按钮。
+    """定位发送按钮（v3.0 三层架构：图标模板匹配 → OCR → 颜色检测）。
+
+    识别策略：
+    - 方法0: 图标模板匹配（v6 验证 conf=1.0000，速度快 100 倍）—— 最优先
+        - 可发送态: send_green_full.png / send_green_compact.png
+        - 不可发送态: 发送-灰色.png
+    - 方法1: OCR 识别"发送"文字 —— 回退
 
     Args:
         image: 微信窗口截图（BGR numpy 数组）
@@ -77,11 +87,33 @@ def find_send_button_by_ocr(image):
     """
     marked = image.copy()
 
+    # 方法0: 图标模板匹配（v3.0 新增，v6 验证 conf=1.0000）
     try:
-        # 确保项目根目录在 sys.path 中
-        _project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        if _project_root not in sys.path:
-            sys.path.insert(0, _project_root)
+        # sys.path 已在模块顶部配置（_PROJECT_ROOT）
+        from engine.wechat_sender.template_matcher import find_send_button as find_send_button_template
+
+        template_match = find_send_button_template(image, threshold=0.85)
+        if template_match is not None:
+            cx, cy = template_match.center_x, template_match.center_y
+            logger.info(
+                f"    ✅ [模板匹配] 发送按钮 conf={template_match.confidence:.4f} "
+                f"pos=({cx}, {cy})"
+            )
+            # 在图上标注
+            cv2.circle(marked, (cx, cy), 15, (0, 255, 0), 3)
+            cv2.putText(
+                marked, f"SEND ({cx},{cy}) conf={template_match.confidence:.3f}",
+                (cx + 20, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                (0, 0, 255), 2, cv2.LINE_AA,
+            )
+            return cx, cy, marked
+        else:
+            logger.info("    [模板匹配] 未找到发送按钮，回退到 OCR")
+    except Exception as e:
+        logger.warning(f"    ⚠️ 模板匹配失败: {e}，回退到 OCR", exc_info=True)
+
+    # 方法1: OCR 识别"发送"文字
+    try:
         from engine.importers.ocr_engine import ocr_image_array
 
         results = ocr_image_array(image, use_cache=False)
@@ -99,7 +131,7 @@ def find_send_button_by_ocr(image):
 
         logger.warning("    ⚠️ OCR 未识别到含'发送'的文字（≤4字符）")
     except Exception as e:
-        logger.warning(f"    ⚠️ OCR 识别失败: {e}")
+        logger.warning(f"    ⚠️ OCR 识别失败: {e}", exc_info=True)
 
     return None, None, marked
 

@@ -525,10 +525,29 @@ def _query_avatar_via_weflow_cdp(
     # 调用 refreshContactAvatar 强制刷新
     refresh_result = refresh_contact_avatar(wxid)
     if not refresh_result.get("success"):
-        logger.warning(
-            f"CDP refreshContactAvatar('{wxid}') 失败: {refresh_result.get('error', 'unknown')}"
-        )
-        return None
+        # CDP 未开启 / WeFlow 后端未响应 → 自动启动 WeFlow 后重试一次
+        err = refresh_result.get("error", "unknown")
+        if (not refresh_result.get("cdp_used")) or "CDP" in err or "WeFlow" in err:
+            logger.info(
+                f"WeFlow CDP 不可用（{err}），自动启动 WeFlow 后重试..."
+            )
+            try:
+                from mcp_server.tools_read import weflow_start
+                start_result = weflow_start(timeout=60, force_restart_without_cdp=True)
+                if start_result.get("success"):
+                    logger.info(f"WeFlow 已启动，重试 refreshContactAvatar...")
+                    refresh_result = refresh_contact_avatar(wxid)
+                else:
+                    logger.warning(
+                        f"WeFlow 启动失败: {start_result.get('message', 'unknown')}"
+                    )
+            except Exception as e:
+                logger.warning(f"自动启动 WeFlow 异常: {e}")
+        if not refresh_result.get("success"):
+            logger.warning(
+                f"CDP refreshContactAvatar('{wxid}') 失败: {refresh_result.get('error', 'unknown')}"
+            )
+            return None
 
     avatar_url = refresh_result.get("avatarUrl", "")
     display_name = refresh_result.get("displayName", "") or identifier
@@ -891,6 +910,147 @@ def list_local_avatars() -> list[dict]:
                 "size_kb": f.stat().st_size // 1024,
             })
     return result
+
+
+def get_avatar_with_meta(
+    name: str,
+    force_refresh: bool = False,
+    check_update: bool = True,
+) -> dict:
+    """获取联系人头像并返回完整元信息（MCP 工具 person_avatar 的业务实现）。
+
+    支持任意标识符：昵称、wxid、微信号、备注名、alias 均可。
+    头像保存为 data/avatars/<name>.jpg，兼容 wechat_send 工具。
+
+    头像更新策略：
+    - 默认（check_update=True）: 比较头像 URL，变化才重新下载
+    - force_refresh=True: 强制重新下载
+    - check_update=False: 有缓存就返回，不检查更新
+
+    数据源优先级：
+    1. 本地缓存 data/avatars/（最快）
+    2. 本地 core.db contacts 表
+    3. WeFlow/WCD HTTP API（需要服务运行）
+    4. WeFlow contacts.json 缓存（CDN 直链，不需要服务运行）
+
+    Args:
+        name: 联系人标识符（昵称/wxid/微信号/备注名/alias 均可）
+        force_refresh: 为 True 时强制重新下载（默认 False）
+        check_update: 为 True 时检查头像 URL 是否变化（默认 True）
+
+    Returns:
+        dict: {
+            "success": bool,
+            "message": str,          # 结果描述
+            "identifier": str,       # 输入的标识符
+            "avatar_path": str,      # 头像本地路径
+            "avatar_url": str,       # 头像来源 URL
+            "display_name": str,     # 解析到的显示名
+            "wxid": str,             # 解析到的 wxid
+            "updated": bool,         # 是否重新下载了头像
+            "error": str|None,       # 失败原因
+        }
+    """
+    import os as _os
+    from engine.config import load_config
+    from engine.importers.db_init import get_db
+
+    config = load_config()
+
+    # 先检查是否已有缓存（用于判断是否 updated）
+    cached_before = _find_cached_avatar(name)
+
+    # 获取头像
+    avatar_path = get_avatar(
+        name,
+        force_refresh=force_refresh,
+        check_update=check_update,
+    )
+
+    if not avatar_path:
+        return {
+            "success": False,
+            "message": f"未找到联系人 '{name}' 的头像",
+            "identifier": name,
+            "avatar_path": "",
+            "avatar_url": "",
+            "display_name": "",
+            "wxid": "",
+            "updated": False,
+            "error": "AVATAR_NOT_FOUND",
+        }
+
+    # 获取头像 URL 和元信息
+    avatar_url = get_avatar_url(name) or ""
+
+    # 尝试解析 wxid 和 display_name
+    wxid = ""
+    display_name = name
+
+    conn = get_db(config.db_path)
+    try:
+        local_result = _query_local_avatar(conn, name)
+        if local_result:
+            wxid = local_result["wxid"]
+            display_name = local_result["display_name"] or name
+    finally:
+        conn.close()
+
+    if not wxid:
+        cache_result = _query_weflow_cache(name)
+        if cache_result:
+            wxid = cache_result["wxid"]
+            display_name = cache_result["display_name"] or name
+
+    # 判断是否重新下载了
+    cached_after = _find_cached_avatar(name)
+    updated = (not cached_before) or (cached_before != cached_after)
+
+    # 如果是 .png 旧格式，转换为 .jpg
+    if avatar_path.endswith(".png"):
+        jpg_path = avatar_path.rsplit(".", 1)[0] + ".jpg"
+        try:
+            from PIL import Image
+            img = Image.open(avatar_path)
+            img.convert("RGB").save(jpg_path, "JPEG", quality=95)
+            avatar_path = jpg_path
+            updated = True
+        except Exception:
+            # 如果转换失败，保留 .png
+            pass
+
+    # 检查文件是否存在
+    if not _os.path.exists(avatar_path):
+        return {
+            "success": False,
+            "message": f"头像文件不存在: {avatar_path}",
+            "identifier": name,
+            "avatar_path": avatar_path,
+            "avatar_url": avatar_url,
+            "display_name": display_name,
+            "wxid": wxid,
+            "updated": False,
+            "error": "FILE_NOT_FOUND",
+        }
+
+    size_kb = _os.path.getsize(avatar_path) // 1024
+    msg = f"头像已就绪: {display_name}"
+    if updated:
+        msg += f"（已更新，{size_kb} KB）"
+    else:
+        msg += f"（未变化，{size_kb} KB）"
+
+    return {
+        "success": True,
+        "message": msg,
+        "identifier": name,
+        "avatar_path": avatar_path,
+        "avatar_url": avatar_url[:100] + "..." if len(avatar_url) > 100 else avatar_url,
+        "display_name": display_name,
+        "wxid": wxid,
+        "updated": updated,
+        "error": None,
+    }
 
 
 if __name__ == "__main__":

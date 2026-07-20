@@ -65,9 +65,9 @@ user32 = ctypes.windll.user32
 
 # 头像模板目录：data/avatars/（项目级共享）
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-TEMPLATE_PATH = os.path.join(_PROJECT_ROOT, "data", "avatars", "[REDACTED].jpg")
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
-CONTACT_NAME = "[REDACTED]"
+# 注：CONTACT_NAME/TEMPLATE_PATH 已移除硬编码默认值
+# 调用方（run_e2e）必须通过参数显式传入 contact_name 和 template_path
 
 # 修复 P1-1/P1-3：从 config.py 导入统一配置，删除重复定义
 from config import (
@@ -96,11 +96,44 @@ KEYEVENTF_KEYUP = 0x0002
 def find_search_bar_in_image(image):
     """在主窗口截图中检测搜索栏位置。
 
-    优先使用 OCR 识别"搜索"文字精确定位，失败时回退到布局检测+固定比例。
+    识别策略（v3.0 三层架构）：
+    - 方法0: 图标模板匹配（v5 验证 conf=1.0000，速度快 100 倍）—— 最优先
+    - 方法1: OCR 识别"搜索"文字 —— 回退
+    - 方法2: 布局检测（白色判定）—— 回退
+    - 方法3: 固定比例 —— 兜底
+
     OCR 匹配规则：文字长度至多4字符且包含"搜索"。
     结合白色判定（布局检测）和 OCR 两个位置，取更可靠的结果。
     """
     h, w = image.shape[:2]
+
+    # 方法0: 图标模板匹配（v3.0 新增，v5 验证 conf=1.0000）
+    try:
+        from template_matcher import find_search_bar as find_search_bar_template
+        template_match = find_search_bar_template(image, threshold=0.85)
+        if template_match is not None:
+            logger.info(
+                f"    ✅ [模板匹配] 搜索栏 conf={template_match.confidence:.4f} "
+                f"pos=({template_match.center_x}, {template_match.center_y})"
+            )
+            # 模板匹配成功，但仍需 nav_right/session_right 给后续步骤用
+            detector = WeChatLayoutDetector()
+            nav_right, session_right = detector.detect(image)
+            # 验证位置合理性
+            if (template_match.center_x < w * 0.3
+                    and template_match.center_y < h * 0.15):
+                logger.info(
+                    f"    🎯 综合判定: 使用模板匹配位置 "
+                    f"({template_match.center_x}, {template_match.center_y})"
+                )
+                return template_match.center_x, template_match.center_y, nav_right, session_right
+            else:
+                logger.warning(
+                    f"    ⚠️ 模板匹配位置 ({template_match.center_x}, {template_match.center_y}) "
+                    f"不在合理范围，回退到 OCR"
+                )
+    except Exception as e:
+        logger.warning(f"    ⚠️ 模板匹配失败: {e}，回退到 OCR", exc_info=True)
 
     # 方法1: OCR 识别"搜索"文字（最精确）
     ocr_search_x = None
@@ -121,7 +154,7 @@ def find_search_bar_in_image(image):
         if ocr_search_x is None:
             logger.warning("    ⚠️ OCR 未识别到含'搜索'的文字（≤4字符），回退到布局检测")
     except Exception as e:
-        logger.warning(f"    ⚠️ OCR 识别失败: {e}，回退到布局检测")
+        logger.warning(f"    ⚠️ OCR 识别失败: {e}，回退到布局检测", exc_info=True)
 
     # 方法2: 布局检测（白色判定）
     detector = WeChatLayoutDetector()
@@ -678,13 +711,20 @@ def scroll_in_main_middle_column():
 
 
 def run_one_attempt(attempt_idx, max_attempts, do_click,
-                    contact_name=CONTACT_NAME, template_path=TEMPLATE_PATH):
+                    contact_name=None, template_path=None,
+                    contact_profile=None):
     """执行一次完整流程，返回 (success: bool, target: tuple|None, count_after: int)
 
     Args:
-        contact_name: 联系人昵称（用于搜索栏输入），默认 CONTACT_NAME
-        template_path: 联系人头像模板路径，默认 TEMPLATE_PATH
+        contact_name: 联系人昵称（用于搜索栏输入），必填
+        template_path: 联系人头像模板路径，必填
+        contact_profile: ContactProfile 实例（可选，v3.0 新增）
+            - 用于阶段 F 的 OCR display_name 验证（绿色环失败时的回退路径）
+            - None 时只走绿色环验证（保持向后兼容）
     """
+    if not contact_name or not template_path:
+        raise ValueError("contact_name 和 template_path 必须显式传入（已移除硬编码默认值）")
+
     # 修复 VK_CONTROL 作用域：在函数顶部统一定义，避免 if/else 分支作用域冲突
     # （原 if 分支内局部赋值会导致 Python 将整个函数的 VK_CONTROL 视为局部变量，
     #  else 分支使用时触发 "cannot access local variable" 错误）
@@ -992,6 +1032,7 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
           f"({search_img.shape[1]}x{search_img.shape[0]})")
 
     # OCR 验证候选框内容包含联系人名（防止误识别其他窗口）
+    ocr_passed = False
     try:
         from engine.importers.ocr_engine import ocr_image_array
         ocr_results = ocr_image_array(search_img, use_cache=False)
@@ -1000,6 +1041,7 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
         contact_clean = contact_name.replace(' ', '')
         ocr_clean = ocr_text_all.replace(' ', '')
         if contact_clean in ocr_clean:
+            ocr_passed = True
             logger.info(f"    ✅ [OCR] 候选框内容包含联系人名 '{contact_name}'")
         else:
             logger.warning(f"    ⚠️ [OCR] 候选框内容未包含联系人名 '{contact_name}'")
@@ -1028,6 +1070,49 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
     # （用户要求：匹配度低就不该点击，避免点错位置触发"搜索网络结果"等意外窗口）
     MIN_CONFIDENCE_FOR_SELECTION = 0.7
     high_conf_points = [p for p in points if p[2] >= MIN_CONFIDENCE_FOR_SELECTION]
+
+    # v3.0 改进：OCR 找到联系人名但头像模板匹配失败 → 立即刷新头像数据库并重试
+    # 场景：用户换了头像，本地模板过时，OCR 已确认候选框内容正确，只是头像对不上
+    # 原行为：等 4 次失败后才刷新；新行为：第一次匹配失败就刷新，避免无谓重试
+    # 注：best_score < MIN_CONFIDENCE_FOR_SELECTION 是冗余条件（not high_conf_points 已隐含），
+    #     保留 not high_conf_points and ocr_passed 即可表达"OCR 通过但头像没匹配到"
+    if not high_conf_points and ocr_passed:
+        logger.info(
+            f"    🔄 [v3.0] OCR 找到联系人但头像匹配失败 (best={best_score:.3f})，"
+            f"立即刷新头像数据库..."
+        )
+        try:
+            # 从 template_path 反推 wxid（data/avatars/<wxid>.jpg）
+            import os as _os
+            avatar_filename = _os.path.basename(template_path)
+            wxid_guess = _os.path.splitext(avatar_filename)[0]
+            from engine.wechat_data.avatar_fetcher import get_avatar
+            new_avatar_path = get_avatar(wxid_guess, force_refresh=True)
+            if new_avatar_path and _os.path.exists(new_avatar_path):
+                logger.info(f"    ✅ 头像已刷新: {new_avatar_path}")
+                # 用新模板重新匹配
+                points, best_score = find_template_multiscale(
+                    search_img, new_avatar_path, TEMPLATE_SCALES,
+                    MATCH_THRESHOLD, NMS_MIN_DIST
+                )
+                high_conf_points = [p for p in points if p[2] >= MIN_CONFIDENCE_FOR_SELECTION]
+                if high_conf_points:
+                    logger.info(
+                        f"    ✅ [v3.0] 刷新后匹配成功，"
+                        f"找到 {len(high_conf_points)} 个高置信度点 "
+                        f"(best={best_score:.3f})"
+                    )
+                    # 更新 template_path 指向新头像（供后续标注图使用）
+                    template_path = new_avatar_path
+                else:
+                    logger.warning(
+                        f"    ⚠️ [v3.0] 刷新后仍匹配失败 (best={best_score:.3f})，"
+                        f"启用几何定位 fallback"
+                    )
+            else:
+                logger.warning(f"    ⚠️ [v3.0] 头像刷新失败，启用几何定位 fallback")
+        except Exception as e:
+            logger.warning(f"    ⚠️ [v3.0] 刷新头像异常: {e}，启用几何定位 fallback")
 
     target = None
     target_source = ""  # 记录 target 来源：template / geometry
@@ -1137,6 +1222,46 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
     post_points, post_best = find_template_multiscale(
         post_img, template_path, TEMPLATE_SCALES, MATCH_THRESHOLD, NMS_MIN_DIST
     )
+
+    # v3.0 改进：OCR 之前通过了（说明确实点击了正确的联系人），但主窗口头像匹配失败 → 刷新头像并重新匹配
+    # 场景：用户换了头像，本地模板过时，阶段 D 可能已刷新过一次但阶段 F 仍然用旧模板匹配失败
+    #       或阶段 D 头像匹配成功（没触发刷新），但阶段 F 主窗口里的头像和搜索候选框里的视觉差异大
+    # 用户需求："OCR 认为匹配到了，但头像匹配认为没匹配到，应该都更新头像"
+    if not post_points and ocr_passed:
+        logger.info(
+            f"    🔄 [v3.0-F] 主窗口头像匹配失败 (best={post_best:.3f})，"
+            f"但 OCR 之前已确认联系人，刷新头像并重新匹配..."
+        )
+        try:
+            import os as _os
+            avatar_filename = _os.path.basename(template_path)
+            wxid_guess = _os.path.splitext(avatar_filename)[0]
+            from engine.wechat_data.avatar_fetcher import get_avatar
+            new_avatar_path = get_avatar(wxid_guess, force_refresh=True)
+            if new_avatar_path and _os.path.exists(new_avatar_path):
+                logger.info(f"    ✅ 头像已刷新: {new_avatar_path}")
+                # 用新模板重新匹配
+                post_points, post_best = find_template_multiscale(
+                    post_img, new_avatar_path, TEMPLATE_SCALES,
+                    MATCH_THRESHOLD, NMS_MIN_DIST
+                )
+                if post_points:
+                    logger.info(
+                        f"    ✅ [v3.0-F] 刷新后主窗口匹配成功 "
+                        f"(best={post_best:.3f})"
+                    )
+                    # 更新 template_path 指向新头像（供后续阶段使用）
+                    template_path = new_avatar_path
+                else:
+                    logger.warning(
+                        f"    ⚠️ [v3.0-F] 刷新后主窗口仍匹配失败 "
+                        f"(best={post_best:.3f})，用窗口数判断"
+                    )
+            else:
+                logger.warning(f"    ⚠️ [v3.0-F] 头像刷新失败，用窗口数判断")
+        except Exception as e:
+            logger.warning(f"    ⚠️ [v3.0-F] 刷新头像异常: {e}，用窗口数判断")
+
     if not post_points:
         logger.warning(f"    ⚠️ 主窗口内未匹配到 [REDACTED] 头像 (最高置信度={post_best:.3f})")
         # 模板匹配失败时，不能用绿色环验证（找不到头像中心）
@@ -1167,6 +1292,47 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
     else:
         logger.warning("    ⚠️ 未检测到绿色环（可能模板匹配失败或点击位置不准）")
 
+    # ========== 阶段 F-2：OCR display_name 回退验证（v3.0 新增） ==========
+    # 用户决策：头像模板匹配不稳定，以右栏聊天头部的微信显示名为主进行验证
+    # 当绿色环验证失败时，用 font_matcher 在聊天标题区域匹配 display_name
+    # 通过则也算点击成功（进入联系人聊天界面）
+    verified_by_display_name = False
+    if not found and contact_profile is not None and contact_profile.display_name:
+        display_name = contact_profile.display_name
+        logger.info(f"\n[F-2] OCR display_name 回退验证: {display_name!r}")
+        try:
+            from font_matcher import get_font_matcher
+            matcher = get_font_matcher()  # 单例，避免重复加载字库
+            # 复用 post_img（已截图），避免重复截图
+            match = matcher.find_in_chat_header(post_img, display_name, threshold=0.75)
+            if match:
+                conf = match.get("confidence", 0)
+                cx = match.get("center_x", 0)
+                cy = match.get("center_y", 0)
+                logger.info(
+                    f"    ✅ display_name 验证通过: {display_name!r} "
+                    f"conf={conf:.4f} pos=({cx}, {cy})"
+                )
+                verified_by_display_name = True
+                # 在 debug 图上标注 OCR 匹配位置
+                cv2.rectangle(debug, (cx - 30, cy - 15), (cx + 30, cy + 15),
+                              (0, 255, 0), 2)
+                cv2.putText(debug, f"OCR: {display_name} conf={conf:.3f}",
+                            (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            else:
+                logger.warning(
+                    f"    ⚠️ display_name 验证失败: 未在聊天标题区域匹配到 {display_name!r}"
+                )
+        except ImportError:
+            logger.warning("    ⚠️ font_matcher 模块不可用，跳过 display_name 验证")
+        except Exception as e:
+            logger.warning(
+                f"    ⚠️ display_name 验证异常: {e}（不阻断，继续用窗口数判断）",
+                exc_info=True,
+            )
+        # 更新 debug 图（即使 verified_by_display_name 为 False，也保存最新的 debug）
+        cv2.imwrite(debug_path, debug)
+
     # ========== 阶段 G：检查窗口数 ==========
     logger.info("\n[G] 检查点击后窗口数")
     count_after, wins_after = count_wechat_windows()
@@ -1180,8 +1346,9 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
     # - 搜索候选框还在 → 点击没生效
     # 注意：count_wechat_windows 可能因尺寸过滤不包含搜索候选框，
     # 所以不能只看 count_after < count_before，要直接检查搜索候选框是否还在
+    # v3.0 调整：OCR display_name 验证通过时，跳过窗口数回退（已确认进入聊天界面）
     success_by_window_count = False
-    if not found and target_source == "geometry":
+    if not found and not verified_by_display_name and target_source == "geometry":
         remaining_candidates = find_search_candidate_windows()
         search_box_closed = (
             len(remaining_candidates) == 0
@@ -1205,6 +1372,8 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
     logger.info(f"  匹配点[{target_source}]: ({target[0]}, {target[1]}) conf={target[2]:.3f}")
     if found:
         logger.info("  绿色环验证: ✅ 通过")
+    elif verified_by_display_name:
+        logger.info("  验证: ⚠️ 绿色环未通过，OCR display_name ✅ 通过")
     elif success_by_window_count:
         logger.info("  绿色环验证: ⚠️ 跳过（模板匹配失败），用窗口数判断成功")
     else:
@@ -1218,7 +1387,7 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
         logger.info(f"  分支: {count_after} 个窗口（未预期）")
     logger.info("=" * 60)
 
-    final_success = found or success_by_window_count
+    final_success = found or verified_by_display_name or success_by_window_count
     return final_success, target, count_after
 
 
@@ -1226,15 +1395,30 @@ def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     do_click = "--click" in sys.argv
 
+    # 从命令行参数读取联系人名（移除硬编码默认值）
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    if not args:
+        logger.error("用法: python click_avatar_in_search_window.py <联系人名> [--click]")
+        logger.error("示例: python click_avatar_in_search_window.py [REDACTED] --click")
+        logger.error(f"模板目录: {os.path.join(_PROJECT_ROOT, 'data', 'avatars')}")
+        sys.exit(1)
+    contact_name = args[0]
+    template_path = os.path.join(_PROJECT_ROOT, "data", "avatars", f"{contact_name}.jpg")
+    if not os.path.exists(template_path):
+        logger.error(f"❌ 模板文件不存在: {template_path}")
+        sys.exit(1)
+
     logger.info("=" * 60)
-    logger.info("  在搜索候选框窗口内匹配 [REDACTED] 头像（含重试机制）")
+    logger.info(f"  在搜索候选框窗口内匹配 {contact_name} 头像（含重试机制）")
+    logger.info(f"  模板: {template_path}")
     logger.info(f"  模式: {'匹配+点击+验证+重试' if do_click else '只匹配（不点击）'}")
     logger.info(f"  最多尝试次数: {MAX_ATTEMPTS}（初次 + {MAX_RETRIES} 次重试）")
     logger.info("=" * 60)
 
     if not do_click:
         # 只匹配模式：执行一次，不点击
-        run_one_attempt(1, 1, do_click=False)
+        run_one_attempt(1, 1, do_click=False,
+                        contact_name=contact_name, template_path=template_path)
         return
 
     # 点击模式：最多 MAX_ATTEMPTS 次执行（初次 + 最多 MAX_RETRIES 次重试）
@@ -1250,7 +1434,10 @@ def main():
             scroll_in_main_middle_column()
             time.sleep(0.5)
 
-        success, target, count_after = run_one_attempt(attempt, MAX_ATTEMPTS, do_click=True)
+        success, target, count_after = run_one_attempt(
+            attempt, MAX_ATTEMPTS, do_click=True,
+            contact_name=contact_name, template_path=template_path,
+        )
         final_success = success
         final_target = target
         final_count_after = count_after
@@ -1282,7 +1469,7 @@ def main():
         logger.info("  建议检查：")
         logger.info("  - 微信是否正常显示")
         logger.info("  - 搜索候选框是否出现")
-        logger.info("  - [REDACTED] 头像是否在搜索结果中")
+        logger.info(f"  - {contact_name} 头像是否在搜索结果中")
     logger.info("=" * 60)
 
 

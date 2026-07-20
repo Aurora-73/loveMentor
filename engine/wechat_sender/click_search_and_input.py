@@ -37,6 +37,15 @@ logger = get_logger(__name__)
 
 user32 = ctypes.windll.user32
 
+# 修复 ctypes 类型错误：定义 Windows API 的 argtypes/restype
+# 否则 byref(rect) 会被当作 pointer to RECT 而非 LP_RECT，导致 ArgumentError
+user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+user32.GetWindowRect.restype = wintypes.BOOL
+user32.ClientToScreen.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)]
+user32.ClientToScreen.restype = wintypes.BOOL
+user32.ScreenToClient.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)]
+user32.ScreenToClient.restype = wintypes.BOOL
+
 # Windows 消息常量
 WM_LBUTTONDOWN = 0x0201
 WM_LBUTTONUP = 0x0202
@@ -50,13 +59,12 @@ VK_V = 0x56
 
 def get_client_offset(hwnd):
     """计算客户区左上角相对窗口左上角的偏移（物理像素）"""
-    class POINT(ctypes.Structure):
-        _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
-
+    # 修复 ctypes 类型不匹配：必须使用 wintypes.POINT（与 argtypes 一致）
+    # 否则 byref(局部 POINT) 会被当作 pointer to POINT 而非 LP_POINT，触发 ArgumentError
     window_rect = wintypes.RECT()
     user32.GetWindowRect(hwnd, ctypes.byref(window_rect))
 
-    client_point = POINT(0, 0)
+    client_point = wintypes.POINT(0, 0)
     user32.ClientToScreen(hwnd, ctypes.byref(client_point))
 
     offset_x = client_point.x - window_rect.left
@@ -66,9 +74,8 @@ def get_client_offset(hwnd):
 
 def client_to_screen(hwnd, client_x, client_y):
     """客户区坐标转屏幕坐标"""
-    class POINT(ctypes.Structure):
-        _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
-    pt = POINT(client_x, client_y)
+    # 修复 ctypes 类型不匹配：必须使用 wintypes.POINT（与 argtypes 一致）
+    pt = wintypes.POINT(client_x, client_y)
     user32.ClientToScreen(hwnd, ctypes.byref(pt))
     return pt.x, pt.y
 

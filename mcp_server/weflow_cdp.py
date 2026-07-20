@@ -33,8 +33,9 @@ import urllib.request
 
 logger = logging.getLogger(__name__)
 
-# 复用 tools_read.py 的 CDP 基础设施
-from mcp_server.tools_read import (
+# 复用 engine.importers.weflow_cdp 的 CDP 基础设施
+# （迁移自 tools_read.py，让 tools_read.py 成为薄包装）
+from engine.importers.weflow_cdp import (
     WEFLOW_CDP_PORT,
     _check_cdp_enabled,
     _cdp_runtime_evaluate,
