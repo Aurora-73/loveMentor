@@ -233,6 +233,8 @@ def transcribe_voice_messages(
     limit: int = 100,
     session_id: Optional[str] = None,
     verbose: bool = False,
+    days_back: int = 30,
+    private_only: bool = True,
 ) -> tuple[int, int]:
     """批量识别未识别的语音消息。
 
@@ -249,33 +251,47 @@ def transcribe_voice_messages(
         limit: 最多识别多少条（避免一次跑太久）
         session_id: 指定会话（None = 所有会话）
         verbose: 输出详细日志
+        days_back: 只识别最近 N 天的消息（0 = 不限时间）
+        private_only: True = 只识别私聊消息（排除群聊）
 
     Returns:
         (成功识别数, 失败数)
     """
-    # 查询未识别的语音消息
-    if session_id:
-        cursor = db.execute(
-            "SELECT id FROM messages "
-            "WHERE type=34 AND voice_text IS NULL AND conversation_id=? "
-            "ORDER BY timestamp DESC LIMIT ?",
-            (session_id, limit),
-        )
-    else:
-        cursor = db.execute(
-            "SELECT id FROM messages "
-            "WHERE type=34 AND voice_text IS NULL "
-            "ORDER BY timestamp DESC LIMIT ?",
-            (limit,),
-        )
+    import time as _time
 
+    # 构建查询条件
+    conditions = ["m.type=34", "m.voice_text IS NULL"]
+    params: list = []
+
+    # 时间过滤
+    if days_back > 0:
+        cutoff_ts = int(_time.time()) - days_back * 86400
+        conditions.append(f"m.timestamp >= {cutoff_ts}")
+
+    # 私聊过滤（JOIN conversations 表，type='private' 为私聊）
+    if private_only:
+        conditions.append("c.type='private'")
+    if session_id:
+        conditions.append("m.conversation_id=?")
+        params.append(session_id)
+
+    where_clause = " AND ".join(conditions)
+    sql = (
+        f"SELECT m.id FROM messages m "
+        f"JOIN conversations c ON m.conversation_id=c.id "
+        f"WHERE {where_clause} "
+        f"ORDER BY m.timestamp DESC LIMIT ?"
+    )
+    params.append(limit)
+
+    cursor = db.execute(sql, params)
     msg_ids = [str(row[0]) for row in cursor.fetchall()]
     if not msg_ids:
         logger.info("没有待识别的语音消息")
         return (0, 0)
 
     if verbose:
-        logger.info(f"开始识别 {len(msg_ids)} 条语音消息...")
+        logger.info(f"开始识别 {len(msg_ids)} 条语音消息（days_back={days_back}, private_only={private_only}）...")
 
     success = 0
     failed = 0
