@@ -23,6 +23,7 @@ def _ts_to_beijing(ts):
 
 from engine.config import Config, FACTS_PEOPLE_DIR, FACTS_SELF_DIR, OUTPUTS_RANKINGS_DIR
 from engine.identity import resolve_contact, IdentityPerson
+from engine.agent.chat import extract_display_content
 
 
 def query_message_context(
@@ -40,7 +41,8 @@ def query_message_context(
     contexts: list[dict] = []
     for msg_id in message_ids:
         row = conn.execute(
-            "SELECT id, conversation_id, sender_id, content, timestamp, type, platform, source "
+            "SELECT id, conversation_id, sender_id, content, raw_content, voice_text, image_text, "
+            "timestamp, type, platform, source "
             "FROM messages WHERE id = ?",
             (msg_id,),
         ).fetchone()
@@ -50,15 +52,17 @@ def query_message_context(
         ts = row["timestamp"]
 
         before_rows = conn.execute(
-            "SELECT id, sender_id, content, timestamp, type, platform, source "
-            "FROM messages WHERE conversation_id = ? AND timestamp < ? AND type = 1 "
+            "SELECT id, sender_id, content, raw_content, voice_text, image_text, "
+            "timestamp, type, platform, source "
+            "FROM messages WHERE conversation_id = ? AND timestamp < ? "
             "ORDER BY timestamp DESC LIMIT ?",
             (conv_id, ts, before),
         ).fetchall()
 
         after_rows = conn.execute(
-            "SELECT id, sender_id, content, timestamp, type, platform, source "
-            "FROM messages WHERE conversation_id = ? AND timestamp > ? AND type = 1 "
+            "SELECT id, sender_id, content, raw_content, voice_text, image_text, "
+            "timestamp, type, platform, source "
+            "FROM messages WHERE conversation_id = ? AND timestamp > ? "
             "ORDER BY timestamp ASC LIMIT ?",
             (conv_id, ts, after),
         ).fetchall()
@@ -69,7 +73,10 @@ def query_message_context(
                 "id": r["id"],
                 "sender_id": sid,
                 "is_mine": sid == my_wxid if my_wxid else False,
-                "content": r["content"] or "",
+                "content": extract_display_content(
+                    r["type"], r["content"], r["raw_content"],
+                    r["voice_text"], r["image_text"],
+                ),
                 "timestamp": r["timestamp"],
                 "time_str": _ts_to_beijing(r["timestamp"]),
                 "type": r["type"],
@@ -84,7 +91,10 @@ def query_message_context(
                 "conversation_id": row["conversation_id"],
                 "sender_id": target_sid,
                 "is_mine": target_sid == my_wxid if my_wxid else False,
-                "content": row["content"] or "",
+                "content": extract_display_content(
+                    row["type"], row["content"], row["raw_content"],
+                    row["voice_text"], row["image_text"],
+                ),
                 "timestamp": row["timestamp"],
                 "time_str": _ts_to_beijing(row["timestamp"]),
                 "type": row["type"],
@@ -210,11 +220,10 @@ class ContextBuilder:
 
         placeholders = ",".join("?" for _ in wxids)
         sql = f"""
-            SELECT m.id, m.sender_id, m.type, m.content, m.timestamp
+            SELECT m.id, m.sender_id, m.type, m.content, m.raw_content,
+                   m.voice_text, m.image_text, m.timestamp
             FROM messages m
             WHERE m.conversation_id IN ({placeholders})
-              AND m.type = 1
-              AND m.content NOT LIKE '<?xml%'
             ORDER BY m.timestamp DESC
             LIMIT ?
         """
@@ -229,7 +238,10 @@ class ContextBuilder:
                 "sender_id": sender_id,
                 "sender": "我" if is_mine else "她",
                 "is_mine": is_mine,
-                "content": row["content"] or "",
+                "content": extract_display_content(
+                    row["type"], row["content"], row["raw_content"],
+                    row["voice_text"], row["image_text"],
+                ),
                 "timestamp": row["timestamp"],
                 "time_str": _ts_to_beijing(row["timestamp"]),
             })
@@ -242,7 +254,7 @@ class ContextBuilder:
 
         placeholders = ",".join("?" for _ in wxids)
 
-        # 总数 + 各方计数
+        # 总数 + 各方计数（包含所有消息类型：文本/图片/语音/表情/卡片等）
         sql = f"""
             SELECT
                 COUNT(*) as total,
@@ -252,8 +264,6 @@ class ContextBuilder:
                 MAX(timestamp) as last_ts
             FROM messages
             WHERE conversation_id IN ({placeholders})
-              AND type = 1
-              AND content NOT LIKE '<?xml%'
         """
         row = self._conn.execute(
             sql, (self._config.my_wxid, self._config.my_wxid, *wxids)

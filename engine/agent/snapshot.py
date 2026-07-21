@@ -82,7 +82,7 @@ def _generate_monthly_summary(conn: sqlite3.Connection, wxids: list[str], my_wxi
                COUNT(*) as total,
                SUM(CASE WHEN sender_id = ? THEN 1 ELSE 0 END) as my_count
         FROM messages
-        WHERE conversation_id IN ({placeholders}) AND type = 1 AND content NOT LIKE '<?xml%'
+        WHERE conversation_id IN ({placeholders})
         GROUP BY month ORDER BY month
     """
     rows = conn.execute(sql, (my_wxid, *wxids)).fetchall()

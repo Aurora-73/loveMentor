@@ -5,6 +5,7 @@ import sqlite3
 from datetime import datetime
 
 from engine.config import load_config
+from engine.agent.chat import extract_display_content
 
 # 信号关键词
 _REJECTION_KEYWORDS = (
@@ -76,11 +77,11 @@ def _detect_moments_chat_signals(
 ) -> dict[str, list[str]]:
     from datetime import datetime as dt, timedelta
     signals: dict[str, list[str]] = {}
-    # 1. 聊天时间线
+    # 1. 聊天时间线（包含所有消息类型：文字/表情/图片/语音等都算交流）
     chat_days_raw = conn.execute("""
         SELECT DISTINCT strftime('%Y-%m-%d', timestamp, 'unixepoch', 'localtime') as day
         FROM messages
-        WHERE conversation_id = ? AND type = 1 AND content NOT LIKE '<?xml%'
+        WHERE conversation_id = ?
         ORDER BY day
     """, (wxid,)).fetchall()
     chat_days = {r[0] for r in chat_days_raw}
@@ -169,15 +170,21 @@ def _query_signal_messages(
         return []
     placeholders = ",".join("?" for _ in wxids)
     sql = f"""
-        SELECT sender_id, content, timestamp
+        SELECT sender_id, content, raw_content, voice_text, image_text, type, timestamp
         FROM messages
         WHERE conversation_id IN ({placeholders})
-          AND type = 1 AND content NOT LIKE '<?xml%'
           AND timestamp >= strftime('%s', 'now', '-{months} months', 'localtime')
         ORDER BY timestamp ASC
     """
     rows = conn.execute(sql, wxids).fetchall()
     return [
-        {"sender": "我" if (r[0] or "") == my_wxid else "她", "content": r[1] or "", "timestamp": r[2]}
+        {
+            "sender": "我" if (r["sender_id"] or "") == my_wxid else "她",
+            "content": extract_display_content(
+                r["type"], r["content"], r["raw_content"],
+                r["voice_text"], r["image_text"],
+            ),
+            "timestamp": r["timestamp"],
+        }
         for r in rows
     ]

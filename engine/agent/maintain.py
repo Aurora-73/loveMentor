@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from engine.agent.core import _get_conn
+from engine.agent.chat import extract_display_content
 from engine.analyzers.metrics import compute_metrics_for_contact, get_all_contacts_with_messages, SIGNAL_ORDER
 from engine.analyzers.exclude import filter_contacts
 from engine.analyzers.ranker import _resolve_person_name
@@ -147,10 +148,10 @@ def _classify_reason(
 
 
 def _get_last_message_summary(conn: sqlite3.Connection, wxid: str, my_wxid: str) -> str:
-    """获取最后一条消息的简短摘要。"""
+    """获取最后一条消息的简短摘要（包含所有消息类型）。"""
     row = conn.execute(
-        "SELECT sender_id, content, timestamp FROM messages "
-        "WHERE conversation_id = ? AND type = 1 AND content NOT LIKE '<?xml%' "
+        "SELECT sender_id, content, raw_content, voice_text, image_text, type, timestamp "
+        "FROM messages WHERE conversation_id = ? "
         "ORDER BY timestamp DESC LIMIT 1",
         (wxid,),
     ).fetchone()
@@ -159,8 +160,12 @@ def _get_last_message_summary(conn: sqlite3.Connection, wxid: str, my_wxid: str)
         return ""
 
     sender = "我" if (row[0] or "") == my_wxid else "她"
-    content = (row[1] or "")[:50]
-    ts = row[2]
+    # 用 extract_display_content 提取可读内容（卡片/链接/位置等）
+    content = extract_display_content(
+        row["type"], row["content"], row["raw_content"],
+        row["voice_text"], row["image_text"],
+    )[:50]
+    ts = row["timestamp"]
     if ts:
         day_str = datetime.fromtimestamp(ts).strftime("%m-%d")
         return f"[{day_str}] {sender}: {content}"
