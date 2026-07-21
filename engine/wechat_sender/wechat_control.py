@@ -26,10 +26,8 @@ from pathlib import Path
 # 模块级 ctypes 初始化（避免每次调用重复定义类型）
 _user32 = ctypes.windll.user32
 
-
-class _RECT(ctypes.Structure):
-    _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
-                ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+# 统一使用 wintypes.RECT（与 click_search_and_input.py / wechat_window_utils.py 一致）
+# 避免不同模块用不同的 RECT 类型定义导致 argtypes 覆盖后类型不匹配
 
 
 _user32.EnumWindows.argtypes = [wintypes.HANDLE, wintypes.LPARAM]
@@ -40,7 +38,7 @@ _user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
 _user32.GetWindowTextW.restype = ctypes.c_int
 _user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
 _user32.GetWindowTextLengthW.restype = ctypes.c_int
-_user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(_RECT)]
+_user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
 _user32.GetWindowRect.restype = wintypes.BOOL
 _user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
 _user32.GetClassNameW.restype = ctypes.c_int

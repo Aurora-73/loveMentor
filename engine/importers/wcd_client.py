@@ -213,11 +213,30 @@ class WCDClient:
             params["wechat_install_path"] = wechat_install_path
         return self._get("/api/get_keys", params=params)
 
-    def list_contacts(self, keyword: str | None = None, limit: int = 100) -> list[dict]:
-        """获取联系人列表。返回格式兼容 WeFlowClient。"""
+    def list_contacts(
+        self,
+        keyword: str | None = None,
+        limit: int = 100,
+        source: str | None = None,
+    ) -> list[dict]:
+        """获取联系人列表。返回格式兼容 WeFlowClient。
+
+        Args:
+            keyword: 搜索关键词（按名称/微信号/wxid 过滤）
+            limit: 返回数量上限
+            source: 数据源，可选值：
+                - None/auto: 自动选择（默认 realtime，微信运行时可能失败）
+                - realtime: 直接读 WCDB（微信运行时会超时）
+                - decrypted: 读解密后的 DB 副本（微信运行时也可用，但数据可能不是最新）
+                推荐场景：
+                - 同步流程：用 auto/realtime（获取最新数据）
+                - 头像查询：用 decrypted（先调 decrypt_databases 刷新快照，再读 decrypted）
+        """
         params: dict[str, Any] = {"limit": limit}
         if keyword:
             params["keyword"] = keyword
+        if source:
+            params["source"] = source
         resp = self._get("/api/chat/contacts", params=params)
 
         raw_contacts = resp.get("contacts", [])

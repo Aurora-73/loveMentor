@@ -468,28 +468,194 @@ def _query_weflow_cache(identifier: str) -> dict | None:
     return None
 
 
-# ── WeFlow CDP 数据源（强制刷新单个联系人头像 URL） ────────────────────
+# ── 头像强制刷新数据源（WeFlow CDP / WCD API） ────────────────────────
+
+def _query_avatar_via_wcd_api(
+    identifier: str,
+    wxid_hint: str = "",
+    config: Config | None = None,
+    *,
+    force_refresh: bool = True,
+) -> dict | None:
+    """通过 WCD API 强制刷新联系人头像 URL。
+
+    当 backend=wcd 时使用此函数替代 WeFlow CDP 的 refreshContactAvatar。
+
+    流程：
+      1. 调用 WCDClient.decrypt_databases(force=True) 重新解密微信数据库
+         （刷新 WCD 内部数据快照，绕过 30 分钟节流）
+      2. 调用 WCDClient.list_contacts(keyword=wxid) 获取最新头像 URL
+
+    与 WeFlow CDP 的差异：
+    - WeFlow CDP 通过 Electron 缓存层清除 + 读取 wcdb，可增量写回 contacts.json
+    - WCD API 通过解密整个微信 DB 刷新快照，再从快照读取 avatarUrl
+    - WCD API 不写回 contacts.json（WCD 没有这个机制），但返回的 URL 已是最新
+
+    Args:
+        identifier: 联系人标识符（display_name / alias / wxid）
+        wxid_hint: 已知的 wxid（如果有，直接用；没有则用 identifier 反查）
+        config: 全局配置（None 时自动加载）
+        force_refresh: True=强制解密数据库；False=仅查询不解密
+
+    Returns:
+        dict: { wxid, display_name, alias, avatar_url } 或 None
+    """
+    if config is None:
+        config = load_config()
+
+    if config.weflow.backend != "wcd":
+        return None  # 仅 wcd 后端使用
+
+    try:
+        client = _create_client(config)
+    except Exception as e:
+        logger.warning(f"WCD 客户端创建失败: {e}")
+        return None
+
+    if not client.health():
+        logger.warning(f"WCD API 不可用: {config.weflow.base_url}")
+        return None
+
+    # 1. 强制解密数据库以刷新 WCD 数据快照（绕过 30 分钟节流）
+    if force_refresh:
+        try:
+            logger.info(
+                f"WCD 强制解密数据库以刷新 {wxid_hint or identifier!r} 的头像..."
+            )
+            decrypt_result = client.decrypt_databases(force=True)
+            status = decrypt_result.get("status", "unknown")
+            if status == "skipped":
+                logger.info(f"WCD 解密跳过: {decrypt_result.get('reason', 'unknown')}")
+            elif status == "fresh":
+                logger.info(f"WCD 解密跳过（已最新）: {decrypt_result.get('reason', '')}")
+            else:
+                success_count = decrypt_result.get("success_count", 0)
+                failure_count = decrypt_result.get("failure_count", 0)
+                logger.info(
+                    f"WCD 解密完成: 成功 {success_count}, 失败 {failure_count}"
+                )
+        except Exception as e:
+            logger.warning(f"WCD decrypt_databases 失败: {e}")
+            # 继续尝试查询，WCD 内部可能已有较新数据
+
+    # 2. 查询联系人头像
+    # 优先用 wxid 精确查询，其次用 identifier
+    # 使用 source=decrypted 读取解密后的 DB 副本（微信运行时也能工作）
+    # 因为前面已调 decrypt_databases(force=True) 刷新了解密快照，decrypted 数据是最新的
+    search_keyword = wxid_hint if wxid_hint else identifier
+
+    try:
+        contacts = client.list_contacts(keyword=search_keyword, limit=20, source="decrypted")
+    except Exception as e:
+        logger.warning(f"WCD list_contacts({search_keyword!r}, source=decrypted) 失败: {e}")
+        # 回退到默认 source（可能微信未运行时 realtime 也能用）
+        try:
+            contacts = client.list_contacts(keyword=search_keyword, limit=20)
+            logger.info(f"WCD list_contacts({search_keyword!r}, source=auto) 回退成功")
+        except Exception as e2:
+            logger.warning(f"WCD list_contacts({search_keyword!r}, source=auto) 也失败: {e2}")
+            return None
+
+    if not contacts:
+        logger.warning(f"WCD list_contacts({search_keyword!r}) 无结果")
+        return None
+
+    # 精确匹配优先（按 wxid/username）
+    if wxid_hint:
+        for c in contacts:
+            if c.get("username") == wxid_hint or c.get("id") == wxid_hint:
+                avatar_url = c.get("avatarUrl", "")
+                if avatar_url:
+                    display_name = c.get("displayName", "") or identifier
+                    alias = c.get("alias", "") or ""
+                    logger.info(
+                        f"WCD 命中（wxid 精确匹配）: {display_name} ({wxid_hint}) "
+                        f"url={avatar_url[:60]}..."
+                    )
+                    return {
+                        "wxid": wxid_hint,
+                        "display_name": display_name,
+                        "alias": alias,
+                        "avatar_url": avatar_url,
+                    }
+
+    # 模糊匹配（按 identifier 精确等于各字段）
+    for c in contacts:
+        for field in ("displayName", "remark", "nickname", "alias", "username"):
+            val = c.get(field, "")
+            if val and val == identifier:
+                avatar_url = c.get("avatarUrl", "")
+                if avatar_url:
+                    wxid = c.get("username", "") or c.get("id", "")
+                    display_name = c.get("displayName", "") or identifier
+                    alias = c.get("alias", "") or ""
+                    logger.info(
+                        f"WCD 命中（{field} 精确匹配）: {display_name} ({wxid}) "
+                        f"url={avatar_url[:60]}..."
+                    )
+                    return {
+                        "wxid": wxid,
+                        "display_name": display_name,
+                        "alias": alias,
+                        "avatar_url": avatar_url,
+                    }
+
+    # 第一个结果兜底（只有一个结果时直接用）
+    if len(contacts) == 1:
+        c = contacts[0]
+        avatar_url = c.get("avatarUrl", "")
+        if avatar_url:
+            wxid = c.get("username", "") or c.get("id", "")
+            display_name = c.get("displayName", "") or identifier
+            alias = c.get("alias", "") or ""
+            logger.info(f"WCD 命中（唯一结果兜底）: {display_name} ({wxid})")
+            return {
+                "wxid": wxid,
+                "display_name": display_name,
+                "alias": alias,
+                "avatar_url": avatar_url,
+            }
+
+    logger.warning(
+        f"WCD list_contacts({search_keyword!r}) 找到 {len(contacts)} 个联系人但无可用 avatarUrl"
+    )
+    return None
+
 
 def _query_avatar_via_weflow_cdp(
     identifier: str,
     wxid_hint: str = "",
     *,
     force_refresh: bool = True,
+    config: Config | None = None,
 ) -> dict | None:
-    """通过 CDP 调用 WeFlow 的 refreshContactAvatar 拿最新头像 URL。
+    """强制刷新联系人头像 URL（自动根据 backend 分发）。
+
+    - backend=wcd: 调用 _query_avatar_via_wcd_api（WCD API 解密 + 查询）
+    - backend=weflow: 调用 WeFlow CDP refreshContactAvatar（原有逻辑）
 
     数据源优先级最高的"实时"查询：绕过 WeFlow L1/L2 TTL 缓存，
-    直接从 wcdb 数据库读取最新 avatarUrl，并增量写回 contacts.json。
+    直接从 wcdb 数据库读取最新 avatarUrl，并增量写回 contacts.json（仅 weflow）。
 
     Args:
         identifier: 联系人标识符（display_name / alias / wxid）
         wxid_hint: 已知的 wxid（如果有，直接用；没有则用 search_contact 反查）
-        force_refresh: True=强制调 refreshContactAvatar 绕过 WeFlow 缓存；
-                       False=仅当其他数据源都没拿到 URL 时才用
+        force_refresh: True=强制刷新；False=仅当其他数据源都没拿到 URL 时才用
+        config: 全局配置（None 时自动加载）
 
     Returns:
         dict: { wxid, display_name, alias, avatar_url } 或 None
     """
+    if config is None:
+        config = load_config()
+
+    # 根据 backend 分发
+    if config.weflow.backend == "wcd":
+        return _query_avatar_via_wcd_api(
+            identifier, wxid_hint, config, force_refresh=force_refresh
+        )
+
+    # 以下为 WeFlow CDP 原有逻辑（backend=weflow）
     try:
         # 延迟导入，避免在 WeFlow 未启动时报错
         import os
@@ -670,21 +836,30 @@ def get_avatar(
             alias = cache_result.get("alias", "") or ""
             logger.info(f"contacts.json 命中: {display_name} ({wxid}) alias={alias or 'N/A'}")
 
-    # 1d. WeFlow CDP 强制刷新（force_refresh=True 时优先使用，覆盖之前数据源的 URL）
+    # 1d. 头像强制刷新（force_refresh=True 时优先使用，覆盖之前数据源的 URL）
     # 这是最可靠的数据源：直接从 wcdb 数据库读最新 avatarUrl，绕过 L1/L2 TTL 缓存
-    # 场景1: force_refresh=True → 即使用其他数据源已拿到 URL，也调 CDP 拿真正最新的
-    # 场景2: 其他数据源都没拿到 URL → 用 CDP 兜底（用 identifier 反查 wxid）
+    # 自动根据 backend 分发：
+    #   - backend=wcd: 用 WCDClient.decrypt_databases + list_contacts
+    #   - backend=weflow: 用 WeFlow CDP refreshContactAvatar
+    # 场景1: force_refresh=True → 即使用其他数据源已拿到 URL，也强制刷新拿真正最新的
+    # 场景2: 其他数据源都没拿到 URL → 用强制刷新兜底（用 identifier 反查 wxid）
     if force_refresh and wxid:
-        cdp_result = _query_avatar_via_weflow_cdp(identifier, wxid_hint=wxid, force_refresh=True)
+        cdp_result = _query_avatar_via_weflow_cdp(
+            identifier, wxid_hint=wxid, force_refresh=True, config=config
+        )
         if cdp_result:
             avatar_url = cdp_result["avatar_url"]
             if cdp_result.get("display_name"):
                 display_name = cdp_result["display_name"]
-            # alias 保留之前的值（CDP 不返回 alias）
-            logger.info(f"force_refresh=True，已通过 CDP 强制刷新 {display_name} ({wxid}) 的头像 URL")
+            # alias 保留之前的值（CDP 不返回 alias，WCD 可能返回）
+            if cdp_result.get("alias") and not alias:
+                alias = cdp_result["alias"]
+            logger.info(f"force_refresh=True，已强制刷新 {display_name} ({wxid}) 的头像 URL")
     elif not avatar_url:
-        # 兜底：用 identifier 反查 wxid，再调 CDP 强制刷新
-        cdp_result = _query_avatar_via_weflow_cdp(identifier, wxid_hint=wxid, force_refresh=True)
+        # 兜底：用 identifier 反查 wxid，再强制刷新
+        cdp_result = _query_avatar_via_weflow_cdp(
+            identifier, wxid_hint=wxid, force_refresh=True, config=config
+        )
         if cdp_result:
             avatar_url = cdp_result["avatar_url"]
             wxid = cdp_result["wxid"]
