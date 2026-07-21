@@ -157,7 +157,10 @@ mcp.tool(
     name="person_sync",
     description="⚠️【分析前置·必须调用】增量同步单个人最新消息。分析任何人之前必须先调此工具，否则看到的是旧数据。"
                "一般几秒完成。同步后调 person_brief 获取全局视图，或调 workflow_step('analysis') 查看下一步。"
-               "如果联系人搜不到，改用 system_sync(meta_only=True)",
+               "如果联系人搜不到，改用 system_sync(meta_only=True)。"
+               "可选参数 transcribe_mode 控制语音/图片转写："
+               "async（默认，后台异步转写，不阻塞同步，下次查询可见）、"
+               "sync（同步等待转写完成，耗时长）、off（不转写）",
 )(tools_write.person_sync)
 
 mcp.tool(

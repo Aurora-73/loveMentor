@@ -29,16 +29,18 @@ def person_date_record(name: str, date_text: str, location: Optional[str] = None
         return {"error": "TOOL_ERROR", "message": str(e), "suggestion": "请检查参数是否正确"}
 
 
-def person_sync(name: str, mode: str = "incremental") -> dict:
+def person_sync(name: str, mode: str = "incremental", transcribe_mode: str = "async") -> dict:
     """增量同步单个人最新消息。
 
     什么时候用：分析前确保数据新鲜，增量模式几秒完成不阻塞。
     返回什么：dict 含 success/message 字段，message 是同步结果摘要。
-    边界是什么：name 必填；mode 默认 incremental（快），可选 full（慢）。
+    边界是什么：name 必填；mode 默认 incremental（快），可选 full（慢）；
+                transcribe_mode 默认 async（异步转写语音/图片，不阻塞同步），
+                可选 sync（同步转写，等待完成）、off（不转写）。
     需要 WCD 后端运行中，否则返回连接失败提示。
     """
     try:
-        result = _sync_person(name, mode=mode)
+        result = _sync_person(name, mode=mode, transcribe_mode=transcribe_mode)
         return {"success": True, "message": result}
     except Exception as e:
         return {"error": "TOOL_ERROR", "message": str(e), "suggestion": "确保 WCD 后端已启动"}

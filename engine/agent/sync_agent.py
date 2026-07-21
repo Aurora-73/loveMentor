@@ -71,7 +71,8 @@ def agent_sync(mode: str = "incremental", session_id: str | None = None, meta_on
         conn.close()
 
 
-def sync_person(name: str, mode: str = "incremental") -> str:
+def sync_person(name: str, mode: str = "incremental", transcribe_mode: str = "async") -> str:
+    from pathlib import Path
     from engine.importers.sync_messages import sync_one_session
     from engine.importers.checkpoint import CheckpointManager
     from engine.importers.sync_contacts import sync_contacts
@@ -124,6 +125,43 @@ def sync_person(name: str, mode: str = "incremental") -> str:
         lines.append(f"- 新增消息: {total} 条")
         if details:
             lines.extend(details)
+
+        # 触发转写（async/sync/off）
+        if transcribe_mode in ("async", "sync"):
+            try:
+                from engine.importers.async_transcriber import trigger_transcription
+                # 对每个 account 的 wxid 触发转写
+                transcribe_summary = []
+                for account in person.accounts:
+                    wxid = account.wxid
+                    if not wxid:
+                        continue
+                    result = trigger_transcription(
+                        db_path=Path(config.db_path),
+                        conv_id=wxid,
+                        config=config,
+                        mode=transcribe_mode,
+                    )
+                    if result.get("queued", 0) > 0:
+                        transcribe_summary.append(
+                            f"  {account.display_name or wxid}: 入队 {result['queued']} 条"
+                        )
+                    elif result.get("voice_success", 0) + result.get("image_success", 0) > 0:
+                        transcribe_summary.append(
+                            f"  {account.display_name or wxid}: "
+                            f"语音 {result.get('voice_success', 0)}/{result.get('voice_failed', 0)}, "
+                            f"图片 {result.get('image_success', 0)}/{result.get('image_failed', 0)}, "
+                            f"耗时 {result.get('elapsed_seconds', 0)}s"
+                        )
+                if transcribe_summary:
+                    if transcribe_mode == "async":
+                        lines.append(f"- 异步转写已入队（后台执行，下次查询可见）:")
+                    else:
+                        lines.append(f"- 同步转写完成:")
+                    lines.extend(transcribe_summary)
+            except Exception as e:
+                lines.append(f"- 转写触发失败: {e}")
+
         return "\n".join(lines)
     finally:
         conn.close()
