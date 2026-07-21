@@ -182,6 +182,30 @@ def run_sync(
         except Exception as e:
             logger.error(f"语音转文字失败: {e}")
 
+    # 8. 图片转文字（同步后自动批量识别，默认开启）
+    if config.weflow.image_transcribe:
+        try:
+            from engine.importers.image_transcriber import (
+                create_transcriber_from_config,
+                transcribe_image_messages,
+            )
+            image_transcriber = create_transcriber_from_config(config)
+            if image_transcriber:
+                success, failed = transcribe_image_messages(
+                    db,
+                    image_transcriber,
+                    limit=config.weflow.image_transcribe_limit,
+                    session_id=session_id,
+                    verbose=verbose,
+                )
+                image_transcriber.close()
+                if verbose:
+                    logger.info(f"图片转文字: 成功 {success}，失败 {failed}")
+            else:
+                logger.warning("图片转文字：WCD 未配置或 backend 非 wcd，跳过")
+        except Exception as e:
+            logger.error(f"图片转文字失败: {e}")
+
     result.elapsed_seconds = time.time() - start_time
 
     # 6. 记录日志

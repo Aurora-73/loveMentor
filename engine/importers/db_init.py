@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS messages (
     platform        TEXT DEFAULT 'wechat',
     source          TEXT DEFAULT 'sync',
     voice_text      TEXT,
+    image_text      TEXT,
     synced_at       INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_msg_conv      ON messages(conversation_id, timestamp);
@@ -287,12 +288,22 @@ def _migration_5_add_voice_text(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _migration_6_add_image_text(conn: sqlite3.Connection) -> None:
+    """添加 messages.image_text 列（图片消息描述结果，来自多模态模型）。"""
+    cursor = conn.execute("PRAGMA table_info(messages)")
+    columns = {row[1] for row in cursor.fetchall()}
+    if "image_text" not in columns:
+        conn.execute("ALTER TABLE messages ADD COLUMN image_text TEXT")
+    conn.commit()
+
+
 MIGRATIONS = [
     (1, "添加 contacts.labels 列", _migration_1_add_labels),
     (2, "添加 messages.platform/source 列", _migration_2_add_platform_source),
     (3, "添加 moment_interactions.user_name 索引", _migration_3_moment_username_idx),
     (4, "创建身份目录表", _migration_4_identity_tables),
     (5, "添加 messages.voice_text 列", _migration_5_add_voice_text),
+    (6, "添加 messages.image_text 列", _migration_6_add_image_text),
 ]
 
 

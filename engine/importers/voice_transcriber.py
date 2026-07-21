@@ -36,6 +36,8 @@ DEFAULT_BEAM_SIZE = 5
 DEFAULT_INITIAL_PROMPT = "请用简体中文输出："
 # 标记识别失败的占位符（避免反复重试失败的消息）
 FAILED_MARKER = ""
+# 来源标记前缀（用户要求：图片和语音转成的文字需要特殊标记来源）
+SOURCE_PREFIX = "[语音转文字] "
 
 
 class VoiceTranscriber:
@@ -179,19 +181,20 @@ class VoiceTranscriber:
         return buf
 
     def transcribe(self, server_id: str | int) -> Optional[str]:
-        """识别单条语音消息，返回文字。
+        """识别单条语音消息，返回带 [语音转文字] 前缀的文字。
 
         完整流程：
             1. 从 media_0.db 查询 voice_data
             2. pysilk 解码 SILK → PCM
             3. 封装为 WAV bytes
             4. faster-whisper 识别 → 文字
+            5. 加 [语音转文字] 前缀
 
         Args:
             server_id: 消息的 server_id（对应 VoiceInfo.svr_id 和 messages.id）
 
         Returns:
-            识别的文字（已 strip），失败返回 None
+            "[语音转文字] xxx" 格式的文字，失败返回 None
         """
         # 1. 查询语音数据
         silk_data = self._fetch_voice_data(int(server_id))
@@ -218,7 +221,10 @@ class VoiceTranscriber:
             segments, _info = self.model.transcribe(wav_file, **transcribe_kwargs)
             # segments 是生成器，遍历获取文字
             text = "".join(seg.text for seg in segments).strip()
-            return text or None
+            if not text:
+                return None
+            # 5. 加来源前缀
+            return f"{SOURCE_PREFIX}{text}"
         except Exception as e:
             logger.warning(f"Whisper 识别失败 (server_id={server_id}): {e}")
             return None

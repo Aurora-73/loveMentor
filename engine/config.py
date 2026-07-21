@@ -58,8 +58,8 @@ class WeFlowConfig:
     """数据源连接配置（WeFlow 或 WeChatDataAnalysis）"""
 
     def __init__(self, d: dict):
-        self.backend: str = d.get("backend", "weflow")  # "weflow" 或 "wcd"
-        self.base_url: str = d.get("base_url", "http://127.0.0.1:5031")
+        self.backend: str = d.get("backend", "wcd")  # "wcd" (WeChatDataAnalysis) 或 "weflow"
+        self.base_url: str = d.get("base_url", "http://127.0.0.1:10392")
         self.token: str = d.get("token", "")
         self.timeout: int = d.get("timeout", 30)
         self.page_size: int = d.get("page_size", 5000)
@@ -69,6 +69,11 @@ class WeFlowConfig:
         # 语音转文字（同步后自动批量识别 type=34 的语音消息）
         self.voice_transcribe: bool = d.get("voice_transcribe", True)
         self.voice_transcribe_limit: int = d.get("voice_transcribe_limit", 50)
+        # 图片转文字（同步后自动批量识别 type=3 的图片消息，使用本地多模态模型）
+        self.image_transcribe: bool = d.get("image_transcribe", True)
+        self.image_transcribe_limit: int = d.get("image_transcribe_limit", 50)
+        # 多模态模型（默认 BLIP-base，体积小、.bin 格式兼容 Python 3.13）
+        self.image_model: str = d.get("image_model", "Salesforce/blip-image-captioning-base")
 
 
 
