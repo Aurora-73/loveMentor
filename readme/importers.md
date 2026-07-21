@@ -107,6 +107,13 @@ run_sync(config, mode='incremental')  # 默认增量，仅私聊
 
 **数据库快照刷新**：WCD 后端在同步前自动调用 `/api/decrypt`（使用缓存密钥，不重启微信、不需要扫码）。解密节流：最近 30 分钟内成功解密过则自动跳过，标记文件 `output/.last_decrypt`。`force=True` 可强制解密。WeFlow 后端跳过此步骤。
 
+**`source=decrypted` 参数（WCD 后端关键）**：WeChat 运行时会锁定 `session.db`，导致 WCD 默认的 `realtime` 模式（直读 WCDB）超时失败（`open_account timed out after 5s`）。所有 WCD 读取调用（`list_contacts` / `list_sessions` / `get_messages`）都支持 `source` 参数：
+- `None`/`auto`：默认 realtime，微信运行时会失败
+- `realtime`：直读 WCDB，微信运行时会超时
+- `decrypted`：读解密后的 DB 副本，不受 WeChat 锁影响（推荐）
+
+项目内统一约定：`backend=wcd` 时传 `source=decrypted`，由各调用点用 `wcd_source = "decrypted" if config.weflow.backend == "wcd" else None` 计算。涉及文件：`sync.py` / `sync_agent.py` / `screenshot_import.py` / `live_monitor.py` / `wechat_e2e_run.py` / `avatar_fetcher.py`。例外：`_query_avatar_via_wcd_api` 的 `decrypt_databases(force=True)` 已刷新快照，之后 `list_contacts(source=decrypted)` 读到最新数据。
+
 **仅私聊**：消息同步默认只处理 `type='private'` 的会话（`wxid_` 开头或不含 `@` 的个人聊天）。群聊（`@chatroom`）和公众号（`gh_`）不会同步消息。
 
 ### 增量 vs 全量

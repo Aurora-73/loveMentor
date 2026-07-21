@@ -817,13 +817,24 @@ def send_message_with_retry(name: str, message: str,
         try:
             from engine.config import load_config
             from engine.importers.weflow_client import WeFlowClient
+            from engine.importers.wcd_client import WCDClient
             config = load_config()
-            client = WeFlowClient(
-                base_url=config.weflow.base_url,
-                token=config.weflow.token,
-                timeout=min(config.weflow.timeout, 5),  # 限制 5s，避免卡住
-            )
-            contacts = client.list_contacts(keyword=wxid, limit=5)
+            # 根据 backend 选择客户端（WCD 后端用 source=decrypted 绕过 WeChat 运行时锁）
+            if config.weflow.backend == "wcd":
+                client = WCDClient(
+                    base_url=config.weflow.base_url,
+                    token=config.weflow.token,
+                    timeout=min(config.weflow.timeout, 5),  # 限制 5s，避免卡住
+                    decrypted_db_dir=config.weflow.decrypted_db_dir or None,
+                )
+                contacts = client.list_contacts(keyword=wxid, limit=5, source="decrypted")
+            else:
+                client = WeFlowClient(
+                    base_url=config.weflow.base_url,
+                    token=config.weflow.token,
+                    timeout=min(config.weflow.timeout, 5),  # 限制 5s，避免卡住
+                )
+                contacts = client.list_contacts(keyword=wxid, limit=5)
             # 精确匹配 wxid（避免 keyword 模糊匹配到其他联系人）
             matched = [c for c in contacts if c.get("username") == wxid]
             if matched:

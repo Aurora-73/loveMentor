@@ -91,8 +91,9 @@ def sync_person(name: str, mode: str = "incremental") -> str:
         if not person:
             # WCD 快照刷新后，同步元数据并重建身份索引，再给新增联系人一次解析机会。
             if config.weflow.backend == "wcd":
-                sync_contacts(client, conn)
-                sync_conversations(client, conn)
+                wcd_source = "decrypted"
+                sync_contacts(client, conn, source=wcd_source)
+                sync_conversations(client, conn, source=wcd_source)
                 bootstrap_identity(conn)
                 person = _resolve_person(conn, name)
             if not person:
@@ -103,13 +104,14 @@ def sync_person(name: str, mode: str = "incremental") -> str:
         checkpoint = CheckpointManager(conn)
         total = 0
         details = []
+        wcd_source = "decrypted" if config.weflow.backend == "wcd" else None
         for account in person.accounts:
             wxid = account.wxid
             if not wxid:
                 continue
             since = 0 if mode == "full" else checkpoint.get_watermark(wxid)
             try:
-                synced = sync_one_session(client, conn, checkpoint, wxid, since=since, verbose=False)
+                synced = sync_one_session(client, conn, checkpoint, wxid, since=since, verbose=False, source=wcd_source)
                 total += synced
                 if synced > 0:
                     details.append(f"- {account.display_name or wxid}: +{synced} 条")

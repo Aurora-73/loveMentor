@@ -167,8 +167,10 @@ def ensure_wechat_data(conn: sqlite3.Connection, wxid: str) -> tuple[dict | None
                 backend = config.weflow.backend
                 return None, f"连接 {backend} 失败，请确保服务已启动"
 
-            sync_contacts(client, conn)
-            sync_conversations(client, conn)
+            # WCD 后端用 source=decrypted 绕过 WeChat 运行时锁
+            wcd_source = "decrypted" if config.weflow.backend == "wcd" else None
+            sync_contacts(client, conn, source=wcd_source)
+            sync_conversations(client, conn, source=wcd_source)
         except Exception as e:
             return None, f"拉取联系人失败: {e}"
 
@@ -192,7 +194,8 @@ def ensure_wechat_data(conn: sqlite3.Connection, wxid: str) -> tuple[dict | None
             config = load_config()
             client = _make_client(config)
             checkpoint = CheckpointManager(conn)
-            synced = sync_one_session(client, conn, checkpoint, actual_wxid, since=0, verbose=False)
+            wcd_source = "decrypted" if config.weflow.backend == "wcd" else None
+            synced = sync_one_session(client, conn, checkpoint, actual_wxid, since=0, verbose=False, source=wcd_source)
             print(f"同步完成: +{synced} 条消息")
         except Exception as e:
             return None, f"同步消息失败: {e}"

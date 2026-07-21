@@ -87,6 +87,8 @@ def run_sync(
         )
 
     # 2. 刷新 WCD 数据库快照（使用缓存密钥，不重启微信）
+    # WCD 后端：用 source=decrypted 读解密快照，绕过 WeChat 运行时锁定 session.db
+    wcd_source = "decrypted" if config.weflow.backend == "wcd" else None
     if config.weflow.backend == "wcd":
         try:
             client.decrypt_databases()
@@ -94,10 +96,10 @@ def run_sync(
             logger.warning(f"数据库解密失败（不影响同步，使用旧快照）: {e}")
 
     # 3. 同步联系人
-    contact_count = sync_contacts(client, db)
+    contact_count = sync_contacts(client, db, source=wcd_source)
 
     # 4. 同步会话列表
-    session_count = sync_conversations(client, db)
+    session_count = sync_conversations(client, db, source=wcd_source)
 
     result = SyncResult(
         contact_count=contact_count,
@@ -128,6 +130,7 @@ def run_sync(
                 sid,
                 since,
                 verbose=verbose,
+                source=wcd_source,
             )
             total_synced += synced
             if synced > 0:

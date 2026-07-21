@@ -287,14 +287,23 @@ def _query_local_avatar(conn: sqlite3.Connection, identifier: str) -> dict | Non
 
 # ── API 查询 ──────────────────────────────────────────────────────────
 
-def _query_api_avatar(client, keyword: str) -> dict | None:
+def _query_api_avatar(client, keyword: str, source: str | None = None) -> dict | None:
     """通过 WeFlow/WCD API 按关键词搜索联系人头像。
+
+    Args:
+        client: WeFlowClient 或 WCDClient 实例
+        keyword: 搜索关键词
+        source: 数据源（仅 WCD 有效，None=auto/realtime，decrypted=读解密快照）
+                当 WeChat 运行时（WCD 后端），传 source=decrypted 绕过 session.db 锁
 
     Returns:
         {"wxid": ..., "display_name": ..., "alias": ..., "avatar_url": ...} 或 None
     """
     try:
-        contacts = client.list_contacts(keyword=keyword, limit=20)
+        if source:
+            contacts = client.list_contacts(keyword=keyword, limit=20, source=source)
+        else:
+            contacts = client.list_contacts(keyword=keyword, limit=20)
     except Exception as e:
         logger.warning(f"API 查询联系人失败: {e}")
         return None
@@ -813,10 +822,12 @@ def get_avatar(
                 logger.info(f"代理 URL → CDN URL: {display_name}")
 
     # 1b. API 查询（如果 DB 没找到）
+    # WCD 后端：用 source=decrypted 读解密快照，绕过 WeChat 运行时锁定 session.db
     if not avatar_url:
         client = _create_client(config)
         if client.health():
-            api_result = _query_api_avatar(client, identifier)
+            api_source = "decrypted" if config.weflow.backend == "wcd" else None
+            api_result = _query_api_avatar(client, identifier, source=api_source)
             if api_result:
                 avatar_url = api_result["avatar_url"]
                 wxid = api_result["wxid"]
@@ -1000,7 +1011,12 @@ def batch_download_avatars(
     client = _create_client(config)
     if client.health():
         try:
-            contacts = client.list_contacts(limit=limit)
+            # WCD 后端用 source=decrypted 绕过 WeChat 运行时锁
+            api_source = "decrypted" if config.weflow.backend == "wcd" else None
+            if api_source:
+                contacts = client.list_contacts(limit=limit, source=api_source)
+            else:
+                contacts = client.list_contacts(limit=limit)
             source = "api"
         except Exception as e:
             logger.warning(f"API 拉取联系人列表失败: {e}")

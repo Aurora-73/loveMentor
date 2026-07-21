@@ -25,9 +25,14 @@ def map_session_type(weFlow_type: int, session_id: str = "") -> str:
     return _SESSION_TYPE_MAP.get(weFlow_type, "other")
 
 
-def sync_conversations(client: WeFlowClient, db: sqlite3.Connection) -> int:
-    """同步会话列表到 SQLite，返回会话总数。"""
-    sessions = client.list_sessions(limit=10000)
+def sync_conversations(client: WeFlowClient, db: sqlite3.Connection, source: str | None = None) -> int:
+    """同步会话列表到 SQLite，返回会话总数。
+
+    Args:
+        source: 数据源（仅 WCD 有效，None=auto/realtime，decrypted=读解密快照）
+                当 WeChat 运行时（WCD 后端），传 source=decrypted 绕过 session.db 锁
+    """
+    sessions = client.list_sessions(limit=10000, source=source) if source else client.list_sessions(limit=10000)
     logger.info(f"拉取到 {len(sessions)} 个会话")
 
     for s in sessions:

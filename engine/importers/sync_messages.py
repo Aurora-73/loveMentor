@@ -143,18 +143,26 @@ def _fetch_messages_with_retry(
     start_date: str,
     offset: int = 0,
     max_retries: int = 3,
+    source: str | None = None,
 ) -> dict:
-    """带重试的消息拉取。WeFlow API 不稳定，需要重试。"""
+    """带重试的消息拉取。WeFlow API 不稳定，需要重试。
+
+    Args:
+        source: 数据源（仅 WCD 有效，None=auto/realtime，decrypted=读解密快照）
+    """
     limits_to_try = [500, 200, 100]
 
     for attempt in range(max_retries):
         limit = limits_to_try[attempt % len(limits_to_try)]
-        resp = client.get_messages(
-            talker=session_id,
-            limit=limit,
-            offset=offset,
-            start=start_date,
-        )
+        kwargs = {
+            "talker": session_id,
+            "limit": limit,
+            "offset": offset,
+            "start": start_date,
+        }
+        if source:
+            kwargs["source"] = source
+        resp = client.get_messages(**kwargs)
         messages = resp.get("messages", [])
         if messages:
             return resp
@@ -177,18 +185,23 @@ def sync_one_session(
     session_id: str,
     since: int,
     verbose: bool = False,
+    source: str | None = None,
 ) -> int:
     """同步单个会话的增量消息，返回本次新增/更新消息数。
 
     使用原始消息 API（/api/v1/messages）+ offset 分页。
     since > 0 时作为 start 日期传入，实现增量同步。
+
+    Args:
+        source: 数据源（仅 WCD 有效，None=auto/realtime，decrypted=读解密快照）
+                当 WeChat 运行时（WCD 后端），传 source=decrypted 绕过 session.db 锁
     """
     total_synced = 0
     offset = 0
     start_date = _ts_to_datestr(since) if since > 0 else DEFAULT_START
 
     while True:
-        resp = _fetch_messages_with_retry(client, session_id, start_date, offset)
+        resp = _fetch_messages_with_retry(client, session_id, start_date, offset, source=source)
 
         messages = resp.get("messages", [])
         if not messages:

@@ -261,11 +261,24 @@ class WCDClient:
             })
         return mapped
 
-    def list_sessions(self, keyword: str | None = None, limit: int = 100) -> list[dict]:
-        """获取会话列表。返回格式兼容 WeFlowClient。"""
+    def list_sessions(
+        self,
+        keyword: str | None = None,
+        limit: int = 100,
+        source: str | None = None,
+    ) -> list[dict]:
+        """获取会话列表。返回格式兼容 WeFlowClient。
+
+        Args:
+            keyword: 搜索关键词
+            limit: 返回数量上限
+            source: 数据源（None/auto/realtime/decrypted），同 list_contacts
+        """
         params: dict[str, Any] = {"limit": limit}
         if keyword:
             params["keyword"] = keyword
+        if source:
+            params["source"] = source
         resp = self._get("/api/chat/sessions", params=params)
 
         raw_sessions = resp.get("sessions", [])
@@ -304,16 +317,22 @@ class WCDClient:
         offset: int = 0,
         start: str | None = None,
         end: str | None = None,
+        source: str | None = None,
     ) -> dict:
         """获取消息。返回格式兼容 WeFlowClient。
 
         WCD 不支持 start/end 日期参数，改为本地过滤。
+
+        Args:
+            source: 数据源（None/auto/realtime/decrypted），同 list_contacts
         """
         params: dict[str, Any] = {
             "username": talker,
             "limit": min(limit, 500),  # WCD 上限 500
             "offset": offset,
         }
+        if source:
+            params["source"] = source
 
         resp = self._get("/api/chat/messages", params=params)
 

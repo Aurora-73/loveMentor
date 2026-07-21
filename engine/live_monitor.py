@@ -364,7 +364,12 @@ class LiveMonitorManager:
     def _fetch_messages(self, config: Config, wxid: str, limit: int) -> list[dict]:
         """直接调 API 拉消息（不走 sync 管道）。"""
         client = self._build_client(config)
-        resp = client.get_messages(talker=wxid, limit=limit)
+        # WCD 后端用 source=decrypted 绕过 WeChat 运行时锁
+        wcd_source = "decrypted" if config.weflow.backend == "wcd" else None
+        kwargs: dict = {"talker": wxid, "limit": limit}
+        if wcd_source:
+            kwargs["source"] = wcd_source
+        resp = client.get_messages(**kwargs)
         return resp.get("messages", [])
 
     def _build_client(self, config: Config):
