@@ -139,7 +139,7 @@ python -X utf8 -m mcp_server.server
 |--------|------|------|
 | `wiki_read` | **读取 Wiki 页面完整正文（用于精确引用）** | 只读 |
 | `wiki_context` | **批量 Wiki 上下文检索（合并 wiki_search+wiki_read，分析工作流第二步核心工具）。接受最多 5 条查询，返回格式化知识框架** | 只读 |
-| `person_sync` | 增量同步单个人最新消息（几秒完成） | 写入 |
+| `person_sync` | 增量同步单个人最新消息（几秒完成）。支持 `transcribe_mode` 参数：`async`（默认，后台异步转写语音/图片）、`sync`（同步等待转写完成）、`off`（不转写） | 写入 |
 | `person_save_analysis` | 保存分析结论，旧版本自动转为 previous | 写入 |
 
 ### 5.3 Phase 2 P1 — 已实现工具（16 个）

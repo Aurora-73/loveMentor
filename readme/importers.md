@@ -18,11 +18,16 @@
 | `sync_moments.py` | 144 | 朋友圈同步（get_moments_timeline → UPSERT moments 表） |
 | `checkpoint.py` | 171 | 同步水位记录（增量同步的断点续传） |
 | `db_init.py` | 361 | 数据库初始化（建表、索引、迁移） |
+| `voice_transcriber.py` | ~250 | 语音消息转写（SILK v3 → PCM → faster-whisper） |
+| `image_transcriber.py` | ~300 | 图片消息转写（BLIP 描述 + PaddleOCR 文字） |
+| `async_transcriber.py` | 525 | 异步转写管理器（单例 + daemon worker + 内存队列） |
 | `screenshot_import.py` | 583 | 截图 OCR 导入主流程（含 `prepare_import`/`confirm_and_import`/`import_from_file`） |
 | `screenshot_parser.py` | 408 | 截图消息解析（识别发送者、时间、内容） |
 | `ocr_engine.py` | 214 | RapidOCR 封装（ONNX Runtime，带 MD5 缓存） |
 
 > 按人同步的 `sync_person()` 不在本包内，位于 `engine/agent/sync_agent.py`，作为 Agent 层入口调用本包的同步原语。
+>
+> **转写与同步关系**：`sync_person()` 同步完成后自动调用 `async_transcriber.trigger_transcription()`，对每个 account 的 wxid 启动语音/图片转写（默认 `transcribe_mode="async"` 异步执行，详见下方"语音/图片转写机制"章节）。
 
 ## 数据后端选择
 
@@ -252,7 +257,7 @@ Step 5: import_from_file(conn, preview_path)
 |---|------|------|
 | `contacts` | id (TEXT) | 联系人（nickname/remark/alias/display_name/labels） |
 | `conversations` | id (TEXT) | 会话（type: private/group/official） |
-| `messages` | id (TEXT) | 消息（conversation_id/sender_id/content/timestamp/type） |
+| `messages` | id (TEXT) | 消息（conversation_id/sender_id/content/timestamp/type/voice_text/image_text）。`voice_text`/`image_text` 由转写模块异步写入，`upsert_message` 不覆盖这两个字段 |
 | `attachments` | id (TEXT) | 附件（message_id/media_path） |
 | `moments` | id (TEXT) | 朋友圈动态 |
 | `moment_interactions` | id (TEXT) | 朋友圈互动（likes/comments） |
@@ -280,3 +285,178 @@ Step 5: import_from_file(conn, preview_path)
 6. **OCR 缓存**：OCR 结果按图片 MD5 缓存在 `data/cache/ocr/`，避免重复识别。缓存超过 500MB 时自动清理最旧文件。
 7. **WCD 联系人过期**：WCD 的联系人列表来自解密后的数据库快照，新增好友不会自动出现。需要调用 `/api/decrypt` 用缓存密钥重新解密。不要调用 `/api/get_keys`（会重启微信）。
 8. **WCDClient 字段兼容**：`list_contacts()` 返回的 dict 必须包含 `username` 字段（`sync_contacts` 用它作为联系人 ID）。`list_sessions()` 同理。
+
+## 语音/图片转写机制
+
+微信消息中的语音（type=34）和图片（type=3）原始内容只是占位符（如 `[语音 4.9秒]`、`[图片]`），无法被 Agent 直接理解。本模块负责将这两种非文本消息转写为文字，存入 `messages.voice_text` / `messages.image_text` 字段。
+
+### 整体架构
+
+```
+sync_person 完成
+    │
+    ▼
+trigger_transcription(db_path, conv_id, config, mode)
+    │
+    ├── mode="async"（默认）→ AsyncTranscriber 入队 → daemon worker 后台串行处理
+    ├── mode="sync"          → _sync_transcribe 同步执行（阻塞）
+    └── mode="off"           → 不转写
+    │
+    ▼
+查询 messages 表 type=34 voice_text IS NULL / type=3 image_text IS NULL
+    │
+    ├── 语音 → VoiceTranscriber（SILK v3 → PCM → faster-whisper）
+    └── 图片 → ImageTranscriber（WCD 下载 → BLIP 描述 + PaddleOCR 文字）
+    │
+    ▼
+UPDATE messages SET voice_text=? / image_text=?
+```
+
+### 三个文件职责
+
+| 文件 | 行数 | 职责 |
+|------|------|------|
+| [voice_transcriber.py](../engine/importers/voice_transcriber.py) | ~390 | 语音转写：SILK v3 解码 + faster-whisper 识别 |
+| [image_transcriber.py](../engine/importers/image_transcriber.py) | ~714 | 图片转写：BLIP 描述 + PaddleOCR 文字 + 智能组合 |
+| [async_transcriber.py](../engine/importers/async_transcriber.py) | 525 | 异步管理：单例 + daemon worker + 内存队列 |
+
+### 语音转写（VoiceTranscriber）
+
+**数据流**：
+```
+media_0.db.VoiceInfo.voice_data (SILK v3 BLOB)
+    → pysilk.decode()  → PCM 16-bit 24kHz
+    → wave 模块封装为 WAV bytes
+    → faster-whisper.transcribe() → 中文文字
+    → 加 [语音转文字] 前缀
+    → 写入 messages.voice_text
+```
+
+**关联键**：`messages.id (server_id) == VoiceInfo.svr_id`
+
+**模型**：faster-whisper `small` 模型，CPU + int8 量化，首次加载约 30s，识别速度约 2-3 倍实时时长
+
+**配置项**（`config.yaml` 无显式配置，使用代码默认值）：
+| 配置 | 默认值 | 说明 |
+|------|--------|------|
+| `model_size` | `"small"` | Whisper 模型大小（tiny/base/small/medium/large-v3） |
+| `device` | `"cpu"` | cpu/cuda |
+| `compute_type` | `"int8"` | int8（CPU 推荐）/float16（GPU） |
+| `sample_rate` | `24000` | 微信语音默认采样率 |
+| `language` | `"zh"` | 中文识别 |
+| `initial_prompt` | `"请用简体中文输出："` | 引导模型输出简体中文 |
+
+### 图片转写（ImageTranscriber）
+
+**数据流**：
+```
+messages.raw_content (XML 含 md5)
+    → WCD API /api/chat/media/image?md5=xxx&username=talker → 图片二进制
+    → 并行/串行调用 BLIP（实物描述）+ PaddleOCR（文字提取）
+    → 智能组合结果
+    → 加 [图片描述] 前缀
+    → 写入 messages.image_text
+```
+
+**关联键**：`messages.id (server_id)` + `messages.conversation_id (talker)`
+
+**智能组合策略**（`_combine_results` 方法）：
+
+| 情况 | BLIP 描述 | OCR 文字 | 组合结果 |
+|------|----------|---------|---------|
+| 1 | ✅ 有效 | ❌ 无 | 用 BLIP 描述（照片类） |
+| 2 | ✅ 泛化 | ✅ 有 | 用 OCR 文字（截图类，BLIP 描述含"computer screen"等关键词） |
+| 3 | ✅ 有效 | ✅ 有 | 组合：`BLIP描述（图中文字：OCR文字）`（meme/混合） |
+| 4 | ❌ 无 | ✅ 有 | 用 `[截图] OCR文字` |
+| 5 | ❌ 无 | ❌ 无 | 失败，标记为空字符串 |
+
+**模型选择**：
+- **BLIP**：`Salesforce/blip-image-captioning-base`（223M 参数，约 1GB）
+  - 输出英文，通过 `Helsinki-NLP/opus-mt-en-zh` 翻译为中文
+  - 用 `.bin` 格式权重（`use_safetensors=False`），避开 Python 3.13 + Windows 上的 safetensors native bug
+- **PaddleOCR**：`PP-OCRv5_mobile`（默认，快 2.5 倍）或 `PP-OCRv5_server`（精度略高）
+  - 必须传 `enable_mkldnn=False`，否则 OneDNN 触发 NotImplementedError
+
+**模型加载顺序**：PaddleOCR 先于 BLIP，让 paddle native 库先初始化，避免与 torch native 库冲突触发 0xC0000005 访问冲突。
+
+**配置项**（`config.yaml` 的 `weflow` 段）：
+```yaml
+weflow:
+  image_model: "Salesforce/blip-image-captioning-base"  # BLIP 模型
+  image_ocr: true                                        # 是否启用 OCR
+  image_ocr_model: "mobile"                              # OCR 模型：mobile/server
+```
+
+### 异步转写管理器（AsyncTranscriber）
+
+**单例模式**：`AsyncTranscriber.get_instance()` 全局唯一，跨多次 sync_person 调用复用 transcriber 实例（模型加载耗时，避免重复初始化）
+
+**队列约束**：
+| 约束 | 值 | 说明 |
+|------|----|----|
+| `MAX_QUEUE_SIZE` | 50 | 队列最多 50 个任务，超过则丢弃（避免无限增长） |
+| `MAX_MESSAGES_PER_TASK` | 100 | 单次任务最多处理 100 条消息 |
+
+**Worker 线程**：
+- `daemon=True`，进程退出时自动结束
+- 单 worker 串行处理（避免 CPU 过载）
+- 失败任务不重试（幂等设计，下次 sync_person 会重新触发 NULL 消息）
+
+**状态查询**：`AsyncTranscriber.get_instance().get_status()` 返回：
+```python
+{
+    "queue_size": 3,                  # 当前队列长度
+    "worker_alive": True,             # worker 线程是否存活
+    "voice_transcriber_ready": True,  # 语音 transcriber 是否初始化成功
+    "image_transcriber_ready": True,  # 图片 transcriber 是否初始化成功
+    "voice_init_failed": False,       # 语音 transcriber 是否初始化失败（永久标记）
+    "image_init_failed": False,       # 图片 transcriber 是否初始化失败（永久标记）
+    "total_processed": 150,           # 累计处理消息数
+    "total_success": 120,             # 累计成功数
+    "total_failed": 30,               # 累计失败数
+}
+```
+
+### 关键约束（用户明确要求）
+
+1. **不阻塞同步主流程**：`async` 模式下 `trigger_transcription()` 入队后立即返回，sync_person 几秒完成；`sync` 模式才会阻塞等待转写完成
+2. **转写结果不被下次同步覆盖**：`sync_messages.upsert_message()` 的 `ON CONFLICT(id) DO UPDATE SET` 只更新 `content/raw_content/sender_name/media_path/raw_json/synced_at`，**不包含** `voice_text/image_text` 字段，转写结果持久保留
+3. **async/sync/off 开关**：通过 `person_sync(name, transcribe_mode=...)` 参数控制，默认 `async`
+
+### 失败处理
+
+- **失败标记**：识别失败的消息 `voice_text` / `image_text` 标记为空字符串（`FAILED_MARKER = ""`），避免反复重试
+- **重置失败消息**：如需重试，手动执行 SQL：
+  ```sql
+  UPDATE messages SET voice_text=NULL WHERE type=34 AND voice_text='';
+  UPDATE messages SET image_text=NULL WHERE type=3 AND image_text='';
+  ```
+- **永久失败场景**：
+  - 语音：`media_0.db` 中无对应 `svr_id` 的 `voice_data`
+  - 图片：`raw_content` 无 md5 / WCD API 404（图片在服务器找不到）
+
+### MCP 工具集成
+
+`person_sync(name, mode="incremental", transcribe_mode="async")` 工具新增 `transcribe_mode` 参数：
+
+| 模式 | 行为 | 适用场景 |
+|------|------|---------|
+| `async`（默认） | 入队后立即返回，后台 worker 串行处理 | 日常使用，不阻塞 Agent |
+| `sync` | 阻塞等待转写完成 | 需要立即拿到转写结果的场景 |
+| `off` | 不触发转写 | 已知无语音/图片，或仅元数据同步 |
+
+返回值新增"异步转写已入队 N 条"或"同步转写完成（语音 X/Y，图片 A/B，耗时 Ts）"摘要。
+
+### 批量补转写脚本
+
+历史已同步但未转写的消息，可用 `scripts/` 下的批量脚本补转写（`scripts/` 在 `.gitignore` 中，不提交 git）：
+
+| 脚本 | 用途 | 典型用法 |
+|------|------|---------|
+| `scripts/batch_transcribe_voice.py` | 批量转写语音 | `python -X utf8 scripts/batch_transcribe_voice.py --days-back 90 --limit 500` |
+| `scripts/batch_transcribe_images.py` | 批量转写图片 | `python -X utf8 scripts/batch_transcribe_images.py --days-back 30 --limit 500` |
+
+**注意事项**：
+- 首次运行会下载模型（BLIP 约 1GB，Whisper small 约 500MB），耗时 1-2 分钟
+- 图片转写典型成功率约 25%（受图片质量、md5 缺失、WCD 404 影响）
+- 语音转写典型成功率 >95%（只要 media_0.db 有数据，几乎都能识别）

@@ -24,7 +24,7 @@
 | `material.py` | `agent_material_search`, `agent_material_show` | 材料搜索与阅读 |
 | `write.py` | `agent_note`, `agent_date`, `agent_evaluate`, `agent_events`, `agent_save_analysis`, `agent_save_from_markdown` | 数据写入 |
 | `moments.py` | `moments_stats`, `sync_moments_to_archive` | 朋友圈互动 |
-| `sync_agent.py` | `agent_sync`, `sync_person` | 数据同步 |
+| `sync_agent.py` | `agent_sync`, `sync_person` | 数据同步（含语音/图片异步转写触发，`transcribe_mode` 参数） |
 | `report.py` | `agent_metrics`, `agent_status`, `agent_rank`, `agent_weekly`, `agent_compare_analysis` | 指标与报告 |
 | `identity_ops.py` | `agent_contact`, `agent_exclude`, `agent_failure`, `agent_sticker` | 身份与排除管理 |
 | `signals.py` | `_detect_signals`, `detect_manipulation_signals`, `_detect_moments_chat_signals`, `_query_signal_messages` | 信号检测 |

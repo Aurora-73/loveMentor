@@ -112,7 +112,7 @@
 | 工具 | 参数 | 返回 | 用途 |
 |------|------|------|------|
 | `sync(mode="incremental", session_id=None, meta_only=False)` | 模式 | str | 数据同步（**默认增量**）。meta_only=True 只同步联系人/会话 |
-| `sync_person(name, mode="incremental")` | 名字 | str | 按人名同步（**默认增量**，只拉该联系人的最新消息） |
+| `sync_person(name, mode="incremental", transcribe_mode="async")` | 名字+转写模式 | str | 按人名同步（**默认增量**，只拉该联系人的最新消息）。`transcribe_mode` 控制语音/图片转写：`async`（默认，后台异步）、`sync`（同步等待）、`off`（不转写）。详见 [importers.md 语音/图片转写机制](./importers.md#语音图片转写机制) |
 | `sync_moments(name)` | 名字 | str | 同步朋友圈互动到事实档案 |
 | `weekly(deep=False)` | 是否深度 | str | 生成周报（排名快照 + Markdown） |
 | `compare_analysis(name)` | 名字 | str | 对比 latest 和 previous 分析结论 |
