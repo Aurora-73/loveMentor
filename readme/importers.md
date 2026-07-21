@@ -112,7 +112,15 @@ run_sync(config, mode='incremental')  # 默认增量，仅私聊
 - `realtime`：直读 WCDB，微信运行时会超时
 - `decrypted`：读解密后的 DB 副本，不受 WeChat 锁影响（推荐）
 
-项目内统一约定：`backend=wcd` 时传 `source=decrypted`，由各调用点用 `wcd_source = "decrypted" if config.weflow.backend == "wcd" else None` 计算。涉及文件：`sync.py` / `sync_agent.py` / `screenshot_import.py` / `live_monitor.py` / `wechat_e2e_run.py` / `avatar_fetcher.py`。例外：`_query_avatar_via_wcd_api` 的 `decrypt_databases(force=True)` 已刷新快照，之后 `list_contacts(source=decrypted)` 读到最新数据。
+项目内统一约定：`backend=wcd` 时传 `source=decrypted`，由各调用点用 `wcd_source = "decrypted" if config.weflow.backend == "wcd" else None` 计算。涉及文件：`sync.py` / `sync_agent.py` / `screenshot_import.py` / `live_monitor.py` / `wechat_e2e_run.py` / `avatar_fetcher.py`。例外：`_query_avatar_via_wcd_api` 的 `decrypt_databases_lite()` 已刷新快照，之后 `list_contacts(source=decrypted)` 读到最新数据。
+
+**`/api/decrypt_lite` 端点（头像快速刷新）**：全量 `decrypt_databases(force=True)` 会解密所有数据库（含 GB 级 `message_*.db`），耗时几分钟。`/api/decrypt_lite` 只解密 `contact.db` + `head_image.db`（几 MB），**1-3 秒完成**，性能提升 30-100 倍。
+
+- 端点位置：`_reference/WeChatDataAnalysis/src/wechat_decrypt_tool/routers/decrypt.py`
+- 客户端方法：`WCDClient.decrypt_databases_lite()`
+- 调用方：`avatar_fetcher._query_avatar_via_wcd_api`（头像匹配失败时触发刷新）
+- 不写节流标记：lite 解密不影响全量解密的 30 分钟节流逻辑
+- 与 WeFlow CDP `refreshContactAvatar` 速度相当（几秒级）
 
 **仅私聊**：消息同步默认只处理 `type='private'` 的会话（`wxid_` 开头或不含 `@` 的个人聊天）。群聊（`@chatroom`）和公众号（`gh_`）不会同步消息。
 

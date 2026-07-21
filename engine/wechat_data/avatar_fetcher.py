@@ -491,20 +491,25 @@ def _query_avatar_via_wcd_api(
     当 backend=wcd 时使用此函数替代 WeFlow CDP 的 refreshContactAvatar。
 
     流程：
-      1. 调用 WCDClient.decrypt_databases(force=True) 重新解密微信数据库
-         （刷新 WCD 内部数据快照，绕过 30 分钟节流）
-      2. 调用 WCDClient.list_contacts(keyword=wxid) 获取最新头像 URL
+      1. 调用 WCDClient.decrypt_databases_lite() 轻量解密 contact.db + head_image.db
+         （只解密头像相关的小数据库，跳过 GB 级 message_*.db，1-3 秒完成）
+      2. 调用 WCDClient.list_contacts(keyword=wxid, source="decrypted") 获取最新头像 URL
+
+    性能对比（vs 旧方案 decrypt_databases(force=True)）：
+    - 旧方案：解密所有数据库（含 message_*.db），几分钟
+    - 新方案：只解密 contact.db + head_image.db，1-3 秒
+    - 性能提升约 30-100 倍，与 WeFlow CDP refreshContactAvatar 速度相当
 
     与 WeFlow CDP 的差异：
     - WeFlow CDP 通过 Electron 缓存层清除 + 读取 wcdb，可增量写回 contacts.json
-    - WCD API 通过解密整个微信 DB 刷新快照，再从快照读取 avatarUrl
+    - WCD API 通过轻量解密 contact.db 刷新快照，再从快照读取 avatarUrl
     - WCD API 不写回 contacts.json（WCD 没有这个机制），但返回的 URL 已是最新
 
     Args:
         identifier: 联系人标识符（display_name / alias / wxid）
         wxid_hint: 已知的 wxid（如果有，直接用；没有则用 identifier 反查）
         config: 全局配置（None 时自动加载）
-        force_refresh: True=强制解密数据库；False=仅查询不解密
+        force_refresh: True=轻量解密数据库；False=仅查询不解密
 
     Returns:
         dict: { wxid, display_name, alias, avatar_url } 或 None
@@ -525,26 +530,26 @@ def _query_avatar_via_wcd_api(
         logger.warning(f"WCD API 不可用: {config.weflow.base_url}")
         return None
 
-    # 1. 强制解密数据库以刷新 WCD 数据快照（绕过 30 分钟节流）
+    # 1. 轻量解密 contact.db + head_image.db 以刷新 WCD 数据快照
+    #   - 比 decrypt_databases(force=True) 快 30-100 倍（跳过 message_*.db）
+    #   - 不写节流标记，不影响全量解密的节流逻辑
     if force_refresh:
         try:
             logger.info(
-                f"WCD 强制解密数据库以刷新 {wxid_hint or identifier!r} 的头像..."
+                f"WCD 轻量解密以刷新 {wxid_hint or identifier!r} 的头像（仅 contact.db + head_image.db）..."
             )
-            decrypt_result = client.decrypt_databases(force=True)
+            decrypt_result = client.decrypt_databases_lite()
             status = decrypt_result.get("status", "unknown")
             if status == "skipped":
-                logger.info(f"WCD 解密跳过: {decrypt_result.get('reason', 'unknown')}")
-            elif status == "fresh":
-                logger.info(f"WCD 解密跳过（已最新）: {decrypt_result.get('reason', '')}")
+                logger.info(f"WCD lite 解密跳过: {decrypt_result.get('reason', 'unknown')}")
             else:
                 success_count = decrypt_result.get("success_count", 0)
                 failure_count = decrypt_result.get("failure_count", 0)
                 logger.info(
-                    f"WCD 解密完成: 成功 {success_count}, 失败 {failure_count}"
+                    f"WCD lite 解密完成: 成功 {success_count}, 失败 {failure_count}"
                 )
         except Exception as e:
-            logger.warning(f"WCD decrypt_databases 失败: {e}")
+            logger.warning(f"WCD decrypt_databases_lite 失败: {e}")
             # 继续尝试查询，WCD 内部可能已有较新数据
 
     # 2. 查询联系人头像

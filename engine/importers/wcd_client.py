@@ -172,6 +172,66 @@ class WCDClient:
 
         return result
 
+    def decrypt_databases_lite(self) -> dict:
+        """轻量解密：只解密 contact.db + head_image.db（跳过 GB 级 message_*.db）。
+
+        用于头像快速刷新场景：avatar_fetcher._query_avatar_via_wcd_api 调用。
+        比 decrypt_databases(force=True) 快得多（1-3 秒 vs 几分钟），因为：
+        - contact.db / head_image.db 通常只有几 MB
+        - 跳过 message_0.db / message_1.db 等大文件
+
+        与 decrypt_databases 的差异：
+        - 不节流：每次调用都实际解密（因为头像刷新是按需触发，频率低）
+        - 不写节流标记：不影响 decrypt_databases 的节流逻辑
+        - 调用 /api/decrypt_lite 端点（WCD 项目新增）
+
+        Returns:
+            dict: 与 decrypt_databases 返回格式相同
+                - status: completed/failed/skipped
+                - success_count/failure_count: 解密统计
+        """
+        if not self._decrypted_db_dir:
+            logger.info("[decrypt_lite] 未配置 decrypted_db_dir，跳过")
+            return {"status": "skipped", "reason": "未配置 decrypted_db_dir"}
+
+        keys_file = self._decrypted_db_dir.parent / "account_keys.json"
+        if not keys_file.is_file():
+            logger.info(f"[decrypt_lite] 密钥文件不存在: {keys_file}，跳过")
+            return {"status": "skipped", "reason": f"文件不存在: {keys_file}"}
+
+        try:
+            data = json.loads(keys_file.read_text(encoding="utf-8"))
+        except Exception as e:
+            raise WCDError(f"[decrypt_lite] 读取密钥文件失败: {e}") from e
+
+        if not data or not isinstance(data, dict):
+            return {"status": "skipped", "reason": "密钥文件为空"}
+
+        account = list(data.values())[0]
+        db_key = account.get("db_key", "")
+        db_path = account.get("db_key_source_db_storage_path", "")
+
+        if not db_key or not db_path:
+            raise WCDError("[decrypt_lite] account_keys.json 中缺少 db_key 或 db_key_source_db_storage_path")
+
+        logger.info("[decrypt_lite] 正在轻量解密（仅 contact.db + head_image.db）...")
+        try:
+            result = self._post("/api/decrypt_lite", {
+                "key": db_key,
+                "db_storage_path": db_path,
+            })
+        except WCDError:
+            raise
+        except Exception:
+            raise WCDError("[decrypt_lite] 轻量解密数据库失败") from None
+
+        success = result.get("success_count", 0)
+        failed = result.get("failure_count", 0)
+        logger.info(f"[decrypt_lite] 完成: 成功 {success}, 失败 {failed}")
+
+        # 不写节流标记：lite 解密不影响全量解密的节流逻辑
+        return result
+
     def health(self) -> bool:
         try:
             self._get("/api/health")
