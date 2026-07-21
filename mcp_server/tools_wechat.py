@@ -189,3 +189,54 @@ def wechat_ocr(region: str = "full", use_cache: bool = False) -> dict:
             _wechat_op_lock.release()
 
     return with_recording("wechat_ocr", _impl)
+
+
+# ── 工具4: wechat_send_emoji ─────────────────────────────────────
+
+def wechat_send_emoji(name: str, emoji_keyword: str) -> dict:
+    """向微信联系人自动发送表情包。
+
+    通过视觉识别自动化操作微信 PC 客户端：
+    1. 解析联系人标识符 → 微信号（alias）用于搜索和头像定位（与 wechat_send 相同）
+    2. 搜索联系人（需 data/avatars/<wxid>.jpg 头像模板）
+    3. 点击头像进入聊天界面
+    4. 点击表情按钮 → 打开表情面板（独立小窗口）
+    5. 点击表情搜索键 → 输入关键词 → 点击搜索结果中的第一个表情（直接发送）
+
+    与 wechat_send 的区别：
+    - 阶段一/二完全相同（搜索联系人 + 点击头像 + 验证）
+    - 阶段三不同：不输入文字，而是通过表情面板搜索并发送表情包
+    - 表情面板是独立小窗口（类似搜索候选框），不是主窗口的一部分
+    - 点击表情搜索结果会直接发送，无需点击发送按钮
+
+    如果微信进程在运行但主窗口不可见（最小化到托盘），会自动恢复窗口。
+
+    Args:
+        name: 微信联系人标识符（微信号 / wxid / 昵称 / 备注名 均可）
+        emoji_keyword: 表情搜索关键词（如 "猫猫"、"感谢"、"开心"、"晚安"）
+
+    Returns:
+        dict: {
+            "success": bool,
+            "message": str,        # 结果描述
+            "contact": str,        # 联系人显示名
+            "search_term": str,    # 实际用于搜索的关键词（微信号或昵称）
+            "template": str,       # 头像模板路径
+            "attempts": int,       # 尝试次数（成功时）
+            "error": str|None,     # 失败原因
+            "window_restored": bool,  # 是否触发了窗口恢复
+            "matches": list|None,  # 多匹配时的联系人列表
+            "recording_path": str|None,  # 失败时的录屏文件路径（成功时为 None）
+        }
+    """
+    from engine.wechat_sender.wechat_recorder import with_recording
+    from engine.wechat_sender.wechat_e2e_run import send_emoji_with_retry
+
+    def _impl():
+        _wechat_op_lock.acquire()
+        try:
+            return send_emoji_with_retry(name, emoji_keyword)
+        finally:
+            _wechat_op_lock.release()
+
+    return with_recording(name, _impl)

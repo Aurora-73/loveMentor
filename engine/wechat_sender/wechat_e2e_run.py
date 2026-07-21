@@ -546,17 +546,22 @@ def _verify_chat_header_display_name(contact_profile, image=None):
         return False
 
 
-def run_e2e(message, contact_name, template_path, contact_profile=None):
+def run_e2e(message, contact_name, template_path, contact_profile=None,
+            stage3_func=None):
     """端到端流程：阶段一 → 阶段二 → 阶段三
 
     Args:
-        message: 要发送的消息内容
+        message: 要发送的消息内容（表情包模式下为表情搜索关键词）
         contact_name: 联系人昵称（用于搜索栏输入）
         template_path: 联系人头像模板路径
         contact_profile: ContactProfile 实例（可选，v3.0 新增）
             - 包含 display_name/alias/wxid 等精确特征
             - 用于 font_matcher 验证聊天标题、template_matcher 验证 UI 元素
             - None 时回退到原有行为（仅靠 contact_name + template_path）
+        stage3_func: 阶段三执行函数（可选，默认 run_send_message）
+            - 签名：func(message, do_send=True) -> bool
+            - 发送文字消息时用 run_send_message（默认）
+            - 发送表情包时用 run_send_emoji（来自 send_emoji_run.py）
     """
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -719,12 +724,17 @@ def run_e2e(message, contact_name, template_path, contact_profile=None):
         except Exception as e:
             logger.warning(f"   ⚠️ display_name 验证异常: {e}（不阻断流程）")
 
-    # ========== 阶段三：输入+发送消息 ==========
+    # ========== 阶段三：输入+发送消息（或表情包） ==========
     logger.info("\n" + "#" * 60)
-    logger.info("#  阶段三：输入+发送消息")
+    if stage3_func is None:
+        logger.info("#  阶段三：输入+发送消息")
+    else:
+        logger.info("#  阶段三：发送表情包（使用自定义 stage3_func）")
     logger.info("#" * 60)
 
-    stage3_ok = run_send_message(message, do_send=True)
+    # 默认用 run_send_message（发送文字），可传入 stage3_func 切换为表情包发送
+    actual_stage3_func = stage3_func if stage3_func is not None else run_send_message
+    stage3_ok = actual_stage3_func(message, do_send=True)
     if not stage3_ok:
         logger.error("   ❌ 阶段三失败")
         rollback_wechat_state()
@@ -738,7 +748,8 @@ def run_e2e(message, contact_name, template_path, contact_profile=None):
 
 # ── 业务编排：发送消息（从 mcp_server/tools_wechat.py 迁移）──────────────
 
-def send_message_with_retry(name: str, message: str) -> dict:
+def send_message_with_retry(name: str, message: str,
+                             stage3_func=None) -> dict:
     """发送消息完整业务编排（不含录屏，由 MCP 工具层包装）。
 
     流程：
@@ -755,7 +766,10 @@ def send_message_with_retry(name: str, message: str) -> dict:
 
     Args:
         name: 联系人标识符（微信号/wxid/昵称/备注名 均可）
-        message: 要发送的消息内容
+        message: 要发送的消息内容（表情包模式下为表情搜索关键词）
+        stage3_func: 阶段三执行函数（可选，默认 run_send_message）
+            - 发送文字消息时用 None（默认 run_send_message）
+            - 发送表情包时用 run_send_emoji（来自 send_emoji_run.py）
 
     Returns:
         dict: {
@@ -921,8 +935,12 @@ def send_message_with_retry(name: str, message: str) -> dict:
     contact_profile = ContactProfile.from_resolution(resolution, avatar_path=template_path)
 
     # 执行端到端发送（用微信号 search_term 搜索，用 template_path 匹配头像）
+    # stage3_func=None 时用默认的 run_send_message（发送文字），
+    # 传入 run_send_emoji 时切换为表情包发送流程
     try:
-        success = run_e2e(message, search_term, template_path, contact_profile=contact_profile)
+        success = run_e2e(message, search_term, template_path,
+                          contact_profile=contact_profile,
+                          stage3_func=stage3_func)
     except ImportError as e:
         return {
             "success": False,
@@ -977,6 +995,30 @@ def send_message_with_retry(name: str, message: str) -> dict:
             "window_restored": window_restored,
             "matches": None,
         }
+
+
+def send_emoji_with_retry(name: str, emoji_keyword: str) -> dict:
+    """发送表情包完整业务编排（不含录屏，由 MCP 工具层包装）。
+
+    复用 send_message_with_retry 的全部业务逻辑（联系人解析、头像获取、
+    窗口检查等），仅通过 stage3_func 参数切换阶段三为表情包发送流程。
+
+    与 send_message_with_retry 的区别：
+    - 阶段三用 run_send_emoji 替代 run_send_message
+    - 流程：点击表情按钮 → 打开表情面板（独立窗口）→ 点击搜索键 →
+      输入关键词 → 匹配"全部表情"标题 → 点击下方第一个表情（直接发送）
+
+    Args:
+        name: 联系人标识符（微信号/wxid/昵称/备注名 均可）
+        emoji_keyword: 表情搜索关键词（如 "猫猫"、"感谢"、"开心"）
+
+    Returns:
+        dict: 与 send_message_with_retry 相同的结构
+    """
+    # 延迟导入，避免模块加载时循环依赖
+    from send_emoji_run import run_send_emoji
+    return send_message_with_retry(name, emoji_keyword,
+                                    stage3_func=run_send_emoji)
 
 
 def main():
