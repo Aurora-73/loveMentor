@@ -1,19 +1,25 @@
 """图片消息转文字模块。
 
 从 WCD API 下载图片（用 raw_content 中的 md5 + talker 作为参数），
-用 BLIP 多模态模型生成简短英文描述，并翻译为简体中文。
+**BLIP 多模态模型 + PaddleOCR 智能组合**生成图片描述。
 
 依赖：
 - transformers（HuggingFace Transformers）
 - torch（PyTorch）
 - Pillow（PIL，图片处理）
+- paddleocr（中文 OCR，3.6.0+）
 
 数据流：
     messages.raw_content (XML 含 md5)
     → WCD API /api/chat/media/image?md5=xxx&username=talker
     → 图片二进制
-    → BLIP 生成英文描述
-    → 翻译为简体中文（可选，用翻译 pipeline）
+    → 并行/串行调用 BLIP（实物描述）+ OCR（文字提取）
+    → 智能组合结果：
+        - BLIP 有描述 + OCR 无文字 → 照片：用 BLIP 描述
+        - BLIP 描述泛化（"a photo of a computer screen"等）+ OCR 有文字 → 截图：用 OCR 文字
+        - BLIP 有描述 + OCR 有文字 → meme/混合：组合描述
+        - BLIP 无描述 + OCR 有文字 → 截图：用 OCR 文字
+        - BLIP 无描述 + OCR 无文字 → 失败
     → 加 [图片描述] 前缀写入 messages.image_text
 
 关联键：messages.id (server_id) + messages.conversation_id (talker)
@@ -24,6 +30,16 @@
     BLIP-base 提供 .bin 格式权重（use_safetensors=False），
     可绕过该问题，且模型体积小（223M 参数，约 1GB）。
     BLIP 输出英文，通过 opus-mt-en-zh 翻译为中文。
+
+为什么加 OCR：
+    BLIP 对截图/表情包/meme 类图片描述不准（如"黑色背景的计算机屏幕"），
+    但这类图片通常包含关键文字信息。PaddleOCR 提取文字作为补充，
+    智能组合后能覆盖所有图片类型。
+
+PaddleOCR 3.6.0 + Python 3.13 注意事项：
+    - 必须传 enable_mkldnn=False，否则 OneDNN 触发 NotImplementedError
+    - 使用 predict() 方法（旧 ocr() 已弃用）
+    - use_textline_orientation 替代 use_angle_cls
 """
 import io
 import logging
@@ -52,11 +68,102 @@ IMAGE_DOWNLOAD_TIMEOUT = 30
 # 单条图片最大字节数（10MB，超过则跳过避免内存爆掉）
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
+# ── OCR 配置 ──
+# OCR 置信度阈值：低于此值的文字行被视为噪声丢弃
+OCR_CONFIDENCE_THRESHOLD = 0.7
+# OCR 提取的最大文字行数（避免过长描述）
+OCR_MAX_LINES = 10
+# OCR 单行最大字符数（避免长文本）
+OCR_MAX_CHARS_PER_LINE = 80
+# OCR 总文字最大字符数
+OCR_MAX_TOTAL_CHARS = 300
+
+# ── BLIP 描述泛化关键词 ──
+# 当 BLIP 输出包含这些词时，说明它没真正理解图片内容（通常是截图/文字类）
+# 此时若 OCR 有文字，应优先用 OCR 结果
+# 包含英文（BLIP 原始输出）和中文（翻译后输出）两种关键词
+GENERIC_BLIP_PATTERNS = [
+    # 英文（BLIP 原始输出）
+    "computer screen",
+    "monitor",
+    "black background",
+    "white background",
+    "black screen",
+    "white screen",
+    "close up of a screen",
+    "a screen with",
+    "a photo of a screen",
+    "a photo of a tv",
+    "a television",
+    "text on a",
+    "a piece of paper",
+    "a book",
+    "a page of",
+    # 中文（翻译后输出）
+    "计算机屏幕",
+    "电脑屏幕",
+    "黑白文字",
+    "白背景",
+    "黑背景",
+    "白色背景",
+    "黑色背景",
+    "白纸",
+    "黑纸",
+    "屏幕",
+    "电视",
+    "显示器",
+    "一张纸",
+    "一页纸",
+]
+
+
+def _is_generic_blip_description(text: str) -> bool:
+    """判断 BLIP 描述是否泛化（未真正理解图片内容）。
+
+    Args:
+        text: BLIP 输出的描述（英文或已翻译的中文）
+
+    Returns:
+        True 如果描述泛化，应优先用 OCR
+    """
+    text_lower = text.lower()
+    for pattern in GENERIC_BLIP_PATTERNS:
+        if pattern in text_lower:
+            return True
+    return False
+
+
+def _truncate_ocr_text(lines: list[str]) -> str:
+    """截断 OCR 文字到合理长度。
+
+    Args:
+        lines: OCR 识别到的文字行列表
+
+    Returns:
+        截断后的文字（用空格分隔）
+    """
+    truncated_lines = []
+    total_chars = 0
+    for line in lines[:OCR_MAX_LINES]:
+        line = line.strip()
+        if not line:
+            continue
+        if len(line) > OCR_MAX_CHARS_PER_LINE:
+            line = line[:OCR_MAX_CHARS_PER_LINE] + "..."
+        if total_chars + len(line) > OCR_MAX_TOTAL_CHARS:
+            remaining = OCR_MAX_TOTAL_CHARS - total_chars
+            if remaining > 10:
+                truncated_lines.append(line[:remaining] + "...")
+            break
+        truncated_lines.append(line)
+        total_chars += len(line) + 1  # +1 for separator
+    return " ".join(truncated_lines)
+
 
 class ImageTranscriber:
     """图片转文字器。
 
-    首次调用 transcribe() 时加载 BLIP 模型 + 翻译模型（约 30s-3min，取决于网络）。
+    首次调用 transcribe() 时加载 BLIP + OCR 模型（约 30s-3min，取决于网络）。
     后续调用复用模型实例。
 
     Example:
@@ -78,6 +185,8 @@ class ImageTranscriber:
         prompt: str = DEFAULT_PROMPT,
         token: str = "",
         translator_model: str = DEFAULT_TRANSLATOR_MODEL,
+        use_ocr: bool = True,
+        ocr_model: str = "mobile",
     ):
         self.wcd_base_url = wcd_base_url.rstrip("/")
         self.wcd_account = wcd_account
@@ -86,16 +195,54 @@ class ImageTranscriber:
         self.prompt = prompt
         self.token = token
         self.translator_model = translator_model
+        self.use_ocr = use_ocr
+        # OCR 模型选择：mobile（PP-OCRv5_mobile，快 2.5 倍）或 server（PP-OCRv5_server，精度略高）
+        self.ocr_model = ocr_model
         self._model = None            # 延迟加载 BLIP 模型
         self._processor = None        # 延迟加载 BLIP processor
         self._translator = None       # 延迟加载翻译 pipeline
+        self._ocr = None              # 延迟加载 PaddleOCR
 
     # ── 模型加载（延迟）──
 
     def _load_model(self):
-        """延迟加载 BLIP 模型 + 翻译 pipeline。"""
+        """延迟加载 PaddleOCR + BLIP 模型 + 翻译 pipeline。
+
+        加载顺序：PaddleOCR → BLIP → 翻译 pipeline
+        原因：PaddleOCR 的 paddle native 库与 torch 的 native 库在 Python 3.13 上
+        同时加载时会触发 0xC0000005 访问冲突。先加载 PaddleOCR，让 paddle 完成所有
+        native 库初始化，再加载 torch/transformers，可避免冲突。
+        """
         if self._model is not None:
             return
+
+        # 1. 先加载 PaddleOCR（paddle native 库先初始化）
+        if self.use_ocr:
+            ocr_model_name = "server" if self.ocr_model == "server" else "mobile"
+            logger.info(f"加载 PaddleOCR（中文 OCR，模型={ocr_model_name}）")
+            try:
+                from paddleocr import PaddleOCR
+                # PaddleOCR 3.x API：关闭 OneDNN 避免 Python 3.13 兼容性问题
+                # mobile 模型（PP-OCRv5_mobile）比 server 快 2.5 倍，精度相似
+                if self.ocr_model == "server":
+                    ocr_kwargs = {}  # 默认 server 模型
+                else:
+                    ocr_kwargs = {
+                        "text_detection_model_name": "PP-OCRv5_mobile_det",
+                        "text_recognition_model_name": "PP-OCRv5_mobile_rec",
+                    }
+                self._ocr = PaddleOCR(
+                    use_textline_orientation=True,
+                    lang='ch',
+                    enable_mkldnn=False,
+                    **ocr_kwargs,
+                )
+                logger.info(f"PaddleOCR 加载成功（模型={ocr_model_name}）")
+            except Exception as e:
+                logger.warning(f"PaddleOCR 加载失败（OCR 不可用）: {e}")
+                self._ocr = None
+
+        # 2. 后加载 BLIP + 翻译 pipeline（torch native 库后初始化）
         import torch
         from transformers import (
             BlipForConditionalGeneration,
@@ -129,6 +276,7 @@ class ImageTranscriber:
         self._model = None
         self._processor = None
         self._translator = None
+        self._ocr = None
 
     # ── 图片下载 ──
 
@@ -199,9 +347,9 @@ class ImageTranscriber:
             return match.group(1).lower()
         return None
 
-    # ── 多模态识别 ──
+    # ── BLIP 多模态识别 ──
 
-    def _describe_image(self, image_bytes: bytes) -> Optional[str]:
+    def _describe_image_blip(self, image_bytes: bytes) -> Optional[str]:
         """用 BLIP 生成英文描述，再用翻译 pipeline 转为中文。
 
         Args:
@@ -213,8 +361,6 @@ class ImageTranscriber:
         try:
             import torch
             from PIL import Image
-
-            self._load_model()
 
             # 字节流 → PIL Image
             image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
@@ -237,7 +383,6 @@ class ImageTranscriber:
                 )
 
             # BLIP 的 generate 输出包含输入 token，需要完整 decode
-            # BlipProcessor.decode 会自动处理
             en_text = self._processor.tokenizer.decode(
                 output_ids[0], skip_special_tokens=True
             ).strip()
@@ -259,8 +404,122 @@ class ImageTranscriber:
 
             return en_text
         except Exception as e:
-            logger.warning(f"图片描述生成失败: {e}")
+            logger.warning(f"BLIP 图片描述生成失败: {e}")
             return None
+
+    # ── OCR 文字提取 ──
+
+    # OCR 处理的最大图片尺寸（超过则等比缩小，避免 PaddleOCR 大图崩溃）
+    # 1024px 是安全值：2048px 在某些大图上会触发 0xC0000005 崩溃
+    OCR_MAX_IMAGE_DIMENSION = 1024
+
+    def _extract_text_ocr(self, image_bytes: bytes) -> Optional[str]:
+        """用 PaddleOCR 提取图片中的文字。
+
+        Args:
+            image_bytes: 图片二进制数据
+
+        Returns:
+            提取到的文字（已截断），无文字或失败返回 None
+        """
+        if not self._ocr:
+            return None
+
+        try:
+            import numpy as np
+            from PIL import Image
+
+            # 字节流 → PIL Image → numpy array（PaddleOCR 3.x 接受 numpy）
+            image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+
+            # 图片预处理：限制最大尺寸（避免 PaddleOCR 处理大图时崩溃）
+            max_dim = max(image.width, image.height)
+            if max_dim > self.OCR_MAX_IMAGE_DIMENSION:
+                scale = self.OCR_MAX_IMAGE_DIMENSION / max_dim
+                new_size = (int(image.width * scale), int(image.height * scale))
+                image = image.resize(new_size, Image.LANCZOS)
+                logger.debug(
+                    f"OCR 预处理：图片缩小 {image.size} (原 {max_dim}px > {self.OCR_MAX_IMAGE_DIMENSION}px)"
+                )
+
+            img_array = np.array(image)
+
+            # PaddleOCR 3.x：predict 返回 list of OCRResult
+            results = self._ocr.predict(img_array)
+            if not results:
+                return None
+
+            lines = []
+            for res in results:
+                # OCRResult 是 dict-like，有 rec_texts 和 rec_scores
+                if isinstance(res, dict) or hasattr(res, 'get'):
+                    texts = res.get('rec_texts', []) if hasattr(res, 'get') else getattr(res, 'rec_texts', [])
+                    scores = res.get('rec_scores', []) if hasattr(res, 'get') else getattr(res, 'rec_scores', [])
+                else:
+                    # 直接访问属性
+                    texts = getattr(res, 'rec_texts', []) or []
+                    scores = getattr(res, 'rec_scores', []) or []
+
+                for text, score in zip(texts, scores):
+                    if not text or not text.strip():
+                        continue
+                    # 置信度过滤
+                    if score < OCR_CONFIDENCE_THRESHOLD:
+                        continue
+                    lines.append(text.strip())
+
+            if not lines:
+                return None
+
+            logger.debug(f"OCR 提取到 {len(lines)} 行文字: {lines[:3]}...")
+            return _truncate_ocr_text(lines)
+        except Exception as e:
+            logger.warning(f"OCR 文字提取失败: {e}")
+            return None
+
+    # ── 智能组合 ──
+
+    def _combine_results(
+        self,
+        blip_desc: Optional[str],
+        ocr_text: Optional[str],
+    ) -> Optional[str]:
+        """智能组合 BLIP 描述和 OCR 文字。
+
+        策略：
+            1. BLIP 有描述 + OCR 无文字 → 照片：用 BLIP 描述
+            2. BLIP 描述泛化 + OCR 有文字 → 截图：用 OCR 文字
+            3. BLIP 有描述 + OCR 有文字 → meme/混合：组合描述
+            4. BLIP 无描述 + OCR 有文字 → 截图：用 OCR 文字
+            5. BLIP 无描述 + OCR 无文字 → 失败
+
+        Args:
+            blip_desc: BLIP 生成的描述（已翻译为中文），失败返回 None
+            ocr_text: OCR 提取到的文字，无文字返回 None
+
+        Returns:
+            组合后的描述文字，失败返回 None
+        """
+        # 情况 5：都失败
+        if not blip_desc and not ocr_text:
+            return None
+
+        # 情况 1：只有 BLIP 描述（照片）
+        if blip_desc and not ocr_text:
+            return blip_desc
+
+        # 情况 4：只有 OCR 文字（截图，BLIP 失败）
+        if not blip_desc and ocr_text:
+            return f"[截图] {ocr_text}"
+
+        # 情况 2 & 3：BLIP + OCR 都有
+        # 检查 BLIP 描述是否泛化
+        if _is_generic_blip_description(blip_desc):
+            # 情况 2：BLIP 泛化 → 优先用 OCR
+            return f"[截图] {ocr_text}"
+        else:
+            # 情况 3：BLIP 有效描述 + OCR 文字 → meme/混合
+            return f"{blip_desc}（图中文字：{ocr_text}）"
 
     # ── 核心流程 ──
 
@@ -269,8 +528,9 @@ class ImageTranscriber:
 
         完整流程：
             1. 通过 WCD API 下载图片（用 md5 + talker 定位）
-            2. Qwen2-VL 生成简短描述
-            3. 加 [图片描述] 前缀
+            2. BLIP 生成描述 + OCR 提取文字（并行/串行）
+            3. 智能组合结果
+            4. 加 [图片描述] 前缀
 
         Args:
             md5: 图片 MD5（从 raw_content XML 解析）
@@ -284,12 +544,23 @@ class ImageTranscriber:
         if not image_bytes:
             return None
 
-        # 2. 多模态模型生成描述
-        description = self._describe_image(image_bytes)
+        # 2. 加载模型（延迟）
+        self._load_model()
+
+        # 3. BLIP 生成描述
+        blip_desc = self._describe_image_blip(image_bytes)
+
+        # 4. OCR 提取文字（可选）
+        ocr_text = None
+        if self.use_ocr and self._ocr is not None:
+            ocr_text = self._extract_text_ocr(image_bytes)
+
+        # 5. 智能组合
+        description = self._combine_results(blip_desc, ocr_text)
         if not description:
             return None
 
-        # 3. 加来源前缀
+        # 6. 加来源前缀
         return f"{SOURCE_PREFIX}{description}"
 
 
@@ -438,4 +709,6 @@ def create_transcriber_from_config(config) -> Optional[ImageTranscriber]:
         wcd_account=config.my_wxid,
         model_name=config.weflow.image_model,
         token=config.weflow.token,
+        use_ocr=getattr(config.weflow, 'image_ocr', True),
+        ocr_model=getattr(config.weflow, 'image_ocr_model', 'mobile'),
     )

@@ -74,6 +74,10 @@ class WeFlowConfig:
         self.image_transcribe_limit: int = d.get("image_transcribe_limit", 50)
         # 多模态模型（默认 BLIP-base，体积小、.bin 格式兼容 Python 3.13）
         self.image_model: str = d.get("image_model", "Salesforce/blip-image-captioning-base")
+        # 图片 OCR 文字提取（用 PaddleOCR 提取截图/表情包中的文字，与 BLIP 描述智能组合）
+        self.image_ocr: bool = d.get("image_ocr", True)
+        # OCR 模型选择：mobile（PP-OCRv5_mobile，快 2.5 倍，默认）或 server（PP-OCRv5_server，精度略高）
+        self.image_ocr_model: str = d.get("image_ocr_model", "mobile")
 
 
 
