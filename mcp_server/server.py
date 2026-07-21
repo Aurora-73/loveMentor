@@ -83,6 +83,8 @@ mcp.tool(
 mcp.tool(
     name="person_chat",
     description="获取人物聊天记录（按日期分组，已标注'我'/'对方'名字）。"
+               "重要：默认 recent=30 只返回最近 30 条，查特定时间段必须传 from_date/to_date（格式 YYYY-MM-DD 或 YYYY-MM-DD HH:MM）。"
+               "查某天某时段用 from_date='2026-07-21 06:00' to_date='2026-07-21 06:53'；查整天用 from_date='2026-07-21' to_date='2026-07-21'。"
                "看到聊天模式后调 wiki_search 找话术策略。详见 guide('workflow/analysis')",
     annotations={"readOnlyHint": True},
 )(tools_read.person_chat)

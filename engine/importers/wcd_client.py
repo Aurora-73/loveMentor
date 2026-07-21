@@ -7,6 +7,7 @@
 import json
 import logging
 import os
+import re
 import sqlite3
 import struct
 import time
@@ -433,6 +434,14 @@ class WCDClient:
             if emoji_md5:
                 emoji_url = m.get("emojiUrl", "")
                 raw_content = f'<msg><emoji md5="{emoji_md5}" cdnurl="{emoji_url}"/></msg>'
+
+            # 图片消息：WCD 不返回 XML rawContent（只有"[图片]"），从 mediaUrl 提取 md5 构造 XML
+            # 否则转写脚本无法获取 md5，图片无法识别
+            if str(m.get("type", 0)) == "3" and media_url:
+                img_md5_match = re.search(r'md5=([a-f0-9]{32})', media_url, re.IGNORECASE)
+                if img_md5_match:
+                    img_md5 = img_md5_match.group(1).lower()
+                    raw_content = f'<msg><img md5="{img_md5}"/></msg>'
 
             mapped_messages.append({
                 "localId": m.get("localId", 0),
