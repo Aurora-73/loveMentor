@@ -568,6 +568,21 @@ mcp.tool(
 )(tools_wechat.wechat_send_batch)
 
 mcp.tool(
+    name="wechat_verify_send",
+    description="【微信发送验证 v4】通过数据同步管道验证消息是否真正送达（二次验证）。"
+               "在 wechat_send/wechat_send_batch/wechat_send_image 发送后调用，"
+               "通过增量同步对比发送前后我方消息，验证消息是否出现在数据库中。"
+               "参数：name（联系人标识符，与发送时一致），before_ts（发送前的 Unix 时间戳秒），"
+               "max_retries（最大重试次数，默认3），interval（每次重试间隔秒，默认10）。"
+               "流程：sync_person 增量同步 → 查询 messages 表我方新消息 → 轮询直到查到或超时。"
+               "注意：WeChat→WCD 同步有延迟，默认 10s×3 次轮询（最长 30s）。"
+               "验证结果'未验证'≠'发送失败'，可能是同步延迟。"
+               "只对比我方消息（sender_id == my_wxid），不对比对方消息。"
+               "图片/表情包/语音用 extract_display_content 生成可读标签。"
+               "示例：wechat_verify_send('[REDACTED]', 1784721800) → 验证 ts=1784721800 后的消息",
+)(tools_wechat.wechat_verify_send)
+
+mcp.tool(
     name="wechat_ocr",
     description="【微信截图OCR】截图微信窗口并进行 OCR 文字识别，返回带位置信息的文字列表。"
                "适用于：读取聊天界面文字、提取联系人信息、识别界面元素等场景。"

@@ -848,3 +848,68 @@ def wechat_send_batch(name: str, messages: list, urgent: bool = False) -> dict:
     }
 
     return result
+
+
+# ── 工具5: wechat_verify_send ───────────────────────────────────
+
+def wechat_verify_send(name: str, before_ts: int, max_retries: int = 3, interval: int = 10) -> dict:
+    """通过数据同步管道验证消息发送结果（v4 二次验证能力）。
+
+    在 wechat_send / wechat_send_batch / wechat_send_image 发送后调用，
+    通过增量同步管道对比发送前后我方消息，验证消息是否真正送达。
+
+    适用场景：
+    - 截图验证（OCR/输入框检测）通过，但想二次确认消息真正送达
+    - 图片/表情包等无法用 OCR 文字验证的消息类型
+    - 怀疑发送失败时（如网络问题）的排查
+
+    注意：
+    - WeChat→WCD 同步有延迟，采用轮询策略（默认 10s×3 次，最长 30s）
+    - 验证结果"未验证"≠"发送失败"，可能是同步延迟较长
+    - 只对比我方消息（sender_id == my_wxid），不对比对方消息
+
+    消息类型展示：
+    - 文字(type 1)：原样显示
+    - 图片(type 3)：[图片描述] xxx 或 [图片]
+    - 表情贴纸(type 47)：[表情] xxx
+    - 语音(type 34)：[语音转文字] xxx 或 [语音]
+
+    Args:
+        name: 微信联系人标识符（与发送时使用的 name 一致）
+        before_ts: 发送前的 Unix 时间戳（秒）。
+                   应在调用 wechat_send 前记录 int(time.time())，发送后传入。
+        max_retries: 最大重试次数（默认 3）
+        interval: 每次重试间隔秒数（默认 10）
+
+    Returns:
+        dict: {
+            "verified": bool,       # 是否验证成功
+            "new_messages": list,   # 新增的我方消息列表
+            "new_count": int,       # 新增消息数
+            "attempts": int,        # 尝试次数
+            "elapsed": float,       # 总耗时秒数
+            "conversation_id": str, # 联系人 wxid
+            "my_wxid": str,         # 登录用户 wxid
+            "error": str|None,
+        }
+    """
+    from engine.wechat_sender.send_verify import verify_send_via_sync
+
+    if not before_ts or before_ts <= 0:
+        return {
+            "verified": False,
+            "new_messages": [],
+            "new_count": 0,
+            "attempts": 0,
+            "elapsed": 0,
+            "conversation_id": "",
+            "my_wxid": "",
+            "error": "before_ts 无效（应为发送前的 Unix 时间戳秒）",
+        }
+
+    return verify_send_via_sync(
+        name=name,
+        before_ts=before_ts,
+        max_retries=max_retries,
+        interval=interval,
+    )

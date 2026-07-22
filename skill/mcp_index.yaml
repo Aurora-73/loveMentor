@@ -422,9 +422,16 @@ tools:
   wechat_send_batch:
     skill_ref: workflows/auto_reply.md
     next_step:
-      - wechat_ocr
+      - wechat_verify_send
       - effect_tracking
     description: "【v4 连续发送】向同一联系人连续发多条消息。第一条走完整流程，后续跳过搜索直接发送+显示名校验。含三重硬约束"
+
+  wechat_verify_send:
+    skill_ref: workflows/auto_reply.md
+    next_step:
+      - conversation_thread
+      - effect_tracking
+    description: "【v4 发送验证】通过数据同步管道增量同步验证消息送达。轮询 10s×3 次，对比我方新消息。图片/表情包用 extract_display_content 标签"
 
   reply_state_manage:
     skill_ref: workflows/auto_reply.md
