@@ -45,6 +45,7 @@ import io
 import logging
 import re
 import sqlite3
+import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -60,13 +61,23 @@ DEFAULT_PROMPT = "a photo of"
 # 翻译模型（Helsinki-NLP opus-mt，体积小、纯 PyTorch .bin 格式）
 DEFAULT_TRANSLATOR_MODEL = "Helsinki-NLP/opus-mt-en-zh"
 # 标记识别失败的占位符（避免反复重试失败的消息）
-FAILED_MARKER = ""
+# 用 __FAILED__ 而非空字符串，可区分"识别失败"和"未识别"
+# chat.py 的 extract_display_content 会检测此标记并回退为 [图片] 占位
+FAILED_MARKER = "__FAILED__"
 # 来源标记前缀（用户要求：图片和语音转成的文字需要特殊标记来源）
 SOURCE_PREFIX = "[图片描述] "
 # 图片下载超时（秒）
 IMAGE_DOWNLOAD_TIMEOUT = 30
 # 单条图片最大字节数（10MB，超过则跳过避免内存爆掉）
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
+# 下载重试次数（网络错误时指数退避重试）
+IMAGE_DOWNLOAD_RETRIES = 3
+# 图片缓存目录（按 md5 缓存，避免重复下载）
+try:
+    from engine.config import CACHE_DIR
+    IMAGE_CACHE_DIR = CACHE_DIR / "images"
+except ImportError:
+    IMAGE_CACHE_DIR = Path("data/cache/images")
 
 # ── OCR 配置 ──
 # OCR 置信度阈值：低于此值的文字行被视为噪声丢弃
@@ -281,7 +292,11 @@ class ImageTranscriber:
     # ── 图片下载 ──
 
     def _download_image(self, md5: str, talker: str) -> Optional[bytes]:
-        """通过 WCD API 下载图片。
+        """通过 WCD API 下载图片（带 md5 缓存 + 网络重试）。
+
+        优化：
+        - 缓存：按 md5 缓存到 IMAGE_CACHE_DIR，避免同一图片重复下载
+        - 重试：网络错误时指数退避重试（最多 IMAGE_DOWNLOAD_RETRIES 次）
 
         WCD API: GET /api/chat/media/image?md5=xxx&account=xxx&username=talker
         必须传 username（talker），否则 hardlink.db 无法定位文件（微信 4.x 用 md5(talker) 作为目录名）。
@@ -293,6 +308,20 @@ class ImageTranscriber:
         Returns:
             图片二进制数据，失败返回 None
         """
+        # 1. 检查缓存
+        cache_path = IMAGE_CACHE_DIR / f"{md5}.bin"
+        if cache_path.exists():
+            try:
+                data = cache_path.read_bytes()
+                if data and len(data) <= MAX_IMAGE_BYTES:
+                    logger.debug(f"图片缓存命中 md5={md5}")
+                    return data
+                # 缓存文件异常（空或过大），删除后重新下载
+                cache_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+        # 2. 网络下载（带重试）
         params = {
             "md5": md5,
             "account": self.wcd_account,
@@ -304,22 +333,41 @@ class ImageTranscriber:
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
 
-        try:
-            req = urllib.request.Request(url, headers=headers, method="GET")
-            with urllib.request.urlopen(req, timeout=IMAGE_DOWNLOAD_TIMEOUT) as resp:
-                if resp.status != 200:
-                    logger.warning(f"下载图片失败 md5={md5}: HTTP {resp.status}")
+        last_error = None
+        for attempt in range(IMAGE_DOWNLOAD_RETRIES):
+            try:
+                req = urllib.request.Request(url, headers=headers, method="GET")
+                with urllib.request.urlopen(req, timeout=IMAGE_DOWNLOAD_TIMEOUT) as resp:
+                    if resp.status != 200:
+                        last_error = f"HTTP {resp.status}"
+                        if attempt < IMAGE_DOWNLOAD_RETRIES - 1:
+                            time.sleep(2 ** attempt)  # 指数退避：1s, 2s
+                            continue
+                        logger.warning(f"下载图片失败 md5={md5}: {last_error}")
+                        return None
+                    data = resp.read()
+                    if len(data) > MAX_IMAGE_BYTES:
+                        logger.warning(
+                            f"图片过大 md5={md5}: {len(data)} bytes > {MAX_IMAGE_BYTES}, 跳过"
+                        )
+                        return None
+                    # 3. 写入缓存
+                    try:
+                        IMAGE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+                        cache_path.write_bytes(data)
+                    except Exception as e:
+                        logger.debug(f"写入图片缓存失败 md5={md5}: {e}")
+                    return data
+            except Exception as e:
+                last_error = str(e)
+                if attempt < IMAGE_DOWNLOAD_RETRIES - 1:
+                    wait = 2 ** attempt  # 指数退避：1s, 2s
+                    logger.debug(f"下载图片重试 md5={md5} (第{attempt+1}次): {e}, {wait}s 后重试")
+                    time.sleep(wait)
+                else:
+                    logger.warning(f"下载图片失败 md5={md5} (重试{IMAGE_DOWNLOAD_RETRIES}次): {e}")
                     return None
-                data = resp.read()
-                if len(data) > MAX_IMAGE_BYTES:
-                    logger.warning(
-                        f"图片过大 md5={md5}: {len(data)} bytes > {MAX_IMAGE_BYTES}, 跳过"
-                    )
-                    return None
-                return data
-        except Exception as e:
-            logger.warning(f"下载图片异常 md5={md5}: {e}")
-            return None
+        return None
 
     # ── md5 解析 ──
 
@@ -581,9 +629,10 @@ def transcribe_image_messages(
     查询 messages 表中 type=3 且 image_text IS NULL 的消息，
     逐条下载图片并生成描述，更新 image_text 字段。
 
-    识别失败的消息会被标记为空字符串（FAILED_MARKER），避免反复重试。
+    识别失败的消息会被标记为 __FAILED__（避免反复重试）。
+    旧的空字符串标记也会被重新处理（自动迁移到 __FAILED__）。
     如需重试失败的消息，可手动执行：
-        UPDATE messages SET image_text=NULL WHERE type=3 AND image_text=''
+        UPDATE messages SET image_text=NULL WHERE type=3 AND image_text='__FAILED__'
 
     Args:
         db: core.db 连接
@@ -599,8 +648,8 @@ def transcribe_image_messages(
     """
     import time as _time
 
-    # 构建查询条件
-    conditions = ["m.type=3", "m.image_text IS NULL"]
+    # 构建查询条件：未识别 + 旧的空字符串标记（自动迁移到 __FAILED__）
+    conditions = ["m.type=3", "(m.image_text IS NULL OR m.image_text = '')"]
     params: list = []
 
     # 时间过滤

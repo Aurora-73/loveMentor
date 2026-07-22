@@ -35,7 +35,9 @@ DEFAULT_BEAM_SIZE = 5
 # initial_prompt 引导模型输出简体中文（测试验证有效）
 DEFAULT_INITIAL_PROMPT = "请用简体中文输出："
 # 标记识别失败的占位符（避免反复重试失败的消息）
-FAILED_MARKER = ""
+# 用 __FAILED__ 而非空字符串，可区分"识别失败"和"未识别"
+# chat.py 的 extract_display_content 会检测此标记并回退为 [语音] 占位
+FAILED_MARKER = "__FAILED__"
 # 来源标记前缀（用户要求：图片和语音转成的文字需要特殊标记来源）
 SOURCE_PREFIX = "[语音转文字] "
 
@@ -180,6 +182,71 @@ class VoiceTranscriber:
         buf.seek(0)
         return buf
 
+    def decode_to_wav(self, silk_data: bytes) -> Optional[io.BytesIO]:
+        """SILK v3 → WAV file-like object（步骤 2-3：解码 + 封装）。
+
+        从 transcribe() 拆分出来，便于批量并行 SILK 解码。
+        """
+        pcm = self._decode_silk_to_pcm(silk_data)
+        if not pcm:
+            return None
+        return self._pcm_to_wav_file(pcm)
+
+    def transcribe_wav(self, wav_file: io.BytesIO) -> Optional[str]:
+        """Whisper 识别 WAV → 带 [语音转文字] 前缀的文字（步骤 4-5）。
+
+        从 transcribe() 拆分出来，确保 Whisper 模型单实例串行调用。
+        """
+        try:
+            transcribe_kwargs = dict(
+                language=self.language,
+                beam_size=self.beam_size,
+                vad_filter=True,  # 过滤静音段，提升精度
+            )
+            if self.initial_prompt:
+                transcribe_kwargs["initial_prompt"] = self.initial_prompt
+            segments, _info = self.model.transcribe(wav_file, **transcribe_kwargs)
+            text = "".join(seg.text for seg in segments).strip()
+            if not text:
+                return None
+            return f"{SOURCE_PREFIX}{text}"
+        except Exception as e:
+            logger.warning(f"Whisper 识别失败: {e}")
+            return None
+
+    def batch_fetch_voice_data(self, server_ids: list[str]) -> dict[str, bytes]:
+        """批量查询语音数据（减少 DB 往返次数）。
+
+        Args:
+            server_ids: server_id 列表
+
+        Returns:
+            {server_id: voice_data_bytes}，无数据的条目不在 dict 中
+        """
+        if not server_ids:
+            return {}
+        result: dict[str, bytes] = {}
+        try:
+            conn = self._get_media_db()
+            ids_int = [int(sid) for sid in server_ids if sid]
+            if not ids_int:
+                return {}
+            placeholders = ",".join("?" * len(ids_int))
+            cur = conn.execute(
+                f"SELECT svr_id, voice_data FROM VoiceInfo "
+                f"WHERE svr_id IN ({placeholders})",
+                ids_int,
+            )
+            for row in cur.fetchall():
+                svr_id, data = row
+                if data is not None:
+                    if isinstance(data, (memoryview, bytearray)):
+                        data = bytes(data)
+                    result[str(svr_id)] = data
+        except sqlite3.Error as e:
+            logger.warning(f"批量查询语音数据失败: {e}")
+        return result
+
     def transcribe(self, server_id: str | int) -> Optional[str]:
         """识别单条语音消息，返回带 [语音转文字] 前缀的文字。
 
@@ -201,33 +268,13 @@ class VoiceTranscriber:
         if not silk_data:
             return None
 
-        # 2. 解码 SILK → PCM
-        pcm = self._decode_silk_to_pcm(silk_data)
-        if not pcm:
+        # 2-3. 解码 SILK → WAV
+        wav_file = self.decode_to_wav(silk_data)
+        if not wav_file:
             return None
 
-        # 3. PCM → WAV file-like object
-        wav_file = self._pcm_to_wav_file(pcm)
-
-        # 4. Whisper 识别（接受 file-like object，无需落盘）
-        try:
-            transcribe_kwargs = dict(
-                language=self.language,
-                beam_size=self.beam_size,
-                vad_filter=True,  # 过滤静音段，提升精度
-            )
-            if self.initial_prompt:
-                transcribe_kwargs["initial_prompt"] = self.initial_prompt
-            segments, _info = self.model.transcribe(wav_file, **transcribe_kwargs)
-            # segments 是生成器，遍历获取文字
-            text = "".join(seg.text for seg in segments).strip()
-            if not text:
-                return None
-            # 5. 加来源前缀
-            return f"{SOURCE_PREFIX}{text}"
-        except Exception as e:
-            logger.warning(f"Whisper 识别失败 (server_id={server_id}): {e}")
-            return None
+        # 4-5. Whisper 识别 + 加前缀
+        return self.transcribe_wav(wav_file)
 
 
 # ── 批量识别 ──
@@ -247,9 +294,10 @@ def transcribe_voice_messages(
     查询 messages 表中 type=34 且 voice_text IS NULL 的消息，
     逐条识别并更新 voice_text 字段。
 
-    识别失败的消息会被标记为空字符串（FAILED_MARKER），避免反复重试。
+    识别失败的消息会被标记为 __FAILED__（避免反复重试）。
+    旧的空字符串标记也会被重新处理（自动迁移到 __FAILED__）。
     如需重试失败的消息，可手动执行：
-        UPDATE messages SET voice_text=NULL WHERE type=34 AND voice_text=''
+        UPDATE messages SET voice_text=NULL WHERE type=34 AND voice_text='__FAILED__'
 
     Args:
         db: core.db 连接
@@ -265,8 +313,8 @@ def transcribe_voice_messages(
     """
     import time as _time
 
-    # 构建查询条件
-    conditions = ["m.type=34", "m.voice_text IS NULL"]
+    # 构建查询条件：未识别 + 旧的空字符串标记（自动迁移到 __FAILED__）
+    conditions = ["m.type=34", "(m.voice_text IS NULL OR m.voice_text = '')"]
     params: list = []
 
     # 时间过滤
@@ -299,27 +347,69 @@ def transcribe_voice_messages(
     if verbose:
         logger.info(f"开始识别 {len(msg_ids)} 条语音消息（days_back={days_back}, private_only={private_only}）...")
 
+    # ── Batch 优化：预取 + 并行 SILK 解码 + 串行 Whisper 识别 ──
+    # 1. 批量查询语音数据（一次 DB 查询替代 N 次）
+    voice_data_map = transcriber.batch_fetch_voice_data(msg_ids)
+    if verbose:
+        logger.info(f"  预取语音数据: {len(voice_data_map)}/{len(msg_ids)} 条有数据")
+
+    # 2. 并行 SILK 解码（I/O 密集，ThreadPoolExecutor 加速）
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    wav_map: dict[str, io.BytesIO] = {}
+    decode_tasks = {
+        msg_id: voice_data_map[msg_id]
+        for msg_id in msg_ids
+        if msg_id in voice_data_map
+    }
+    if decode_tasks:
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = {
+                executor.submit(transcriber.decode_to_wav, silk_data): msg_id
+                for msg_id, silk_data in decode_tasks.items()
+            }
+            for future in as_completed(futures):
+                msg_id = futures[future]
+                try:
+                    wav = future.result()
+                    if wav is not None:
+                        wav_map[msg_id] = wav
+                except Exception as e:
+                    logger.debug(f"SILK 解码失败 (msg_id={msg_id}): {e}")
+    if verbose:
+        logger.info(f"  SILK 解码完成: {len(wav_map)}/{len(decode_tasks)} 条成功")
+
+    # 3. 串行 Whisper 识别（模型单实例，必须串行）
     success = 0
     failed = 0
     for i, msg_id in enumerate(msg_ids, 1):
-        text = transcriber.transcribe(msg_id)
-        if text:
-            db.execute(
-                "UPDATE messages SET voice_text=? WHERE id=?",
-                (text, msg_id),
-            )
-            success += 1
-            if verbose:
-                logger.info(f"  [{i}/{len(msg_ids)}] {msg_id}: {text[:50]}")
+        wav_file = wav_map.get(msg_id)
+        if wav_file:
+            text = transcriber.transcribe_wav(wav_file)
+            if text:
+                db.execute(
+                    "UPDATE messages SET voice_text=? WHERE id=?",
+                    (text, msg_id),
+                )
+                success += 1
+                if verbose:
+                    logger.info(f"  [{i}/{len(msg_ids)}] {msg_id}: {text[:50]}")
+            else:
+                db.execute(
+                    "UPDATE messages SET voice_text=? WHERE id=?",
+                    (FAILED_MARKER, msg_id),
+                )
+                failed += 1
+                if verbose:
+                    logger.info(f"  [{i}/{len(msg_ids)}] {msg_id}: <Whisper 识别失败>")
         else:
-            # 标记为识别失败（空字符串），避免反复重试
+            # 无 voice_data 或 SILK 解码失败
             db.execute(
                 "UPDATE messages SET voice_text=? WHERE id=?",
                 (FAILED_MARKER, msg_id),
             )
             failed += 1
             if verbose:
-                logger.info(f"  [{i}/{len(msg_ids)}] {msg_id}: <识别失败>")
+                logger.info(f"  [{i}/{len(msg_ids)}] {msg_id}: <无语音数据或解码失败>")
 
         # 每 10 条提交一次，避免长事务
         if i % 10 == 0:

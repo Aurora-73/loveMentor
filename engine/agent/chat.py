@@ -237,13 +237,13 @@ def extract_display_content(
 
     # type 3: 图片消息
     if base == 3:
-        if image_text:
+        if image_text and image_text != "__FAILED__":
             return image_text  # 已带 [图片描述] 前缀
         return "[图片]"
 
     # type 34: 语音消息
     if base == 34:
-        if voice_text:
+        if voice_text and voice_text != "__FAILED__":
             return voice_text  # 已带 [语音转文字] 前缀
         return "[语音]"
 
