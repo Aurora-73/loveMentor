@@ -538,9 +538,16 @@ def _query_chat_messages(
             display_content = extract_display_content(
                 msg_type, content, raw_content, voice_text, image_text
             )
-            # 撤回消息加前缀，让 Agent 知道这条消息已被撤回（原始内容仍可读）
+            # 撤回消息展示：
+            # - 撤回系统消息（type 10000，内容含"撤回了一条消息"）：直接显示撤回提示
+            # - 其他撤回消息：加 [已撤回] 前缀（保留原始内容让 Agent 可读）
             if revoked:
-                display_content = f"[已撤回] {display_content}" if display_content else "[已撤回]"
+                if str(msg_type) == "10000" and "撤回了一条消息" in content:
+                    display_content = f"[撤回提示] {content}"
+                elif display_content:
+                    display_content = f"[已撤回] {display_content}"
+                else:
+                    display_content = "[已撤回]"
             messages.append({
                 "id": row["id"],
                 "conversation_id": row["conversation_id"],
