@@ -419,6 +419,13 @@ tools:
       - effect_tracking
     description: "【v4 图片发送】复用剪贴板机制发送图片。含三重硬约束（线索已读+冷却+互斥锁）。支持 jpg/png/bmp/gif/webp/tiff"
 
+  reply_state_manage:
+    skill_ref: workflows/auto_reply.md
+    next_step:
+      - wechat_send
+      - server_chan_notify
+    description: "【v4 回复状态管理】Agent 行为层状态机（7.7 + 7.8.4 节）。record/update/check_retry/check_suspended/clear_suspended/stats。重试前必调 check_retry，轮询前必调 check_suspended"
+
   live_monitor_status:
     skill_ref: mcp-tools.md
     next_step:

@@ -75,11 +75,12 @@ def _empty_thread() -> dict:
         "last_message_time": None,
         "last_processed_message_id": 0,
         "user_took_over": False,
+        "user_took_over_time": None,  # 7.8.2 节：用户接管时间戳
         "processed_message_ids": [],
         "recent_summary": [],
         "current_threads": [],
         "pending_items": [],
-        "her_emotion": {"trajectory": [], "trend": "unknown", "current_state": "unknown"},
+        "her_emotion": {"trajectory": [], "trend": "unknown", "current_state": "unknown", "last_updated": None},
         "landmine_topics": [],
         "avoid_topics": [],
         "key_context": [],
@@ -127,6 +128,8 @@ def _trim_lists(thread: dict) -> None:
     if len(emotion.get("trajectory", [])) > MAX_EMOTION_TRAJECTORY:
         emotion["trajectory"] = emotion["trajectory"][-MAX_EMOTION_TRAJECTORY:]
     # processed_message_ids 保留最近 7 天（7.8.1 节）
+    # 工程近似：限制 1000 条（按日均 100 条消息估算，约覆盖 7-10 天）
+    # 如需精确按时间清理，可改为按 timestamp 字段过滤 7 天前的记录
     pids = thread.get("processed_message_ids", [])
     if len(pids) > 1000:
         thread["processed_message_ids"] = pids[-1000:]
@@ -180,6 +183,9 @@ def conversation_thread(
         elif action == "add_avoid_topic":
             return _action_add_avoid_topic(person_id, avoid_topic or "")
 
+        elif action == "clear_cancel_flag":
+            return _action_clear_cancel_flag(person_id)
+
         else:
             return {"error": "INVALID_ACTION", "message": f"未知 action: {action}"}
 
@@ -195,21 +201,56 @@ def _action_get(person_id: str) -> dict:
 
 
 def _action_update(person_id: str, updates: dict, expected_version: Optional[int]) -> dict:
-    """更新线索字段（乐观锁，7.8.3 节）。"""
+    """更新线索字段（乐观锁，7.8.3 节）。
+
+    版本冲突处理：
+    1. expected_version 匹配 → 直接更新
+    2. expected_version 不匹配 → 字段级合并，最多重试 3 次
+    3. 3 次仍冲突 → 强制写入 + 记录冲突日志
+    """
+    MAX_CONFLICT_RETRIES = 3  # 7.8.3 节：最多重试 3 次
+
     thread = _load_thread(person_id)
     current_version = thread.get("version", 0)
 
     # 乐观锁校验
     if expected_version is not None and expected_version != current_version:
-        # 版本冲突，执行字段级合并
-        merged = _merge_fields(thread, updates)
-        _trim_lists(merged)
+        # 版本冲突，执行字段级合并（最多重试 3 次）
+        conflict_count = 0
+        merged = thread
+        for attempt in range(1, MAX_CONFLICT_RETRIES + 1):
+            merged = _merge_fields(merged, updates)
+            _trim_lists(merged)
+            # 重新读取检查版本是否变化
+            fresh = _load_thread(person_id)
+            if fresh.get("version", 0) == current_version:
+                # 版本未变，可以安全写入
+                break
+            else:
+                # 版本又变了，再次合并
+                conflict_count += 1
+                merged = _merge_fields(fresh, merged)
+                current_version = fresh.get("version", 0)
+                if attempt == MAX_CONFLICT_RETRIES:
+                    # 3 次仍冲突，强制写入 + 记录冲突日志
+                    _log_thread_conflict(person_id, updates, expected_version, current_version, conflict_count)
+                    _save_thread(person_id, merged)
+                    return {
+                        "success": True,
+                        "message": f"版本冲突 {conflict_count} 次，已强制写入并记录冲突日志",
+                        "version": merged["version"],
+                        "conflict_resolved": True,
+                        "conflict_count": conflict_count,
+                        "forced_write": True,
+                    }
+
         _save_thread(person_id, merged)
         return {
             "success": True,
             "message": "版本冲突，已执行字段级合并",
             "version": merged["version"],
             "conflict_resolved": True,
+            "conflict_count": conflict_count,
         }
 
     # 版本匹配，直接更新
@@ -236,6 +277,11 @@ def _action_update(person_id: str, updates: dict, expected_version: Optional[int
                 thread["initiative_tracker"][sub_key] = sub_val
         elif key == "user_took_over":
             thread["user_took_over"] = value
+            # 7.8.2 节：同步记录接管时间戳
+            if value:
+                thread["user_took_over_time"] = datetime.now().isoformat(timespec="seconds")
+            else:
+                thread["user_took_over_time"] = None
         else:
             thread[key] = value
 
@@ -244,11 +290,36 @@ def _action_update(person_id: str, updates: dict, expected_version: Optional[int
     return {"success": True, "message": "线索已更新", "version": thread["version"]}
 
 
+def _log_thread_conflict(person_id: str, updates: dict, expected_version: int, actual_version: int, conflict_count: int) -> None:
+    """记录版本冲突日志（7.8.3 节，3 次仍冲突时调用）。"""
+    import json
+    log_file = os.path.join(_PROJECT_ROOT, "data", "system", "thread_conflicts.log")
+    os.makedirs(os.path.dirname(log_file), exist_ok=True)
+    log_entry = {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "person_id": person_id,
+        "expected_version": expected_version,
+        "actual_version": actual_version,
+        "conflict_count": conflict_count,
+        "conflict_fields": list(updates.keys()),
+    }
+    with open(log_file, "a", encoding="utf-8") as f:
+        f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+
+
 def _merge_fields(current: dict, updates: dict) -> dict:
-    """字段级合并（7.8.3 节）。"""
+    """字段级合并（7.8.3 节）。
+
+    合并规则：
+    - recent_summary / current_threads / key_context：追加模式（不覆盖）
+    - her_emotion：trajectory 追加去重，current_state/trend 按 last_updated 取最新
+    - initiative_tracker：按 last_updated 取最新（若有）
+    - landmine_topics / avoid_topics：并集（去重）
+    - pending_items：按 item_id（或 description）去重合并
+    """
     merged = dict(current)
     for key, value in updates.items():
-        if key in ("recent_summary", "current_threads", "key_context", "landmine_topics", "avoid_topics", "pending_items"):
+        if key in ("recent_summary", "current_threads", "key_context", "landmine_topics", "avoid_topics"):
             existing = merged.get(key, [])
             if isinstance(value, list):
                 for item in value:
@@ -257,17 +328,73 @@ def _merge_fields(current: dict, updates: dict) -> dict:
             elif value not in existing:
                 existing.append(value)
             merged[key] = existing
+        elif key == "pending_items":
+            # 7.8.3 节：按 item_id（或 description）去重合并
+            existing = merged.get(key, [])
+            if isinstance(value, list):
+                for item in value:
+                    _dedup_append(existing, item, key_fields=("item_id", "description"))
+            elif value not in existing:
+                _dedup_append(existing, value, key_fields=("item_id", "description"))
+            merged[key] = existing
         elif key == "her_emotion":
+            # 7.8.3 节：trajectory 追加去重，current_state/trend 按 last_updated 取最新
             for sub_key, sub_val in value.items():
                 if sub_key == "trajectory" and isinstance(sub_val, list):
                     for item in sub_val:
                         if item not in merged["her_emotion"]["trajectory"]:
                             merged["her_emotion"]["trajectory"].append(item)
+                elif sub_key == "last_updated":
+                    # 比较 last_updated，取最新
+                    current_updated = merged["her_emotion"].get("last_updated")
+                    if current_updated is None or (sub_val and sub_val > current_updated):
+                        merged["her_emotion"]["last_updated"] = sub_val
+                        # last_updated 更新时，同步取 updates 中的 current_state/trend
+                        if "current_state" in value:
+                            merged["her_emotion"]["current_state"] = value["current_state"]
+                        if "trend" in value:
+                            merged["her_emotion"]["trend"] = value["trend"]
                 else:
-                    merged["her_emotion"][sub_key] = sub_val
+                    # current_state/trend：只有当 last_updated 更新时才覆盖（上面已处理）
+                    # 如果 updates 中没有 last_updated，直接覆盖（兼容旧调用）
+                    if "last_updated" not in value:
+                        merged["her_emotion"][sub_key] = sub_val
+        elif key == "initiative_tracker":
+            # 7.8.3 节：按 last_updated 取最新（若有）
+            current_updated = merged.get("initiative_tracker", {}).get("last_updated")
+            new_updated = value.get("last_updated") if isinstance(value, dict) else None
+            if current_updated is None or (new_updated and new_updated > current_updated):
+                merged["initiative_tracker"] = value
+            # 如果没有 last_updated，按字段级合并
+            elif isinstance(value, dict):
+                for sub_key, sub_val in value.items():
+                    merged["initiative_tracker"][sub_key] = sub_val
         else:
             merged[key] = value
     return merged
+
+
+def _dedup_append(lst: list, item, key_fields: tuple) -> None:
+    """按 key_fields 去重追加。item 是 dict 时按 key_fields 去重，否则按值去重。"""
+    if isinstance(item, dict):
+        # 提取去重键值
+        for kf in key_fields:
+            if kf in item:
+                # 检查是否已存在相同键值的项
+                for existing in lst:
+                    if isinstance(existing, dict) and existing.get(kf) == item.get(kf):
+                        # 已存在，用新项覆盖旧项（取最新）
+                        lst[lst.index(existing)] = item
+                        return
+                # 不存在，追加
+                lst.append(item)
+                return
+        # 没有匹配的 key_fields，按整个 dict 去重
+        if item not in lst:
+            lst.append(item)
+    else:
+        if item not in lst:
+            lst.append(item)
 
 
 def _action_append_summary(person_id: str, summary: dict) -> dict:
@@ -372,3 +499,15 @@ def _action_add_avoid_topic(person_id: str, avoid_topic: str) -> dict:
         return {"success": True, "message": f"已添加短期禁忌: {avoid_topic}", "total_avoid": len(thread["avoid_topics"])}
     else:
         return {"success": True, "message": f"短期禁忌已存在: {avoid_topic}", "total_avoid": len(thread["avoid_topics"])}
+
+
+def _action_clear_cancel_flag(person_id: str) -> dict:
+    """清除用户接管标记（7.8.2 节，用户通过 talk.md 恢复时调用）。"""
+    thread = _load_thread(person_id)
+    if thread.get("user_took_over", False):
+        thread["user_took_over"] = False
+        thread["user_took_over_time"] = None
+        _save_thread(person_id, thread)
+        return {"success": True, "message": "已清除用户接管标记，自动回复已恢复"}
+    else:
+        return {"success": True, "message": "用户未接管，无需清除"}

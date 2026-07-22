@@ -23,6 +23,7 @@ from fastmcp import FastMCP
 from mcp_server import tools_read, tools_write, tools_formula, tools_guide, tools_config, tools_workflow, tools_live, tools_wechat, tools_avatar
 from mcp_server import tools_thread, tools_schedule, tools_profile, tools_date, tools_replies
 from mcp_server import tools_notify, tools_priority, tools_override
+from mcp_server import tools_reply_state
 
 mcp = FastMCP("LoveMentor")
 
@@ -749,6 +750,25 @@ mcp.tool(
                "明确不做：❌ 不自动应用学习规则 ❌ 不决策'下次该怎么回' ❌ 不评估编辑好坏 ❌ 不做人设推断。",
     annotations={"readOnlyHint": False},
 )(tools_override.override_learning)
+
+# ── 注册 v4 Agent 行为层状态机工具（7.7 + 7.8.4 节）──────────────
+
+mcp.tool(
+    name="reply_state_manage",
+    description="【v4 回复状态管理·Agent 行为层状态机】维护每条回复的状态机 + 连续失败保护。"
+               "实现 v4 7.7 节（失败退避策略）+ 7.8.4 节（发送失败重试上限）。"
+               "action：record（进入回复流程时记录）/ update（发送结果后更新，自动判断是否 abandoned）/ "
+               "check_retry（重试前检查是否可重试，按失败类型上限 + 退避时间）/ "
+               "check_suspended（轮询前检查联系人是否被暂停，24h 内连续失败 ≥ 3 次）/ "
+               "clear_suspended（用户通过 talk.md 恢复时清除暂停）/ stats（统计失败率/放弃率/暂停次数）。"
+               "重试上限表（7.8.4 节）：send_error 2次（退避30min）/ committee_reject 3次 / "
+               "hard_constraint 1次 / timeout 1次 / intent_verify 0次（不重试）。"
+               "状态值：pending/sending/sent/failed/abandoned。"
+               "文件：data/system/reply_states.yaml。"
+               "明确不做：❌ 不决策'该不该重试'（只提供状态数据）❌ 不执行重试（由 Agent 调 wechat_send）"
+               "❌ 不生成退避策略建议（由 Agent 基于 7.7 节表决策）❌ 不做归因分析。",
+    annotations={"readOnlyHint": False},
+)(tools_reply_state.reply_state_manage)
 
 if __name__ == "__main__":
     try:

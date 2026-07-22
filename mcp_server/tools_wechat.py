@@ -114,6 +114,37 @@ _STAGE_LABEL_TO_NUM = {
 }
 
 
+def _check_user_took_over(name: str) -> dict:
+    """硬约束 0：用户介入取消校验（v4 7.8.2 节）。
+
+    检查 conversation_thread.user_took_over 是否为 True。
+    若用户已手动接管，拒绝发送。
+
+    Returns:
+        dict: {"passed": bool, "reason": str}
+    """
+    try:
+        from mcp_server.tools_thread import conversation_thread
+
+        thread_result = conversation_thread(action="get", name=name)
+        if "error" in thread_result:
+            # 线索文件不存在，视为通过（首次发送无线索）
+            return {"passed": True, "reason": "线索文件不存在，跳过校验"}
+
+        thread = thread_result.get("thread", {})
+        if thread.get("user_took_over", False):
+            took_over_time = thread.get("user_took_over_time", "未知时间")
+            return {
+                "passed": False,
+                "reason": f"用户已手动接管（{took_over_time}），自动回复已暂停",
+                "suggestion": f"用户可通过 talk.md 写入 '恢复 {name} 的自动回复' 清除接管状态",
+            }
+        return {"passed": True, "reason": "用户未接管"}
+    except Exception as e:
+        logger.warning(f"用户接管校验异常 {name}: {e}，跳过校验")
+        return {"passed": True, "reason": f"校验异常，跳过: {e}"}
+
+
 def _check_thread_read(name: str) -> dict:
     """硬约束 1：校验对话线索已读（v4 6.4 节）。
 
@@ -281,6 +312,23 @@ def wechat_send(name: str, message: str, urgent: bool = False) -> dict:
     from engine.wechat_sender.wechat_recorder import with_recording
     from engine.wechat_sender.wechat_e2e_run import send_message_with_retry
 
+    # v4 硬约束 0：用户介入取消校验（7.8.2 节，最高优先级）
+    took_over_check = _check_user_took_over(name)
+    if not took_over_check["passed"]:
+        return {
+            "success": False,
+            "error": "USER_TOOK_OVER",
+            "message": took_over_check["reason"],
+            "suggestion": took_over_check.get("suggestion", ""),
+            "hard_constraints": {
+                "user_took_over": "failed",
+                "thread_read": "skipped",
+                "cooldown": "skipped",
+                "mutex": "skipped",
+                "urgent": urgent,
+            },
+        }
+
     # v4 硬约束 1：校验线索已读（urgent 也不能绕过，因为这是安全要求）
     thread_check = _check_thread_read(name)
     if not thread_check["passed"]:
@@ -291,6 +339,7 @@ def wechat_send(name: str, message: str, urgent: bool = False) -> dict:
             "suggestion": thread_check.get("suggestion", ""),
             "unprocessed_count": thread_check.get("unprocessed_count", 0),
             "hard_constraints": {
+                "user_took_over": "passed",
                 "thread_read": "failed",
                 "cooldown": "skipped",
                 "mutex": "skipped",
@@ -312,6 +361,7 @@ def wechat_send(name: str, message: str, urgent: bool = False) -> dict:
             "stage": stage,
             "suggestion": "等待冷却结束后重试，或使用 urgent=True 绕过（仅紧急情况）",
             "hard_constraints": {
+                "user_took_over": "passed",
                 "thread_read": "passed",
                 "cooldown": "failed",
                 "mutex": "skipped",
@@ -336,6 +386,7 @@ def wechat_send(name: str, message: str, urgent: bool = False) -> dict:
 
     # 附加硬约束校验结果到返回值
     result["hard_constraints"] = {
+        "user_took_over": "passed",
         "thread_read": "passed",
         "cooldown": "bypassed" if urgent else "passed",
         "mutex": "passed" if result.get("success") else "passed",  # 互斥锁本身总是 passed（获取成功）
@@ -550,6 +601,24 @@ def wechat_send_image(name: str, image_path: str, urgent: bool = False) -> dict:
             "matches": None,
             "recording_path": None,
             "hard_constraints": {
+                "user_took_over": "skipped",
+                "thread_read": "skipped",
+                "cooldown": "skipped",
+                "mutex": "skipped",
+                "urgent": urgent,
+            },
+        }
+
+    # v4 硬约束 0：用户介入取消校验（7.8.2 节，最高优先级）
+    took_over_check = _check_user_took_over(name)
+    if not took_over_check["passed"]:
+        return {
+            "success": False,
+            "error": "USER_TOOK_OVER",
+            "message": took_over_check["reason"],
+            "suggestion": took_over_check.get("suggestion", ""),
+            "hard_constraints": {
+                "user_took_over": "failed",
                 "thread_read": "skipped",
                 "cooldown": "skipped",
                 "mutex": "skipped",
@@ -567,6 +636,7 @@ def wechat_send_image(name: str, image_path: str, urgent: bool = False) -> dict:
             "suggestion": thread_check.get("suggestion", ""),
             "unprocessed_count": thread_check.get("unprocessed_count", 0),
             "hard_constraints": {
+                "user_took_over": "passed",
                 "thread_read": "failed",
                 "cooldown": "skipped",
                 "mutex": "skipped",
@@ -588,6 +658,7 @@ def wechat_send_image(name: str, image_path: str, urgent: bool = False) -> dict:
             "stage": stage,
             "suggestion": "等待冷却结束后重试，或使用 urgent=True 绕过（仅紧急情况）",
             "hard_constraints": {
+                "user_took_over": "passed",
                 "thread_read": "passed",
                 "cooldown": "failed",
                 "mutex": "skipped",
@@ -611,6 +682,7 @@ def wechat_send_image(name: str, image_path: str, urgent: bool = False) -> dict:
         _update_send_time(name)
 
     result["hard_constraints"] = {
+        "user_took_over": "passed",
         "thread_read": "passed",
         "cooldown": "bypassed" if urgent else "passed",
         "mutex": "passed",
