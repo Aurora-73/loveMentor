@@ -58,6 +58,9 @@ description: |
 | `workflows/` | `emergency_reply.md` | 紧急回复 4 步流程 |
 | `workflows/` | `weekly.md` | 周报 2 步流程 |
 | `workflows/` | `maintain.md` | 维持关系 4 步流程 |
+| `workflows/` | `auto_reply.md` | 【v4】自动回复 8 步流程（监听→线索→Wiki→查重→委员会→发送→更新） |
+| `workflows/` | `auto_reply_invite.md` | 【v4】自动邀约 7 步流程（窗口→日程→方案→确认→简报→记录） |
+| `workflows/` | `auto_reply_notify.md` | 【v4】紧急通知 5 步流程（检测→线索→Wiki→紧急发送→通知用户） |
 | `signals/` | `basic_signals.md` | IOI、冷落、窗口、需求感等基础信号 |
 | `signals/` | `manipulation_signals.md` | 废物测试、框架操控、情绪操控等 |
 | `metrics/` | `metrics_system.md` | 15+1 维指标体系详解（15个有效指标 + 1旧版兼容） |
@@ -92,8 +95,57 @@ description: |
 | "不知道下一步做什么" | `skill_map('当前工具名')` 或 `workflow_step('analysis', 当前步骤)` |
 | "她聊天态度怎么样" | `person_behaviors(name)` — 语义行为分析（10维标签+派生指标） |
 | "正在聊天/帮我盯着XX" | `live_monitor_start` → `live_chat_read` → `wiki_context` → `live_monitor_stop` |
+| "自动回复XX" | `live_monitor_start` → `live_chat_read` → `conversation_thread` → `wiki_context` → `recent_replies_check` → `wechat_send` → `effect_tracking` |
+| "邀约XX" | `person_brief` → `schedule_manage` → `wiki_context` → 用户确认 → `date_briefing` → `schedule_manage(add)` |
+| "约会回来了" | `date_feedback_loop` → AskUserQuestion → `events_save` + `person_note` + `conversation_thread` |
 
 详细决策树见 `mcp-analysis.md`。
+
+---
+
+## v4 自动回复架构
+
+> 完整架构文档：`plan/auto_reply_architecture_v4.md`（2871 行 / 63 条决策 / 24 章）
+
+### 三大工作流
+
+| 工作流 | 触发场景 | 核心工具链 |
+|--------|---------|-----------|
+| `auto_reply` | 对方发消息，需自动回复 | `live_monitor_start` → `conversation_thread` → `wiki_context` → `recent_replies_check` → `wechat_send` |
+| `auto_reply_invite` | 检测到邀约窗口 | `person_brief` → `schedule_manage` → `wiki_context` → `date_briefing` |
+| `auto_reply_notify` | 紧急事件（情绪突变/断联风险） | `live_chat_read` → `conversation_thread` → `wechat_send(urgent=True)` → `server_chan_notify` |
+
+### 三重硬约束（wechat_send 自动校验）
+
+1. **线索已读校验**：`last_processed_message_id >= 最新消息 ID`（未追上拒绝发送）
+2. **回复冷却校验**：按阶段最小冷却（Stage 1-2: 30min / Stage 3: 5min / Stage 4+: 3min），`urgent=True` 可绕过
+3. **互斥锁校验**：视觉自动化串行
+
+### 委员会 5 官审查
+
+1. **Wiki 方法论官**：回复是否符合 Wiki 知识
+2. **聊天上下文官**：回复是否与对话线索一致
+3. **事实档案官**：回复是否与事实档案冲突
+4. **关系阶段官**：回复是否适合当前关系阶段
+5. **用户一致性官**：回复是否违反用户人设/编造经历/身份冲突
+
+### v4 新增工具（11 个）
+
+| 工具 | 功能 | 文件 |
+|------|------|------|
+| `conversation_thread` | 对话线索管理（P0） | `tools_thread.py` |
+| `schedule_manage` | 用户日程 CRUD（P0） | `tools_schedule.py` |
+| `user_profile_manage` | 用户画像三类管理（P0） | `tools_profile.py` |
+| `date_briefing` | 约会前 5 段式简报（P0） | `tools_date.py` |
+| `recent_replies_check` | 跨联系人查重（P0） | `tools_replies.py` |
+| `server_chan_notify` | Server酱紧急推送（P0） | `tools_notify.py` |
+| `date_feedback_loop` | 约会后反馈循环（P1） | `tools_date.py` |
+| `effect_tracking` | 效果追踪统计（P1） | `tools_replies.py` |
+| `override_learning` | 手动覆盖学习（P1） | `tools_override.py` |
+| `contact_priority_manage` | 联系人优先级管理（P1） | `tools_priority.py` |
+| `wechat_send` | 三重硬约束增强（P0） | `tools_wechat.py` |
+
+> `user_style_profile` 非 MCP 工具，是前置批处理脚本（`scripts/user_style_profile.py`）
 
 ---
 
