@@ -125,9 +125,10 @@ CHAR_GAP_MIN, CHAR_GAP_MAX = 0.05, 0.15   # 每个字符的输入间隔（秒）
 # 中文 IME 输入参数（用 WM_IME_CHAR 绕过剪贴板）
 IME_CHAR_GAP_MIN, IME_CHAR_GAP_MAX = 0.08, 0.25  # 中文字符间隔（更长，模拟 IME 候选词选择）
 
-# 是否启用 WM_IME_CHAR 输入中文（默认 False，需测试有效后再开启）
-# 测试方法：运行 scripts/test_ime_char.py 验证微信编辑框是否响应 WM_IME_CHAR
-USE_IME_CHAR_FOR_CHINESE = False
+# 是否启用 WM_IME_CHAR 输入中文（逐字输入，模拟 IME 候选词选择）
+# True: 中文用 WM_IME_CHAR 逐字输入（随机间隔），ASCII 用 SendInput Unicode
+# False: 中文用剪贴板粘贴（Ctrl+A + Ctrl+V）
+USE_IME_CHAR_FOR_CHINESE = True
 
 
 def _human_sleep(min_s, max_s):
