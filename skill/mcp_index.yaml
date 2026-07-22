@@ -332,6 +332,44 @@ tools:
     next_step: []
     description: "停止监听"
 
+  # ── v4 自动回复架构新工具 ──────────────────────────────────────
+
+  conversation_thread:
+    skill_ref: workflows/auto_reply.md
+    workflow_ref: workflow/auto_reply#第二步
+    next_step:
+      - wiki_context
+      - wechat_send
+    description: "【v4 对话线索】自动回复前必读。读取后调 wiki_context 构建回复策略，再调 wechat_send 发送（含三重硬约束校验）"
+
+  schedule_manage:
+    skill_ref: workflows/auto_reply.md
+    workflow_ref: workflow/auto_reply_invite#第一步
+    next_step:
+      - wiki_context
+      - date_briefing
+    description: "【v4 日程管理】邀约前查询可用时段。之后调 wiki_context 获取邀约三步法，确认后调 date_briefing 生成简报"
+
+  user_profile_manage:
+    skill_ref: workflows/auto_reply.md
+    next_step:
+      - wechat_send
+    description: "【v4 用户画像】管理事实/风格/坏习惯三类画像。读取后用于委员会审查时核对用户一致性"
+
+  date_briefing:
+    skill_ref: workflows/auto_reply.md
+    workflow_ref: workflow/auto_reply_invite#第三步
+    next_step:
+      - wiki_context
+    description: "【v4 约会前简报】生成 5 段式简报模板。之后调 wiki_context 获取方法论，填充分析性段落"
+
+  recent_replies_check:
+    skill_ref: workflows/auto_reply.md
+    workflow_ref: workflow/auto_reply#第四步
+    next_step:
+      - wechat_send
+    description: "【v4 跨联系人查重】发送前检查是否对其他人发过相同话术。通过后调 wechat_send 发送"
+
   live_monitor_status:
     skill_ref: mcp-tools.md
     next_step:
@@ -473,6 +511,117 @@ workflows:
         name: 获取指标
         tool: person_metrics
         description: "了解当前状态"
+
+  # ── v4 自动回复架构新 workflow ─────────────────────────────────
+
+  auto_reply:
+    name: 自动回复完整流程
+    steps:
+      - number: 0
+        name: 启动实时监听
+        tool: live_monitor_start
+        description: "开始监听联系人消息（10 秒轮询）"
+
+      - number: 1
+        name: 增量读取新消息
+        tool: live_chat_read
+        description: "读取实时缓存的消息，判断对方是否说完（连续 N 秒无新消息）"
+
+      - number: 2
+        name: 读取/更新对话线索
+        tool: conversation_thread
+        description: "【必读】获取对话线索（current_threads/her_emotion/key_context/landmine_topics）。线索过期时先 catch_up"
+
+      - number: 3
+        name: 构建 Wiki 知识框架
+        tool: wiki_context
+        description: "传入 stage + focus='reply' 获取回复方法论（推拉/冷读/共情等）"
+
+      - number: 4
+        name: 跨联系人查重
+        tool: recent_replies_check
+        description: "Agent 生成回复草案后，检查是否对其他人发过相同话术"
+
+      - number: 5
+        name: 委员会审查
+        tool: null
+        description: "Agent 自行执行 5 官审查（ Wiki 方法论/聊天上下文/事实档案/关系阶段/用户一致性）"
+
+      - number: 6
+        name: 发送回复
+        tool: wechat_send
+        description: "【三重硬约束】线索已读校验 + 回复冷却校验 + 互斥锁。urgent=True 可绕过冷却"
+
+      - number: 7
+        name: 更新对话线索
+        tool: conversation_thread
+        description: "发送后调 conversation_thread(action='update') 更新 last_processed_message_id 和 recent_summary"
+
+  auto_reply_invite:
+    name: 自动邀约流程
+    steps:
+      - number: 0
+        name: 检测邀约窗口
+        tool: person_brief
+        description: "从 brief 获取 relationship_stage + signals，结合 Wiki 判断是否进入邀约窗口"
+
+      - number: 1
+        name: 查询用户日程
+        tool: schedule_manage
+        description: "调 schedule_manage(action='list_slots') 查询可用时段"
+
+      - number: 2
+        name: 生成邀约方案
+        tool: wiki_context
+        description: "调 wiki_context(task_type='meet', focus='strategy') 获取邀约三步法，Agent 自主生成方案"
+
+      - number: 3
+        name: 用户确认
+        tool: null
+        description: "通过 AskUserQuestion 与用户确认时间/地点/活动（确定邀约必须用户确认）"
+
+      - number: 4
+        name: 生成约会前简报
+        tool: date_briefing
+        description: "用户确认后调 date_briefing 生成 5 段式简报模板"
+
+      - number: 5
+        name: 填充简报内容
+        tool: wiki_context
+        description: "调 wiki_context(task_type='meet', focus='date') 获取方法论，填充简报中 [Agent 基于 Wiki 填充] 段落"
+
+      - number: 6
+        name: 记录日程
+        tool: schedule_manage
+        description: "调 schedule_manage(action='add') 记录确定的约会事件"
+
+  auto_reply_notify:
+    name: 紧急通知流程
+    steps:
+      - number: 0
+        name: 检测紧急事件
+        tool: live_chat_read
+        description: "实时监听检测到紧急关键词（如'睡不着'/'难过'/'想死'）或对方连续追问"
+
+      - number: 1
+        name: 读取对话线索
+        tool: conversation_thread
+        description: "获取当前对话上下文，判断紧急程度"
+
+      - number: 2
+        name: Wiki 紧急策略
+        tool: wiki_context
+        description: "调 wiki_context(focus='risk') 获取紧急应对策略"
+
+      - number: 3
+        name: 紧急发送
+        tool: wechat_send
+        description: "【urgent=True】绕过回复冷却校验（仍校验线索已读）。用于对方连续追问等紧急场景"
+
+      - number: 4
+        name: 通知用户
+        tool: null
+        description: "通过 AskUserQuestion 或 server_chan_notify 通知用户发生了紧急事件"
 
 scenarios:
   "分析XX":

@@ -69,7 +69,10 @@ desktop.ini
 *.swp
 *.swo
 *~
-scripts/
+# scripts/ 目录默认忽略（含敏感临时脚本），但 v4 架构的 user_style_profile.py 需要纳入版本控制
+scripts/*
+!scripts/user_style_profile.py
+!scripts/.gitkeep
 
 selected.json
 .mcp.json

@@ -21,6 +21,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 from fastmcp import FastMCP
 
 from mcp_server import tools_read, tools_write, tools_formula, tools_guide, tools_config, tools_workflow, tools_live, tools_wechat, tools_avatar
+from mcp_server import tools_thread, tools_schedule, tools_profile, tools_date, tools_replies
 
 mcp = FastMCP("LoveMentor")
 
@@ -497,17 +498,24 @@ mcp.tool(
 
 mcp.tool(
     name="wechat_send",
-    description="【微信自动发消息】向微信联系人自动发送消息（通过视觉识别操作微信 PC 客户端）。"
+    description="【微信自动发消息·v4 三重硬约束】向微信联系人自动发送消息（通过视觉识别操作微信 PC 客户端）。"
                "⚠️ 会抢鼠标：执行期间会移动鼠标并占用键鼠，调用前 Agent 应当口头提醒用户"
                "'即将发送微信消息，执行期间请勿操作鼠标键盘'（不需要阻塞等待确认，说出来即可）。"
                "前置条件：微信已运行并登录，联系人头像模板已存放在 data/avatars/<display_name>.jpg。"
-               "参数：name（联系人标识符：微信号/wxid/昵称/备注名 均可），message（要发送的消息内容）。"
+               "参数：name（联系人标识符：微信号/wxid/昵称/备注名 均可），message（要发送的消息内容），"
+               "urgent（可选，默认 False；True 时绕过回复冷却校验，用于对方连续追问等紧急场景，但仍然校验线索已读）。"
+               "v4 三重硬约束（自动校验）："
+               "① 线索已读校验 — conversation_thread.last_processed_message_id 必须 >= 数据库最新消息 ID，"
+               "未读取最新消息时返回 THREAD_NOT_CAUGHT_UP 错误，需先调 conversation_thread(action='catch_up')；"
+               "② 回复冷却校验 — 按关系阶段最小冷却（Stage 1-2: 30min / Stage 3: 5min / Stage 4+: 3min），"
+               "冷却中返回 COOLDOWN_ACTIVE 错误和 wait_seconds；urgent=True 可绕过；"
+               "③ 互斥锁校验 — 视觉自动化串行。"
                "联系人解析：name 会先在数据库中查找对应的微信号（alias），用微信号搜索（唯一，避免重名）。"
                "若按昵称匹配到多个联系人 → 拒绝发送，返回 matches 列表，需用微信号或 wxid 重新调用。"
-               "流程：解析联系人→搜索微信号→点击头像→输入消息→点击发送。"
+               "流程：硬约束校验→解析联系人→搜索微信号→点击头像→输入消息→点击发送。"
                "内置防封号机制：分段随机输入+点击位置抖动+间隔随机化，无需配置。"
                "如果微信在后台运行但窗口不可见，会自动恢复窗口。"
-               "示例：wechat_send('[REDACTED]', '你好') → 数据库查找微信号 → 用微信号搜索并发送。"
+               "示例：wechat_send('[REDACTED]', '你好') / wechat_send('[REDACTED]', '在的', urgent=True)。"
                "详细说明：guide('reference/wechat')",
 )(tools_wechat.wechat_send)
 
@@ -563,6 +571,76 @@ mcp.tool(
                "check_update（检查URL变化，默认true）。"
                "示例：person_avatar('[REDACTED]') → 获取 [REDACTED] 的头像并保存为 [REDACTED].jpg",
 )(tools_avatar.person_avatar)
+
+# ── 注册 v4 自动回复架构新工具（P0）──────────────────────────────
+
+mcp.tool(
+    name="conversation_thread",
+    description="【v4 对话线索管理】每个联系人独立一个对话线索文件，自动回复前必读。"
+               "管理 recent_summary / current_threads / pending_items / her_emotion / key_context / "
+               "landmine_topics / avoid_topics / initiative_tracker 等字段。"
+               "action：get（读取线索）/ update（更新字段，支持乐观锁 expected_version）/ "
+               "append_summary（追加消息摘要）/ clear（清空线索，保留 landmine 和 avoid_topics）/ "
+               "check_expired（检查线索是否过期，按关系阶段阈值）/ catch_up（标记线索已追上最新消息）/ "
+               "add_landmine（添加雷区话题）/ add_avoid_topic（添加避谈话题）。"
+               "wechat_send 发送前会校验线索的 last_processed_message_id，未追上时会拒绝发送。"
+               "工具只做 CRUD，不判断'该不该回复'、不评估关系阶段、不生成回复建议。",
+    annotations={"readOnlyHint": False},
+)(tools_thread.conversation_thread)
+
+mcp.tool(
+    name="schedule_manage",
+    description="【v4 用户日程管理】管理用户日程（纯 CRUD，不解析自然语言，不冲突检测，不推荐时间）。"
+               "action：query（按日期/联系人查询日程）/ add（添加事件）/ update（更新事件）/ "
+               "remove（删除事件）/ list_slots（查询可用时段，返回空时段列表）/ "
+               "update_preferences（更新用户偏好）/ add_note（添加备注）。"
+               "文件路径：data/schedule.yaml（单一文件，全局用户日程）。"
+               "事件 ID 格式：evt_{timestamp}_{person}。"
+               "Agent 邀约前应先调 list_slots 查询可用时段，再基于 Wiki 邀约三步法生成邀约话术。",
+    annotations={"readOnlyHint": False},
+)(tools_schedule.schedule_manage)
+
+mcp.tool(
+    name="user_profile_manage",
+    description="【v4 用户画像管理·三类文件】管理用户事实画像/风格画像/坏习惯（CRUD）。"
+               "profile_type：fact（事实画像，grounding，高优先级）/ style（表达风格，smoothing，低优先级）/ "
+               "bad_patterns（坏习惯，avoid，高优先级）。"
+               "action：get（读取画像）/ update（更新段落，fact 会记录 change_history）/ "
+               "add_asset（添加素材：话题/故事）/ query_assets（查询素材）/ "
+               "add_bad_pattern（添加坏习惯）/ mark_pattern_corrected（标记坏习惯已纠正）/ "
+               "reset_style_override（重置联系人特化层）。"
+               "文件：data/user_profile_fact.yaml + data/user_style_profile.yaml + "
+               "data/user_style_overrides/<id>.yaml + data/user_bad_patterns.yaml。"
+               "工具不生成回复风格建议，不决策'对这个人该用什么语气'，不评估人设是否合适。",
+    annotations={"readOnlyHint": False},
+)(tools_profile.user_profile_manage)
+
+mcp.tool(
+    name="date_briefing",
+    description="【v4 约会前简报】生成 5 段式约会前简报（数据聚合 + 模板填充）。"
+               "触发时机：用户确认确定邀约后 / 约会前 1 天主动提醒。"
+               "参数：name（联系人），date_plan（dict，含 date/time_range/location/activity，可选）。"
+               "返回：briefing_markdown（5 段式模板：关系阶段/注意事项/可讨论话题/需交流信息/约会后计划）+ "
+               "data_sources（各段原始数据：person_snapshot/conversation_thread/fact_excerpts/schedule_info/user_profile）+ "
+               "wiki_queries（Agent 应调用的 Wiki 查询列表）。"
+               "工具只做数据聚合，分析性内容（如'不要面对面坐'）由 Agent 调 wiki_context 获取方法论后填充。"
+               "明确不做：❌ 不生成约会方案 ❌ 不决策'要不要赴约' ❌ 不评估约会成功概率 ❌ 不生成约会中话术。",
+    annotations={"readOnlyHint": True},
+)(tools_date.date_briefing)
+
+mcp.tool(
+    name="recent_replies_check",
+    description="【v4 跨联系人回复查重】防止 Agent 对不同联系人发相同话术（破坏拟人度）。"
+               "action：check（检查回复是否与近期发给其他人的回复重复）/ add（发送成功后记录到池中）/ "
+               "query（查询近期回复记录）。"
+               "参数：reply_content（回复内容），to（目标联系人），pattern（意图 pattern，由 Agent 提取，"
+               "如'关心状况'/'推荐场所'/'共情辛苦'），time_range_hours（时间窗口，默认 24）。"
+               "查重规则：完全相同话术 → 高危（必须换）；相同 pattern 不同措辞 → 中危（建议换）；"
+               "不同 pattern → 通过。跨联系人查重（对同一联系人重复 pattern 是正常的）。"
+               "工具只做 pattern 匹配，不做语义相似度计算；不决策'能不能发'；不生成替代回复。"
+               "文件：data/system/recent_replies.yaml（最多 500 条，超出自动裁剪）。",
+    annotations={"readOnlyHint": False},
+)(tools_replies.recent_replies_check)
 
 if __name__ == "__main__":
     try:

@@ -17,6 +17,9 @@ import sys
 import logging
 import threading
 import traceback
+import yaml
+from datetime import datetime, timedelta
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -35,11 +38,187 @@ if _WECHAT_SENDER_DIR not in sys.path:
 # ── 并发锁（防止 wechat_send / wechat_ocr 并发执行互相干扰）──
 _wechat_op_lock = threading.Lock()
 
+# ── 发送状态文件（记录 last_send_time，用于回复冷却校验）──
+_SEND_STATE_FILE = os.path.join(_PROJECT_ROOT, "data", "system", "wechat_send_state.yaml")
+
+# ── 按关系阶段的最小冷却秒数（v4 5.3 节）──
+# Stage 1-2 初识/基本互动: 30 分钟（低频聊天，秒回显得需求感强）
+# Stage 3 高频聊天: 5 分钟（高频但不秒回）
+# Stage 4+ 已约见/持续接触: 3 分钟（稳定关系可稍快）
+_STAGE_COOLDOWN_SECONDS = {
+    1: 1800,
+    2: 1800,
+    3: 300,
+    4: 180,
+    5: 180,
+}
+_DEFAULT_COOLDOWN = 300  # 默认 5 分钟（阶段未知时）
+
+
+def _load_send_state() -> dict:
+    """加载发送状态文件。"""
+    if not os.path.exists(_SEND_STATE_FILE):
+        return {"last_send_times": {}, "last_updated": None}
+    try:
+        with open(_SEND_STATE_FILE, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f) or {"last_send_times": {}, "last_updated": None}
+    except Exception as e:
+        logger.warning(f"send_state 加载失败: {e}")
+        return {"last_send_times": {}, "last_updated": None}
+
+
+def _save_send_state(state: dict) -> None:
+    """保存发送状态文件。"""
+    state["last_updated"] = datetime.now().isoformat(timespec="seconds")
+    os.makedirs(os.path.dirname(_SEND_STATE_FILE), exist_ok=True)
+    with open(_SEND_STATE_FILE, "w", encoding="utf-8") as f:
+        yaml.dump(state, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+
+def _get_person_stage_num(name: str) -> int:
+    """获取联系人的关系阶段数字（1-5）。失败返回 3（默认高频聊天阶段）。
+
+    阶段文本标签 → 数字映射（基于 engine.analyzers.stage_recognizer）：
+      "初识" → 1
+      "基本互动" → 2
+      "高频聊天" → 3
+      "已约见" → 4
+      "持续接触" / "稳定关系" → 5
+      其他 → 默认 3
+    """
+    try:
+        from engine.tools import _resolve
+        from engine.analyzers.stage_recognizer import recognize_stage
+        conn, config, person = _resolve(name)
+        try:
+            result = recognize_stage(conn, config, person)
+            stage_label = (result.current_stage or "").strip()
+            return _STAGE_LABEL_TO_NUM.get(stage_label, 3)
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.debug(f"获取阶段失败 {name}: {e}，使用默认阶段 3")
+    return 3
+
+
+# 阶段文本标签 → 数字映射
+_STAGE_LABEL_TO_NUM = {
+    "初识": 1,
+    "基本互动": 2,
+    "高频聊天": 3,
+    "已约见": 4,
+    "持续接触": 5,
+    "稳定关系": 5,
+    "暧昧": 3,        # 暧昧归入高频聊天
+    "约会": 4,        # 约会归入已约见
+}
+
+
+def _check_thread_read(name: str) -> dict:
+    """硬约束 1：校验对话线索已读（v4 6.4 节）。
+
+    检查 conversation_thread 的 last_processed_message_id 是否 >= 数据库中最新消息 ID。
+    若未读取最新消息，返回需 catch_up 的错误。
+
+    Returns:
+        dict: {"passed": bool, "reason": str, "unprocessed_count": int}
+    """
+    try:
+        from mcp_server.tools_thread import conversation_thread
+
+        # 获取线索文件
+        thread_result = conversation_thread(action="get", name=name)
+        if "error" in thread_result:
+            # 线索文件不存在，视为通过（首次发送无线索）
+            return {"passed": True, "reason": "线索文件不存在，跳过校验", "unprocessed_count": 0}
+
+        thread = thread_result.get("thread", {})
+        last_processed_id = thread.get("last_processed_message_id", 0)
+
+        # 获取数据库中最新消息 ID
+        # 通过 chat_data 拿最近 1 条消息
+        try:
+            from engine.tools import chat_data
+            data = chat_data(name, recent=1)
+            messages = data.get("messages", [])
+            if not messages:
+                return {"passed": True, "reason": "无消息记录", "unprocessed_count": 0}
+            latest_msg = messages[-1]
+            latest_msg_id = int(latest_msg.get("id", 0) or 0)
+
+            if last_processed_id >= latest_msg_id:
+                return {"passed": True, "reason": "线索已读", "unprocessed_count": 0}
+            else:
+                unprocessed = latest_msg_id - last_processed_id
+                return {
+                    "passed": False,
+                    "reason": f"尚未处理 {unprocessed} 条新消息",
+                    "unprocessed_count": unprocessed,
+                    "last_processed_message_id": last_processed_id,
+                    "latest_message_id": latest_msg_id,
+                    "suggestion": f"请先调用 conversation_thread(action='catch_up', name='{name}')",
+                }
+        except Exception as e:
+            logger.warning(f"获取最新消息 ID 失败 {name}: {e}，跳过线索校验")
+            return {"passed": True, "reason": f"获取最新消息失败，跳过校验: {e}", "unprocessed_count": 0}
+    except Exception as e:
+        logger.warning(f"线索已读校验异常 {name}: {e}，跳过校验")
+        return {"passed": True, "reason": f"校验异常，跳过: {e}", "unprocessed_count": 0}
+
+
+def _check_cooldown(name: str, urgent: bool, stage: int) -> dict:
+    """硬约束 2：回复冷却校验（v4 5.3 节）。
+
+    按阶段最小冷却：Stage 1-2: 30min, Stage 3: 5min, Stage 4+: 3min。
+    urgent=True 时绕过冷却。
+
+    Returns:
+        dict: {"passed": bool, "reason": str, "wait_seconds": float}
+    """
+    if urgent:
+        return {"passed": True, "reason": "urgent=True 绕过冷却", "wait_seconds": 0}
+
+    cooldown = _STAGE_COOLDOWN_SECONDS.get(stage, _DEFAULT_COOLDOWN)
+    state = _load_send_state()
+    last_send_times = state.get("last_send_times", {})
+    last_send_str = last_send_times.get(name)
+
+    if not last_send_str:
+        return {"passed": True, "reason": "无历史发送记录", "wait_seconds": 0}
+
+    try:
+        last_send = datetime.fromisoformat(last_send_str)
+    except (ValueError, TypeError):
+        return {"passed": True, "reason": "历史记录格式异常", "wait_seconds": 0}
+
+    elapsed = (datetime.now() - last_send).total_seconds()
+    if elapsed >= cooldown:
+        return {"passed": True, "reason": "冷却已过", "wait_seconds": 0}
+
+    wait = cooldown - elapsed
+    return {
+        "passed": False,
+        "reason": f"回复冷却中，还需等待 {wait:.0f} 秒",
+        "wait_seconds": wait,
+        "cooldown_seconds": cooldown,
+        "elapsed_seconds": elapsed,
+        "stage": stage,
+    }
+
+
+def _update_send_time(name: str) -> None:
+    """发送成功后更新 last_send_time。"""
+    state = _load_send_state()
+    if "last_send_times" not in state:
+        state["last_send_times"] = {}
+    state["last_send_times"][name] = datetime.now().isoformat(timespec="seconds")
+    _save_send_state(state)
+
 
 # ── 工具1: wechat_send ──────────────────────────────────────────
 
-def wechat_send(name: str, message: str) -> dict:
-    """向微信联系人自动发送消息。
+def wechat_send(name: str, message: str, urgent: bool = False) -> dict:
+    """向微信联系人自动发送消息（v4 三重硬约束）。
 
     通过视觉识别自动化操作微信 PC 客户端：
     1. 解析联系人标识符 → 微信号（alias）用于搜索和头像定位（微信号唯一，避免重名）
@@ -67,9 +246,20 @@ def wechat_send(name: str, message: str) -> dict:
     - 录屏路径：data/outputs/recordings/wechat_send_<timestamp>_<contact>.mp4
     - ⚠️ 录屏文件在 data/ 目录下，已被 .gitignore 忽略，不会提交到 git
 
+    v4 三重硬约束（5.3 + 6.4 节，发送前自动校验）：
+    1. 线索已读校验：conversation_thread.last_processed_message_id >= 数据库最新消息 ID
+       - 未读取最新消息时拒绝发送，返回 suggestion 调用 catch_up
+       - 线索文件不存在或读取异常时跳过校验（兼容首次发送）
+    2. 回复冷却校验：按关系阶段最小冷却（Stage 1-2: 30min / Stage 3: 5min / Stage 4+: 3min）
+       - urgent=True 时绕过冷却（用于对方连续追问等紧急场景）
+       - 冷却中拒绝发送，返回 wait_seconds 告知剩余等待时间
+    3. 互斥锁校验：视觉自动化串行（原有逻辑保留）
+
     Args:
         name: 微信联系人标识符（微信号 / wxid / 昵称 / 备注名 均可）
         message: 要发送的消息内容
+        urgent: 紧急模式（True 时绕过回复冷却校验，但仍然校验线索已读）。
+                用于对方连续追问"在吗"等需要立即响应的场景。
 
     Returns:
         dict: {
@@ -83,11 +273,54 @@ def wechat_send(name: str, message: str) -> dict:
             "window_restored": bool,  # 是否触发了窗口恢复
             "matches": list|None,  # 多匹配时的联系人列表（仅 MULTIPLE_MATCHES 时有值）
             "recording_path": str|None,  # 失败时的录屏文件路径（成功时为 None）
+            "hard_constraints": dict,  # v4 新增：三重硬约束校验结果
+                # {"thread_read": "passed"/"failed", "cooldown": "passed"/"failed"/"bypassed",
+                #  "mutex": "passed", "stage": int, "urgent": bool}
         }
     """
     from engine.wechat_sender.wechat_recorder import with_recording
     from engine.wechat_sender.wechat_e2e_run import send_message_with_retry
 
+    # v4 硬约束 1：校验线索已读（urgent 也不能绕过，因为这是安全要求）
+    thread_check = _check_thread_read(name)
+    if not thread_check["passed"]:
+        return {
+            "success": False,
+            "error": "THREAD_NOT_CAUGHT_UP",
+            "message": f"线索未读取最新消息：{thread_check['reason']}",
+            "suggestion": thread_check.get("suggestion", ""),
+            "unprocessed_count": thread_check.get("unprocessed_count", 0),
+            "hard_constraints": {
+                "thread_read": "failed",
+                "cooldown": "skipped",
+                "mutex": "skipped",
+                "urgent": urgent,
+            },
+        }
+
+    # v4 硬约束 2：回复冷却校验（urgent 可绕过）
+    stage = _get_person_stage_num(name)
+    cooldown_check = _check_cooldown(name, urgent=urgent, stage=stage)
+    if not cooldown_check["passed"]:
+        return {
+            "success": False,
+            "error": "COOLDOWN_ACTIVE",
+            "message": cooldown_check["reason"],
+            "wait_seconds": cooldown_check.get("wait_seconds", 0),
+            "cooldown_seconds": cooldown_check.get("cooldown_seconds", 0),
+            "elapsed_seconds": cooldown_check.get("elapsed_seconds", 0),
+            "stage": stage,
+            "suggestion": "等待冷却结束后重试，或使用 urgent=True 绕过（仅紧急情况）",
+            "hard_constraints": {
+                "thread_read": "passed",
+                "cooldown": "failed",
+                "mutex": "skipped",
+                "stage": stage,
+                "urgent": urgent,
+            },
+        }
+
+    # v4 硬约束 3：互斥锁（原有逻辑）+ 正常发送流程
     def _impl():
         _wechat_op_lock.acquire()
         try:
@@ -95,7 +328,22 @@ def wechat_send(name: str, message: str) -> dict:
         finally:
             _wechat_op_lock.release()
 
-    return with_recording(name, _impl)
+    result = with_recording(name, _impl)
+
+    # 发送成功后更新 last_send_time（用于下次冷却校验）
+    if result.get("success"):
+        _update_send_time(name)
+
+    # 附加硬约束校验结果到返回值
+    result["hard_constraints"] = {
+        "thread_read": "passed",
+        "cooldown": "bypassed" if urgent else "passed",
+        "mutex": "passed" if result.get("success") else "passed",  # 互斥锁本身总是 passed（获取成功）
+        "stage": stage,
+        "urgent": urgent,
+    }
+
+    return result
 
 
 # ── 工具2: open_wechat_window ───────────────────────────────────
