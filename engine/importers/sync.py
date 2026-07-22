@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from engine.config import Config
 from engine.importers.db_init import init_db, get_db
 from engine.importers.weflow_client import WeFlowClient, WeFlowError
-from engine.importers.wcd_client import WCDClient, WCDError
+from engine.importers.wcd_client import WCDClient, WCDError, is_wechat_running
 from engine.importers.checkpoint import CheckpointManager
 from engine.importers.sync_contacts import sync_contacts
 from engine.importers.sync_conversations import sync_conversations
@@ -86,14 +86,22 @@ def run_sync(
             f"3. Token 已配置（data/system/config.yaml → weflow.token）"
         )
 
-    # 2. 刷新 WCD 数据库快照（使用缓存密钥，不重启微信）
-    # WCD 后端：用 source=decrypted 读解密快照，绕过 WeChat 运行时锁定 session.db
-    wcd_source = "decrypted" if config.weflow.backend == "wcd" else None
+    # 2. 刷新 WCD 数据库快照（智能选择数据源）
+    # WCD 后端：
+    #   - 微信运行时：WCDB 文件锁被占用，realtime 直读会超时
+    #     → 用 source=decrypted（解密快照绕过文件锁，有30分钟节流）
+    #   - 微信未运行时：无文件锁，可直接 realtime 直读加密库
+    #     → 用 source=realtime（无需全量解密，毫秒级开销）
+    wcd_source = None  # 默认 realtime（auto）
     if config.weflow.backend == "wcd":
-        try:
-            client.decrypt_databases()
-        except WCDError as e:
-            logger.warning(f"数据库解密失败（不影响同步，使用旧快照）: {e}")
+        if is_wechat_running():
+            wcd_source = "decrypted"
+            try:
+                client.decrypt_databases()
+            except WCDError as e:
+                logger.warning(f"数据库解密失败（不影响同步，使用旧快照）: {e}")
+        else:
+            logger.info("微信未运行，使用 realtime 直读（跳过全量解密）")
 
     # 3. 同步联系人
     contact_count = sync_contacts(client, db, source=wcd_source)

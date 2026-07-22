@@ -237,6 +237,19 @@ def _create_client(config: Config):
         )
 
 
+def _smart_wcd_source(config: Config) -> str | None:
+    """智能选择 WCD 数据源（头像查询场景）。
+
+    - 微信运行时：WCDB 文件锁被占用，返回 "decrypted"（读解密快照）
+    - 微信未运行：返回 None（用 realtime 直读加密库，无需解密）
+    - 非 WCD 后端：返回 None（WeFlow 内部 native 直读，无此问题）
+    """
+    if config.weflow.backend != "wcd":
+        return None
+    from engine.importers.wcd_client import is_wechat_running
+    return "decrypted" if is_wechat_running() else None
+
+
 # ── 本地 DB 查询 ──────────────────────────────────────────────────────
 
 def _query_local_avatar(conn: sqlite3.Connection, identifier: str) -> dict | None:
@@ -827,11 +840,11 @@ def get_avatar(
                 logger.info(f"代理 URL → CDN URL: {display_name}")
 
     # 1b. API 查询（如果 DB 没找到）
-    # WCD 后端：用 source=decrypted 读解密快照，绕过 WeChat 运行时锁定 session.db
+    # WCD 后端：智能选择数据源（微信运行时用 decrypted 绕过锁，未运行时用 realtime 直读）
     if not avatar_url:
         client = _create_client(config)
         if client.health():
-            api_source = "decrypted" if config.weflow.backend == "wcd" else None
+            api_source = _smart_wcd_source(config)
             api_result = _query_api_avatar(client, identifier, source=api_source)
             if api_result:
                 avatar_url = api_result["avatar_url"]
@@ -1016,8 +1029,8 @@ def batch_download_avatars(
     client = _create_client(config)
     if client.health():
         try:
-            # WCD 后端用 source=decrypted 绕过 WeChat 运行时锁
-            api_source = "decrypted" if config.weflow.backend == "wcd" else None
+            # WCD 后端智能选择数据源（微信运行时用 decrypted，未运行时用 realtime）
+            api_source = _smart_wcd_source(config)
             if api_source:
                 contacts = client.list_contacts(limit=limit, source=api_source)
             else:

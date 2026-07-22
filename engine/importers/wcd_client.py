@@ -24,6 +24,37 @@ class WCDError(Exception):
     pass
 
 
+# 微信进程名（涵盖新旧版本）
+_WECHAT_PROCESS_NAMES = ("Weixin.exe", "WeChat.exe")
+
+
+def is_wechat_running() -> bool:
+    """检测微信进程是否正在运行。
+
+    用于智能数据源切换：
+    - 微信运行时：WCDB 文件锁被占用，realtime 直读会超时，需用 source="decrypted"
+    - 微信未运行：可直接 realtime 直读加密库，无需全量解密
+
+    Returns:
+        bool: True 表示微信正在运行
+    """
+    try:
+        import psutil
+    except ImportError:
+        # psutil 未安装时保守返回 True（走 decrypted 路径，兼容旧逻辑）
+        logger.debug("psutil 未安装，假设微信正在运行（使用 decrypted 数据源）")
+        return True
+
+    try:
+        for p in psutil.process_iter(["name"]):
+            if p.info.get("name") in _WECHAT_PROCESS_NAMES:
+                return True
+    except Exception as e:
+        logger.debug(f"检测微信进程失败，保守假设正在运行: {e}")
+        return True
+    return False
+
+
 class WCDClient:
 
     def __init__(self, base_url: str, token: str = "", timeout: int = 30,
