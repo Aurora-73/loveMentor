@@ -21,6 +21,14 @@ from engine.config import Config, CACHE_DIR, slug_display_name
 
 logger = logging.getLogger(__name__)
 
+# 延迟导入避免循环依赖
+def _smart_wcd_source(config: Config) -> str | None:
+    """智能选择 WCD 数据源：微信运行时用 decrypted（需先解密），未运行时用 realtime 直读。"""
+    if config.weflow.backend != "wcd":
+        return None
+    from engine.importers.wcd_client import is_wechat_running
+    return "decrypted" if is_wechat_running() else None
+
 LIVE_CACHE_DIR = CACHE_DIR / "live"
 DEFAULT_POLL_INTERVAL = 10  # 秒，默认 10s 适合聊天场景
 INITIAL_LOOKBACK_MINUTES = 30  # 初始拉取回看分钟数
@@ -62,6 +70,8 @@ class _MonitorState:
         self.unread_count: int = 0
         # 心跳 / 自动停止
         self.last_heartbeat: float = time.time()
+        # 缓存的 API 客户端（避免每次轮询重建）
+        self._client = None
 
     def _is_stale(self) -> bool:
         """检查是否超过自动停止超时未读取。"""
@@ -109,7 +119,10 @@ class LiveMonitorManager:
             # 初始拉取：最近 INITIAL_LOOKBACK_MINUTES 分钟的消息，且至少 MIN_INITIAL_MESSAGES 条
             now = int(time.time())
             since_ts = now - INITIAL_LOOKBACK_MINUTES * 60
-            messages = self._fetch_messages(config, wxid, fetch_limit)
+            # 创建客户端一次，后续轮询复用
+            client = self._build_client(config)
+            state._client = client
+            messages = self._fetch_messages(config, wxid, fetch_limit, client=client)
             # 先按时间窗口过滤
             time_window_msgs = [m for m in messages if m.get("createTime", 0) >= since_ts]
             # 时间窗口内不足 MIN_INITIAL_MESSAGES 条时，扩展到最近 N 条（按时间升序取末尾）
@@ -119,10 +132,13 @@ class LiveMonitorManager:
             else:
                 initial_msgs = time_window_msgs
 
+            # 构建引用查找表（从当前批次中查找被引用消息）
+            reply_lookup = self._build_reply_lookup_from_batch(messages, display_name)
+
             # 写入缓存文件
             self._write_cache_header(state, len(initial_msgs))
             for msg in initial_msgs:
-                self._append_message(state, msg)
+                self._append_message(state, msg, reply_lookup=reply_lookup)
 
             if initial_msgs:
                 state.last_msg_ts = max(m["createTime"] for m in initial_msgs)
@@ -136,7 +152,7 @@ class LiveMonitorManager:
             # 启动后台线程
             state.thread = threading.Thread(
                 target=self._poll_loop,
-                args=(state, config),
+                args=(state, config, client),
                 daemon=True,
                 name=f"live-monitor-{slug}",
             )
@@ -285,7 +301,7 @@ class LiveMonitorManager:
 
         return new_content
 
-    def _poll_loop(self, state: _MonitorState, config: Config):
+    def _poll_loop(self, state: _MonitorState, config: Config, client=None):
         """后台轮询线程。"""
         logger.info(
             f"实时监听已启动: {state.name} "
@@ -304,15 +320,21 @@ class LiveMonitorManager:
                 if state.stop_event.is_set():
                     break
                 try:
-                    messages = self._fetch_messages(config, state.wxid, state.fetch_limit)
+                    messages = self._fetch_messages(
+                        config, state.wxid, state.fetch_limit, client=client
+                    )
                     new_msgs = [
                         m for m in messages
                         if m.get("createTime", 0) > state.last_msg_ts
                     ]
 
                     if new_msgs:
+                        # 构建引用查找表（从当前批次中查找被引用消息）
+                        reply_lookup = self._build_reply_lookup_from_batch(
+                            messages, state.display_name
+                        )
                         for msg in new_msgs:
-                            self._append_message(state, msg)
+                            self._append_message(state, msg, reply_lookup=reply_lookup)
                         state.last_msg_ts = max(m["createTime"] for m in new_msgs)
                         state.new_msg_count += len(new_msgs)
                         state.unread_count += len(new_msgs)
@@ -361,11 +383,23 @@ class LiveMonitorManager:
                 del self._monitors[state.name]
         logger.info(f"实时监听已停止: {state.name}")
 
-    def _fetch_messages(self, config: Config, wxid: str, limit: int) -> list[dict]:
-        """直接调 API 拉消息（不走 sync 管道）。"""
-        client = self._build_client(config)
-        # WCD 后端用 source=decrypted 绕过 WeChat 运行时锁
-        wcd_source = "decrypted" if config.weflow.backend == "wcd" else None
+    def _fetch_messages(self, config: Config, wxid: str, limit: int,
+                        client=None) -> list[dict]:
+        """直接调 API 拉消息（不走 sync 管道）。
+
+        Args:
+            client: 可选的缓存客户端，避免每次轮询重建
+        """
+        if client is None:
+            client = self._build_client(config)
+        # 智能数据源切换：微信运行时用 decrypted（需先解密），未运行时用 realtime
+        wcd_source = _smart_wcd_source(config)
+        if wcd_source == "decrypted":
+            # 使用 decrypted 前先刷新解密快照（有 5 分钟防抖，不会重复解密）
+            try:
+                client.decrypt_databases()
+            except Exception as e:
+                logger.warning(f"数据库解密失败（使用旧快照）: {e}")
         kwargs: dict = {"talker": wxid, "limit": limit}
         if wcd_source:
             kwargs["source"] = wcd_source
@@ -423,8 +457,45 @@ class LiveMonitorManager:
             encoding="utf-8",
         )
 
-    def _append_message(self, state: _MonitorState, msg: dict):
-        """追加一条消息到缓存文件。"""
+    def _build_reply_lookup_from_batch(self, messages: list[dict], display_name: str) -> dict[str, dict]:
+        """从拉取的消息批次构建引用查找表：serverId -> {content, sender}。
+
+        用于在 _append_message 中查找被引用消息的内容，显示引用关系。
+        """
+        lookup: dict[str, dict] = {}
+        for msg in messages:
+            msg_id = str(msg.get("serverId") or msg.get("platformMessageId") or "")
+            if not msg_id:
+                continue
+            is_send = msg.get("isSend", False)
+            sender = "我" if is_send else display_name
+            content = msg.get("content", "") or msg.get("parsedContent", "")
+
+            # 处理特殊消息类型（与 _append_message 一致）
+            media_type = msg.get("mediaType", "")
+            if media_type == "image":
+                content = "[图片]"
+            elif media_type == "voice":
+                voice_len = msg.get("voiceLength", "")
+                content = f"[语音] {voice_len}s" if voice_len else "[语音]"
+            elif media_type == "video":
+                content = "[视频]"
+            elif media_type == "emoji":
+                content = "[表情]"
+
+            lookup[msg_id] = {
+                "content": content or "",
+                "sender": sender,
+            }
+        return lookup
+
+    def _append_message(self, state: _MonitorState, msg: dict,
+                        reply_lookup: dict[str, dict] | None = None):
+        """追加一条消息到缓存文件。
+
+        Args:
+            reply_lookup: 引用查找表（从当前批次构建），用于显示被引用消息内容
+        """
         ts = msg.get("createTime", 0)
         time_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S") if ts else "?"
         is_send = msg.get("isSend", False)
@@ -446,10 +517,19 @@ class LiveMonitorManager:
             url = msg.get("mediaUrl", "")
             content = f"[表情] {url}" if url else "[表情]"
 
-        # 引用回复
+        # 引用回复：显示被引用消息的内容
         reply_to = msg.get("replyToMessageId")
         if reply_to:
-            content = f"(回复) {content}"
+            reply_id_str = str(reply_to)
+            if reply_lookup and reply_id_str in reply_lookup:
+                ref = reply_lookup[reply_id_str]
+                ref_content = ref["content"]
+                if len(ref_content) > 50:
+                    ref_content = ref_content[:50] + "..."
+                content = f"↩回复[{ref['sender']}: {ref_content}] {content}"
+            else:
+                # 被引用消息不在当前批次中，用简略标记
+                content = f"↩回复 {content}"
 
         # 截断过长内容
         if len(content) > 500:
