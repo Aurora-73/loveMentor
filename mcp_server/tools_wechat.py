@@ -696,14 +696,31 @@ def wechat_send_image(name: str, image_path: str, urgent: bool = False) -> dict:
 # ── 工具4: wechat_send_batch ────────────────────────────────────
 
 def wechat_send_batch(name: str, messages: list, urgent: bool = False) -> dict:
-    """向同一联系人连续发送多条消息（v4 连续发送能力 + 三重硬约束）。
+    """向同一联系人连续发送多条混合消息（v4 连续发送 + 混合消息能力 + 三重硬约束）。
 
-    第一条消息走完整流程（搜索+点击头像+发送），
-    后续消息跳过搜索，直接在当前聊天界面发送，
-    每次发送前校验聊天框左上角显示名。
-    校验失败则回退到完整流程（重新搜索联系人）。
+    支持在一次调用中连续发送文字/表情/图片混合消息：
+    - 第一条消息走完整流程（搜索+点击头像+发送）
+    - 后续消息跳过搜索，直接在当前聊天界面发送
+    - 每次发送前校验聊天框左上角显示名
+    - 校验失败则回退到完整流程（重新搜索联系人）
+    - 根据每条消息的 type 自动选择对应的发送函数
 
-    适用场景：分段发送长文本、连续发送多条独立消息。
+    消息格式（两种，可混用）：
+    - 字符串：当作文字消息
+    - 字典：{"type": "text"|"emoji"|"image", "content": "..."}
+      - text: content 为消息文本
+      - emoji: content 为表情搜索关键词（如"微笑"、"加油"）
+      - image: content 为图片文件路径（支持 jpg/png/bmp 等常见格式）
+
+    示例：
+        messages = [
+            "你好",                                          # 文字（字符串简写）
+            {"type": "text", "content": "今天天气不错"},     # 文字（字典形式）
+            {"type": "emoji", "content": "微笑"},            # 表情
+            {"type": "image", "content": "C:/pic.jpg"},      # 图片
+        ]
+
+    适用场景：分段发送长文本、文字+表情混合、文字+图片混合等。
 
     v4 三重硬约束（与 wechat_send 相同，只在第一条消息前校验一次）：
     1. 线索已读校验：未读取最新消息时拒绝发送
@@ -712,7 +729,7 @@ def wechat_send_batch(name: str, messages: list, urgent: bool = False) -> dict:
 
     Args:
         name: 微信联系人标识符（微信号 / wxid / 昵称 / 备注名 均可）
-        messages: 要发送的消息列表（每条独立发送）
+        messages: 要发送的消息列表（字符串或字典，可混用）
         urgent: 紧急模式（True 时绕过回复冷却校验，但仍然校验线索已读）。
 
     Returns:
@@ -723,7 +740,7 @@ def wechat_send_batch(name: str, messages: list, urgent: bool = False) -> dict:
             "total": int,          # 总消息数
             "succeeded": int,      # 成功数
             "failed": int,         # 失败数
-            "results": list[dict], # 每条消息的详细结果
+            "results": list[dict], # 每条消息的详细结果（含 type 字段）
             "error": str|None,
             "hard_constraints": dict,
         }

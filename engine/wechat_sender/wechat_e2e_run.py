@@ -546,9 +546,82 @@ def _verify_chat_header_display_name(contact_profile, image=None):
         return False
 
 
+def _check_already_in_chat_window(contact_profile):
+    """预检查：当前微信窗口是否已经是目标联系人的聊天界面。
+
+    在阶段一（搜索+点击头像）之前调用，用 font_matcher 检查聊天标题区域
+    是否包含 contact_profile.display_name。如果匹配，说明已经打开了
+    目标联系人的聊天窗口，可以跳过阶段一/二，直接进入阶段三。
+
+    关键设计：
+    - 用 PrintWindow 截图，不需要聚焦窗口（避免点击中间栏导致对话跳转）
+    - 不点击任何 UI 元素，纯只读检查
+    - 匹配阈值 0.75（与 _verify_chat_header_display_name 一致）
+
+    Args:
+        contact_profile: ContactProfile 实例（必须包含 display_name）
+
+    Returns:
+        bool: True=已是目标聊天窗口，False=不是（需要走阶段一搜索）
+    """
+    display_name = contact_profile.display_name if contact_profile else ""
+    if not display_name:
+        return False
+
+    logger.info(f"\n[预检查] 检查是否已是目标聊天窗口: {display_name!r}")
+
+    # 截图主窗口（PrintWindow，不需要聚焦）
+    from window_capture import find_wechat_window, screencap_window
+    window = find_wechat_window()
+    if window is None:
+        logger.info("   未找到微信窗口，跳过预检查")
+        return False
+
+    img = screencap_window(window["hwnd"])
+    if img is None:
+        logger.info("   截图失败，跳过预检查")
+        return False
+
+    # 保存截图供调试
+    debug_path = os.path.join(OUTPUT_DIR, "stage_0_precheck.png")
+    cv2.imwrite(debug_path, img)
+    logger.info(f"   预检查截图: {debug_path}")
+
+    # 用 font_matcher 在聊天标题区域匹配 display_name
+    try:
+        from font_matcher import get_font_matcher
+        matcher = get_font_matcher()
+        match = matcher.find_in_chat_header(img, display_name, threshold=0.75)
+        if match:
+            conf = match.get("confidence", 0)
+            cx = match.get("center_x", 0)
+            cy = match.get("center_y", 0)
+            logger.info(
+                f"   ✅ 预检查通过: 已在 {display_name!r} 的聊天窗口 "
+                f"conf={conf:.4f} pos=({cx}, {cy})"
+            )
+            logger.info("   → 跳过阶段一/二，直接进入阶段三")
+            return True
+        else:
+            logger.info(
+                f"   预检查未匹配: 当前不是 {display_name!r} 的聊天窗口，进入阶段一搜索"
+            )
+            return False
+    except ImportError:
+        logger.info("   font_matcher 模块不可用，跳过预检查")
+        return False
+    except Exception as e:
+        logger.info(f"   预检查异常: {e}，跳过预检查")
+        return False
+
+
 def run_e2e(message, contact_name, template_path, contact_profile=None,
             stage3_func=None):
-    """端到端流程：阶段一 → 阶段二 → 阶段三
+    """端到端流程：预检查 →（跳过或执行）阶段一 → 阶段二 → 阶段三
+
+    预检查（v4 新增）：在阶段一之前检查当前是否已是目标聊天窗口。
+    如果是，跳过阶段一/二，直接进入阶段三。避免重复搜索+点击中间栏
+    聚焦导致对话跳转。
 
     Args:
         message: 要发送的消息内容（表情包模式下为表情搜索关键词）
@@ -605,6 +678,41 @@ def run_e2e(message, contact_name, template_path, contact_profile=None,
     # 在操作开始时捕获一次，后续 verify_main_window_layout 会自动和它对比
     capture_initial_main_window_layout()
 
+    # ========== 预检查：是否已是目标聊天窗口（v4 新增） ==========
+    # 在阶段一之前检查，避免不必要的搜索+点击中间栏聚焦（可能导致对话跳转）
+    already_in_chat = False
+    if contact_profile is not None and contact_profile.display_name:
+        try:
+            already_in_chat = _check_already_in_chat_window(contact_profile)
+        except Exception as e:
+            logger.warning(f"   ⚠️ 预检查异常: {e}，继续走阶段一")
+
+    if already_in_chat:
+        # 预检查通过，跳过阶段一/二，直接进入阶段三
+        logger.info("\n" + "=" * 60)
+        logger.info("  ✅ 预检查通过，跳过阶段一/二")
+        logger.info("=" * 60)
+
+        # 阶段三：输入+发送消息
+        logger.info("\n" + "#" * 60)
+        if stage3_func is None:
+            logger.info("#  阶段三：输入+发送消息（预检查快捷路径）")
+        else:
+            logger.info("#  阶段三：发送（预检查快捷路径）")
+        logger.info("#" * 60)
+
+        actual_stage3_func = stage3_func if stage3_func is not None else run_send_message
+        stage3_ok = actual_stage3_func(message, do_send=True)
+        if not stage3_ok:
+            logger.error("   ❌ 阶段三失败（预检查快捷路径）")
+            return False
+
+        logger.info("\n" + "=" * 60)
+        logger.info("  ✅ 端到端流程全部成功（预检查快捷路径）")
+        logger.info("=" * 60)
+        return True
+
+    # 预检查未通过，走正常阶段一/二/三流程
     stage1_success = False
     final_count_after = 0
     final_target = None
@@ -1054,19 +1162,82 @@ def send_image_with_retry(name: str, image_path: str) -> dict:
                                     stage3_func=run_send_image)
 
 
+def _normalize_batch_message(msg):
+    """标准化批量消息格式（v4 混合连续发送能力）。
+
+    支持两种输入格式：
+    - 字符串：当作文字消息 {"type": "text", "content": msg}
+    - 字典：{"type": "text"|"emoji"|"image", "content": "..."}
+
+    Args:
+        msg: 原始消息（字符串或字典）
+
+    Returns:
+        dict: 标准化后的消息 {"type": str, "content": str}
+
+    Raises:
+        ValueError: 消息格式无效或 type 不支持
+    """
+    if isinstance(msg, str):
+        if not msg:
+            raise ValueError("消息内容为空字符串")
+        return {"type": "text", "content": msg}
+    if isinstance(msg, dict):
+        msg_type = msg.get("type", "text")
+        content = msg.get("content", "")
+        if msg_type not in ("text", "emoji", "image"):
+            raise ValueError(
+                f"不支持的消息类型: {msg_type!r}（支持: text/emoji/image）"
+            )
+        if not content:
+            raise ValueError(f"消息内容为空: {msg!r}")
+        return {"type": msg_type, "content": content}
+    raise ValueError(f"消息格式无效（应为字符串或字典）: {msg!r}")
+
+
+def _get_stage3_func_for_type(msg_type):
+    """根据消息类型返回对应的 stage3 执行函数。
+
+    Args:
+        msg_type: 消息类型（text/emoji/image）
+
+    Returns:
+        callable 或 None:
+        - text → None（表示用默认的 run_send_message）
+        - emoji → run_send_emoji
+        - image → run_send_image
+    """
+    if msg_type == "emoji":
+        from send_emoji_run import run_send_emoji
+        return run_send_emoji
+    if msg_type == "image":
+        from send_image_run import run_send_image
+        return run_send_image
+    return None  # text 用默认的 run_send_message
+
+
 def send_message_batch(name: str, messages: list) -> dict:
-    """连续发送多条消息的业务编排（v4 连续发送能力）。
+    """连续发送多条混合消息的业务编排（v4 连续发送 + 混合消息能力）。
 
-    第一条消息走完整流程（搜索+点击头像+发送），
-    后续消息跳过搜索，直接在当前聊天界面发送，
-    每次发送前校验聊天框左上角显示名。
-    校验失败则回退到完整流程（重新搜索联系人）。
+    支持在一次调用中连续发送文字/表情/图片混合消息：
+    - 第一条消息走完整流程（搜索+点击头像+发送）
+    - 后续消息跳过搜索，直接在当前聊天界面发送
+    - 每次发送前校验聊天框左上角显示名
+    - 校验失败则回退到完整流程（重新搜索联系人）
+    - 根据每条消息的 type 自动选择对应的 stage3 函数
 
-    适用场景：分段发送长文本、连续发送多条独立消息。
+    消息格式（两种，可混用）：
+    - 字符串：当作文字消息
+    - 字典：{"type": "text"|"emoji"|"image", "content": "..."}
+      - text: content 为消息文本
+      - emoji: content 为表情搜索关键词
+      - image: content 为图片文件路径
+
+    适用场景：分段发送长文本、文字+表情混合、文字+图片混合等。
 
     Args:
         name: 联系人标识符（微信号/wxid/昵称/备注名 均可）
-        messages: 要发送的消息列表（每条独立发送）
+        messages: 要发送的消息列表（字符串或字典，可混用）
 
     Returns:
         dict: {
@@ -1074,7 +1245,7 @@ def send_message_batch(name: str, messages: list) -> dict:
             "total": int,          # 总消息数
             "succeeded": int,      # 成功数
             "failed": int,         # 失败数
-            "results": list[dict], # 每条消息的结果
+            "results": list[dict], # 每条消息的结果（含 type 字段）
             "contact": str,
             "error": str|None,
         }
@@ -1095,8 +1266,27 @@ def send_message_batch(name: str, messages: list) -> dict:
             "error": "消息列表为空",
         }
 
+    # ── 标准化所有消息（字符串 → dict） ──
+    normalized_messages = []
+    try:
+        for i, msg in enumerate(messages):
+            normalized = _normalize_batch_message(msg)
+            normalized_messages.append(normalized)
+    except ValueError as e:
+        return {
+            "success": False,
+            "total": len(messages),
+            "succeeded": 0,
+            "failed": len(messages),
+            "results": [],
+            "contact": name,
+            "error": f"消息格式错误（第 {i+1} 条）: {e}",
+        }
+
     logger.info("=" * 60)
-    logger.info(f"  连续发送多条消息: {name!r}，共 {len(messages)} 条")
+    logger.info(f"  连续发送多条混合消息: {name!r}，共 {len(normalized_messages)} 条")
+    for i, nm in enumerate(normalized_messages):
+        logger.info(f"    [{i+1}] type={nm['type']} content={nm['content']!r}")
     logger.info("=" * 60)
 
     results = []
@@ -1115,12 +1305,20 @@ def send_message_batch(name: str, messages: list) -> dict:
     except Exception as e:
         logger.warning(f"预解析联系人失败: {e}，后续消息校验可能回退到完整流程")
 
-    # ── 发送第一条消息（走完整流程） ──
-    logger.info(f"\n[1/{len(messages)}] 第一条消息（完整流程）: {messages[0]!r}")
-    first_result = send_message_with_retry(name, messages[0])
+    # ── 发送第一条消息（走完整流程，根据 type 选择 stage3_func） ──
+    first_msg = normalized_messages[0]
+    first_stage3_func = _get_stage3_func_for_type(first_msg["type"])
+    logger.info(
+        f"\n[1/{len(normalized_messages)}] 第一条消息（完整流程）: "
+        f"type={first_msg['type']} content={first_msg['content']!r}"
+    )
+    first_result = send_message_with_retry(
+        name, first_msg["content"], stage3_func=first_stage3_func
+    )
     results.append({
         "index": 0,
-        "message": messages[0],
+        "type": first_msg["type"],
+        "message": first_msg["content"],
         "success": first_result.get("success", False),
         "error": first_result.get("error"),
         "mode": "full_flow",
@@ -1134,9 +1332,14 @@ def send_message_batch(name: str, messages: list) -> dict:
         # 第一条失败，后续消息仍尝试发送（可能第一条是网络问题，后续能成功）
 
     # ── 发送后续消息（跳过搜索，校验后直接发送） ──
-    for i in range(1, len(messages)):
-        msg = messages[i]
-        logger.info(f"\n[{i+1}/{len(messages)}] 后续消息: {msg!r}")
+    for i in range(1, len(normalized_messages)):
+        nm = normalized_messages[i]
+        msg_type = nm["type"]
+        msg_content = nm["content"]
+        logger.info(
+            f"\n[{i+1}/{len(normalized_messages)}] 后续消息: "
+            f"type={msg_type} content={msg_content!r}"
+        )
 
         # 消息间间隔（模拟人工操作，避免发送过快）
         time.sleep(2.0)
@@ -1163,15 +1366,19 @@ def send_message_batch(name: str, messages: list) -> dict:
             logger.info(f"   [校验] 无预解析数据，回退到完整流程")
 
         if verify_passed:
-            # 校验通过，直接调用 run_send_message（跳过阶段一/二）
+            # 校验通过，直接调用对应的 stage3 函数（跳过阶段一/二）
             logger.info(f"   ✅ 校验通过，直接发送（跳过搜索）")
+            stage3_func = _get_stage3_func_for_type(msg_type)
+            # text 类型 stage3_func 为 None，用 run_send_message
+            actual_func = stage3_func if stage3_func is not None else run_send_message
             try:
-                stage3_ok = run_send_message(msg, do_send=True)
+                stage3_ok = actual_func(msg_content, do_send=True)
                 if stage3_ok:
                     succeeded += 1
                     results.append({
                         "index": i,
-                        "message": msg,
+                        "type": msg_type,
+                        "message": msg_content,
                         "success": True,
                         "error": None,
                         "mode": "direct_send",
@@ -1181,7 +1388,8 @@ def send_message_batch(name: str, messages: list) -> dict:
                     failed += 1
                     results.append({
                         "index": i,
-                        "message": msg,
+                        "type": msg_type,
+                        "message": msg_content,
                         "success": False,
                         "error": "STAGE3_FAILED",
                         "mode": "direct_send",
@@ -1191,7 +1399,8 @@ def send_message_batch(name: str, messages: list) -> dict:
                 failed += 1
                 results.append({
                     "index": i,
-                    "message": msg,
+                    "type": msg_type,
+                    "message": msg_content,
                     "success": False,
                     "error": f"DIRECT_SEND_ERROR: {e}",
                     "mode": "direct_send",
@@ -1200,10 +1409,14 @@ def send_message_batch(name: str, messages: list) -> dict:
         else:
             # 校验失败或无预解析数据，回退到完整流程
             logger.info(f"   [回退] 走完整流程重新发送")
-            retry_result = send_message_with_retry(name, msg)
+            fallback_stage3_func = _get_stage3_func_for_type(msg_type)
+            retry_result = send_message_with_retry(
+                name, msg_content, stage3_func=fallback_stage3_func
+            )
             results.append({
                 "index": i,
-                "message": msg,
+                "type": msg_type,
+                "message": msg_content,
                 "success": retry_result.get("success", False),
                 "error": retry_result.get("error"),
                 "mode": "fallback_full_flow",
@@ -1217,7 +1430,7 @@ def send_message_batch(name: str, messages: list) -> dict:
 
     # ── 汇总结果 ──
     all_success = (failed == 0)
-    summary = f"连续发送完成: {succeeded}/{len(messages)} 成功"
+    summary = f"连续发送完成: {succeeded}/{len(normalized_messages)} 成功"
     if failed > 0:
         summary += f"，{failed} 失败"
 
@@ -1227,7 +1440,7 @@ def send_message_batch(name: str, messages: list) -> dict:
 
     return {
         "success": all_success,
-        "total": len(messages),
+        "total": len(normalized_messages),
         "succeeded": succeeded,
         "failed": failed,
         "results": results,
