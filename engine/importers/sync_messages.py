@@ -92,8 +92,15 @@ def _prepare_message_params(session_id: str, msg: dict) -> tuple:
     reply_to = msg.get("replyToMessageId")
     media_path = msg.get("mediaUrl") or msg.get("mediaPath")
     group_nick = msg.get("groupNickname")
-    # 撤回标记：WCD 返回 isRevoked（或 status==1 表示撤回），写入 DB 为 0/1
-    revoked = 1 if (msg.get("isRevoked") or msg.get("status", 0) == 1) else 0
+    # 撤回检测（双路径）：
+    # 1. WCD isRevoked 字段（实测始终为 false，保留以兼容未来 WCD 修复）
+    # 2. WCD 实际通过 type 10000 系统消息表示撤回，内容含"撤回了一条消息"
+    #    被撤回的原消息不在数据库中，只有这条撤回提示系统消息
+    revoke_content = content or ""
+    is_revoke_sysmsg = (
+        str(msg_type) == "10000" and "撤回了一条消息" in revoke_content
+    )
+    revoked = 1 if (msg.get("isRevoked") or msg.get("status", 0) == 1 or is_revoke_sysmsg) else 0
 
     msg_params = (
         str(server_id),
