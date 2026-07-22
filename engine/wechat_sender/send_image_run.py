@@ -367,7 +367,8 @@ def run_send_image(image_path, do_send=True):
     screen_x, screen_y = client_to_screen(hwnd, client_x, client_y)
     logger.info(f"    发送按钮屏幕坐标: ({screen_x}, {screen_y})")
     physical_click(screen_x, screen_y)
-    time.sleep(1.5)
+    # 等待图片上传完成（图片比文字上传慢，需要更长等待）
+    time.sleep(3.0)
 
     # 10. 截图验证（发送后）
     logger.info("\n[10] 截图验证（发送后）")
@@ -379,19 +380,23 @@ def run_send_image(image_path, do_send=True):
     cv2.imwrite(after_path, after_img)
     logger.info(f"    发送后截图: {after_path}")
 
-    # 11. 图片发送验证：检查发送按钮是否变灰（图片预览消失 = 已发送）
-    # 图片无法用 OCR 文字验证，改用发送按钮颜色变化判断
-    logger.info("\n[11] 图片发送验证（发送按钮颜色变化）")
-    from send_message_run import find_send_button_by_ocr as _find_btn
-    verify_cx, verify_cy, _ = _find_btn(after_img)
-    if verify_cx is None:
-        # 发送按钮变灰（找不到绿色发送按钮）= 图片已发送
-        logger.info("    ✅ 发送按钮已变灰，图片发送成功")
+    # 11. 图片发送验证：对比输入框区域，检查图片预览是否消失
+    # 不用发送按钮颜色判断（模板匹配无论绿色/灰色都能匹配到，无法区分）
+    # 改为对比发送前后的输入框区域，如果差异大说明图片预览消失 = 发送成功
+    logger.info("\n[11] 图片发送验证（输入框清空检测）")
+    h_img = img_after_input.shape[0]
+    # 输入框区域：聊天区域底部 120px
+    input_box_before = img_after_input[h_img - 120:h_img, session_right:]
+    input_box_after = after_img[h_img - 120:h_img, session_right:]
+    diff = cv2.absdiff(input_box_after, input_box_before)
+    mean_diff = float(diff.mean())
+
+    if mean_diff > 5.0:
+        # 输入框区域变化大 = 图片预览消失 = 发送成功
+        logger.info(f"    ✅ 输入框已清空（差异值 {mean_diff:.2f}），图片发送成功")
     else:
-        # 发送按钮仍是绿色 = 可能未发送成功（输入框还有内容）
-        logger.warning("    ⚠️ 发送按钮仍为绿色，可能未发送成功")
-        logger.info("    （可能图片仍在发送中，或发送按钮检测误判）")
-        # 不直接返回 False，给用户人工确认的机会
+        # 输入框区域变化小 = 图片预览仍在 = 可能未发送
+        logger.warning(f"    ⚠️ 输入框未清空（差异值 {mean_diff:.2f}），可能未发送成功")
         return False
 
     logger.info("\n" + "=" * 60)

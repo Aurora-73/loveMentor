@@ -4,13 +4,18 @@
 需要管理员权限（InitializeHook 会注入微信进程）。
 
 流程：
-1. 找到微信 PID
-2. InitializeHook(pid) 注入
-3. PollKeyData() 轮询获取 key（64字符 hex）
-4. CleanupHook() 清理
+1. 检查缓存（account_keys.json / _db_key.tmp），有缓存直接返回（默认）
+2. 找到微信 PID
+3. InitializeHook(pid) 注入
+4. PollKeyData() 轮询获取 key（64字符 hex）
+5. CleanupHook() 清理
+
+⚠️ 防御性编程：默认先检查缓存，避免意外多次 hook 微信导致封号。
+   只有 force_refresh=True 时才强制 hook 微信获取新 key。
 """
 import ctypes
 import ctypes.wintypes as wintypes
+import json
 import os
 import sys
 import time
@@ -19,9 +24,68 @@ import time
 DLL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dll")
 WX_KEY_DLL_PATH = os.path.join(DLL_DIR, "wx_key.dll")
 
+# 项目根目录（用于定位 config.yaml 和 account_keys.json）
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# 本地缓存文件（上次获取后保存的）
+_LOCAL_KEY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_db_key.tmp")
+
 if not os.path.exists(WX_KEY_DLL_PATH):
     print(f"❌ wx_key.dll 不存在: {WX_KEY_DLL_PATH}")
     sys.exit(1)
+
+
+def _read_config_decrypted_db_dir() -> str:
+    """从 data/system/config.yaml 读取 decrypted_db_dir 配置。"""
+    try:
+        import yaml
+        config_file = os.path.join(_PROJECT_ROOT, "data", "system", "config.yaml")
+        if not os.path.exists(config_file):
+            return ""
+        with open(config_file, "r", encoding="utf-8") as f:
+            config = yaml.safe_load(f) or {}
+        return config.get("weflow", {}).get("decrypted_db_dir", "") or ""
+    except Exception:
+        return ""
+
+
+def check_cached_key() -> str | None:
+    """检查是否有已缓存的密钥（不 hook 微信）。
+
+    检查位置（按优先级）：
+    1. WCD 的 account_keys.json（通过 config.yaml 的 decrypted_db_dir 定位）
+    2. 本地的 _db_key.tmp（上次 get_db_key.py 获取后保存的）
+
+    Returns:
+        str: 64 字符 hex key，或 None
+    """
+    # 1. 检查 WCD account_keys.json
+    try:
+        decrypted_db_dir = _read_config_decrypted_db_dir()
+        if decrypted_db_dir:
+            # account_keys.json 位于 decrypted_db_dir 的父目录
+            keys_file = os.path.join(os.path.dirname(decrypted_db_dir.rstrip("/\\")), "account_keys.json")
+            if os.path.exists(keys_file):
+                with open(keys_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    for account, key in data.items():
+                        if isinstance(key, str) and len(key) == 64:
+                            return key
+    except Exception:
+        pass
+
+    # 2. 检查本地 _db_key.tmp
+    try:
+        if os.path.exists(_LOCAL_KEY_FILE):
+            with open(_LOCAL_KEY_FILE, "r") as f:
+                key = f.read().strip()
+            if len(key) == 64:
+                return key
+    except Exception:
+        pass
+
+    return None
 
 
 def find_wechat_pid():
@@ -39,15 +103,32 @@ def find_wechat_pid():
     return candidates
 
 
-def get_db_key(max_wait=60):
+def get_db_key(max_wait=60, force_refresh=False):
     """用 wx_key.dll 获取微信数据库 key。
+
+    ⚠️ 防御性编程：默认先检查缓存，有缓存直接返回，避免意外多次 hook 微信导致封号。
 
     Args:
         max_wait: 最大等待秒数
+        force_refresh: 强制刷新密钥（默认 False）。
+                      ⚠️ 设为 True 会 hook 微信进程，频繁调用可能导致封号，
+                      请仅在密钥失效（如微信升级后 key 变化）时使用。
 
     Returns:
         str: 64 字符 hex key，或 None
     """
+    # 防御性检查：除非 force_refresh=True，否则先检查缓存
+    if not force_refresh:
+        cached_key = check_cached_key()
+        if cached_key:
+            print(f"✅ 已找到缓存的 key（无需 hook 微信）: {cached_key}")
+            print("   如需强制刷新，请使用 force_refresh=True 参数")
+            return cached_key
+        print("ℹ️ 未找到缓存的 key，将 hook 微信获取...")
+    else:
+        print("⚠️ force_refresh=True，将强制 hook 微信获取新 key（注意封号风险）")
+        print("   频繁调用可能导致微信账号异常，请谨慎使用")
+
     print(f"加载 wx_key.dll: {WX_KEY_DLL_PATH}")
 
     # 加载 DLL
@@ -143,6 +224,9 @@ def get_db_key(max_wait=60):
 
 
 if __name__ == "__main__":
+    # 解析命令行参数
+    force_refresh = "--force-refresh" in sys.argv
+
     # 重定向 stdout 到文件（管理员权限运行时无法直接捕获输出）
     output_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_get_key_output.txt")
     original_stdout = sys.stdout
@@ -155,12 +239,17 @@ if __name__ == "__main__":
         except Exception:
             is_admin = False
 
-        if not is_admin:
+        if not is_admin and (force_refresh or not check_cached_key()):
             print("⚠️ 当前不是管理员权限，wx_key.dll 的 InitializeHook 可能失败")
             print("   建议以管理员身份运行 PowerShell 后执行此脚本")
             print()
 
-        key = get_db_key(max_wait=30)
+        if force_refresh:
+            print("⚠️ 命令行参数 --force-refresh 已指定，将强制 hook 微信获取新 key")
+            print("   ⚠️ 注意封号风险，请谨慎使用")
+            print()
+
+        key = get_db_key(max_wait=30, force_refresh=force_refresh)
         if key:
             print(f"\n=== 成功获取数据库 key ===")
             print(f"Key: {key}")
