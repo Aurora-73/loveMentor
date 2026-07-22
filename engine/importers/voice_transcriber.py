@@ -23,6 +23,8 @@ import wave
 from pathlib import Path
 from typing import Optional
 
+from engine.importers.db_init import connect_db
+
 logger = logging.getLogger(__name__)
 
 # ── 默认配置 ──
@@ -108,8 +110,8 @@ class VoiceTranscriber:
                     f"media_0.db 不存在: {self.media_db_path}\n"
                     f"请先运行 WCD 解密（cd _reference/WeChatDataAnalysis && uv run main.py）"
                 )
-            self._db_conn = sqlite3.connect(
-                str(self.media_db_path), check_same_thread=False
+            self._db_conn = connect_db(
+                self.media_db_path, check_same_thread=False
             )
         return self._db_conn
 

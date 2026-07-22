@@ -54,7 +54,7 @@ def live_monitor_start(name: str, poll_interval: int = 10,
         auto_stop_min = auto_stop // 60 if auto_stop > 0 else "永不"
         lines = [
             f"# 实时监听已启动: {person.display_name}\n",
-            f"- 初始消息: {result['initial_messages']} 条",
+            f"- 状态: 初始化中（后台拉取，不阻塞）",
             f"- 轮询间隔: {result['poll_interval']}s",
             f"- 拉取上限: {result['fetch_limit']} 条",
             f"- 自动停止: {auto_stop_min} 分钟无读取自动关闭",
@@ -64,7 +64,8 @@ def live_monitor_start(name: str, poll_interval: int = 10,
         if include_brief and result.get("brief"):
             lines.append(f"\n## 关系快照\n{result['brief']}")
 
-        lines.append(f"\n现在可以用 `live_chat_read('{name}')` 读取最新消息。")
+        lines.append(f"\n初始化在后台进行，请等几秒后用 `live_chat_read('{name}')` 读取。")
+        lines.append(f"用 `live_monitor_status()` 查看初始化进度。")
         lines.append(f"结束时调用 `live_monitor_stop('{name}')` 停止监听。")
         return "\n".join(lines)
     finally:
@@ -106,12 +107,19 @@ def live_monitor_status() -> str:
     for m in monitors:
         last_msg = datetime.fromtimestamp(m["last_msg_ts"]).strftime("%H:%M:%S") if m["last_msg_ts"] else "N/A"
         unread_badge = f" 🔴{m['unread_count']}未读" if m["unread_count"] > 0 else ""
-        lines.append(f"## {m['display_name']}{unread_badge}")
+        init_badge = ""
+        if not m.get("initialized"):
+            init_badge = " ⏳初始化中"
+        elif m.get("init_error"):
+            init_badge = f" ❌初始化失败"
+        lines.append(f"## {m['display_name']}{unread_badge}{init_badge}")
         lines.append(f"- 开始时间: {m['started_at']}")
         lines.append(f"- 最后消息: {last_msg}")
         lines.append(f"- 轮询间隔: {m['poll_interval']}s")
         lines.append(f"- 新增消息: {m['new_msg_count']} 条")
         lines.append(f"- 最后轮询: {m['last_poll_at'] or '尚未轮询'}")
+        if m.get("init_error"):
+            lines.append(f"- ❌ 初始化错误: {m['init_error']}")
         if m["last_error"]:
             lines.append(f"- ⚠️ 最后错误: {m['last_error']}")
         lines.append("")

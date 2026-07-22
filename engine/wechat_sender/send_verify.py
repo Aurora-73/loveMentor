@@ -22,6 +22,8 @@ import sqlite3
 import logging
 from typing import Optional
 
+from engine.importers.db_init import connect_db
+
 logger = logging.getLogger(__name__)
 
 # 项目根目录
@@ -246,8 +248,7 @@ def verify_send_via_sync(
 
         # 查询数据库
         try:
-            conn = sqlite3.connect(_DB_PATH)
-            conn.row_factory = sqlite3.Row
+            conn = connect_db(_DB_PATH)
             try:
                 new_msgs = _query_my_new_messages(conn, contact_wxid, my_wxid, before_ts)
             finally:

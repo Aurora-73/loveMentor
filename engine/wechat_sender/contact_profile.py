@@ -22,6 +22,8 @@
 from dataclasses import dataclass, field
 from typing import Optional
 
+from engine.importers.db_init import connect_db
+
 
 @dataclass
 class ContactProfile:
@@ -165,8 +167,7 @@ def resolve_contact(name: str) -> dict:
             "message": f"联系人数据库不存在: {DB_PATH}",
         }
 
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = connect_db(DB_PATH)
     cur = conn.cursor()
 
     try:

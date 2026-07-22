@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from engine.config import load_config
 from engine.analyzers.metrics import compute_metrics_for_contact
 from engine.analyzers.exclude import parse_labels
+from engine.importers.db_init import connect_db
 
 
 EXCLUDE_LABELS = {"同门", "非攻略对象", "群友"}
@@ -17,8 +18,7 @@ EXCLUDE_LABELS = {"同门", "非攻略对象", "群友"}
 def main():
     config = load_config()
     
-    conn = sqlite3.connect(str(config.db_path))
-    conn.row_factory = sqlite3.Row
+    conn = connect_db(config.db_path)
     
     # 获取所有有消息的联系人
     rows = conn.execute(

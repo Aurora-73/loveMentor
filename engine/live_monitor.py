@@ -75,6 +75,9 @@ class _MonitorState:
         # 待转写消息跟踪：{msg_id: {type, timestamp, sender, content, time_str}}
         # 用于后续轮询时检查转写是否完成，完成则追加更新到缓存
         self.pending_media: dict[str, dict] = {}
+        # 初始化状态（start() 不再同步拉取，改为后台线程初始化）
+        self.initialized: bool = False
+        self.init_error: str = ""
 
     def _is_stale(self) -> bool:
         """检查是否超过自动停止超时未读取。"""
@@ -95,7 +98,10 @@ class LiveMonitorManager:
               fetch_limit: int = DEFAULT_FETCH_LIMIT,
               include_brief: bool = False,
               auto_stop_timeout: int = DEFAULT_AUTO_STOP_TIMEOUT) -> dict:
-        """开始监听联系人。
+        """开始监听联系人（非阻塞，立即返回）。
+
+        初始拉取在后台线程执行，不会阻塞调用方。
+        返回后可用 live_chat_read 读取，初始化期间返回"等待数据"提示。
 
         Args:
             poll_interval: 轮询间隔秒数，默认 10s
@@ -119,13 +125,57 @@ class LiveMonitorManager:
                 auto_stop_timeout=auto_stop_timeout,
             )
 
+            # 写入"初始化中"占位头部，后台线程完成后会覆写
+            cache_path.write_text(
+                f"# 实时监听: {display_name}\n"
+                f"> 状态: 初始化中...\n"
+                f"> 开始时间: {state.started_at}\n\n---\n\n",
+                encoding="utf-8",
+            )
+
+            # 立即注册状态，启动后台线程（初始拉取在后台进行）
+            state.thread = threading.Thread(
+                target=self._init_and_poll,
+                args=(state, config),
+                daemon=True,
+                name=f"live-monitor-{slug}",
+            )
+            state.thread.start()
+
+            self._monitors[name] = state
+
+            result: dict = {
+                "status": "started",
+                "name": name,
+                "display_name": display_name,
+                "initial_messages": 0,
+                "cache_path": str(cache_path),
+                "last_msg_ts": 0,
+                "poll_interval": poll_interval,
+                "fetch_limit": fetch_limit,
+                "message": "初始化中，请稍后用 live_chat_read 读取",
+            }
+
+        # brief 快照在锁外获取（不阻塞 read_cache 等操作）
+        if include_brief:
+            result["brief"] = self._get_brief_snapshot(config, wxid, display_name)
+
+        return result
+
+    def _init_and_poll(self, state: _MonitorState, config: Config):
+        """后台线程入口：初始拉取 + 轮询循环。
+
+        将原来 start() 中的同步初始拉取移到这里，避免阻塞调用方。
+        """
+        try:
+            client = self._build_client(config)
+            state._client = client
+
             # 初始拉取：最近 INITIAL_LOOKBACK_MINUTES 分钟的消息，且至少 MIN_INITIAL_MESSAGES 条
             now = int(time.time())
             since_ts = now - INITIAL_LOOKBACK_MINUTES * 60
-            # 创建客户端一次，后续轮询复用
-            client = self._build_client(config)
-            state._client = client
-            messages = self._fetch_messages(config, wxid, fetch_limit, client=client)
+            messages = self._fetch_messages(config, state.wxid, state.fetch_limit, client=client)
+
             # 先按时间窗口过滤
             time_window_msgs = [m for m in messages if m.get("createTime", 0) >= since_ts]
             # 时间窗口内不足 MIN_INITIAL_MESSAGES 条时，扩展到最近 N 条（按时间升序取末尾）
@@ -136,7 +186,7 @@ class LiveMonitorManager:
                 initial_msgs = time_window_msgs
 
             # 构建引用查找表（从当前批次中查找被引用消息）
-            reply_lookup = self._build_reply_lookup_from_batch(messages, display_name)
+            reply_lookup = self._build_reply_lookup_from_batch(messages, state.display_name)
 
             # 批量查询语音/图片转写文字
             media_msg_ids = [
@@ -146,7 +196,7 @@ class LiveMonitorManager:
             ]
             transcription_lookup = self._batch_query_transcriptions(media_msg_ids)
 
-            # 写入缓存文件
+            # 覆写缓存文件（替换"初始化中"占位）
             self._write_cache_header(state, len(initial_msgs))
             for msg in initial_msgs:
                 self._append_message(
@@ -163,34 +213,25 @@ class LiveMonitorManager:
             # 初始化读取偏移量到文件开头，首次 since_last_read 能读到初始消息
             state.read_offset = 0
             state.last_read_ts = state.last_msg_ts
+            state.initialized = True
 
-            # 启动后台线程
-            state.thread = threading.Thread(
-                target=self._poll_loop,
-                args=(state, config, client),
-                daemon=True,
-                name=f"live-monitor-{slug}",
+            logger.info(
+                f"实时监听 {state.name}: 初始化完成，{len(initial_msgs)} 条消息"
             )
-            state.thread.start()
+        except Exception as e:
+            state.init_error = str(e)
+            state.initialized = True  # 标记为已完成（虽然有错误），避免一直显示"初始化中"
+            state.last_error = str(e)
+            logger.error(f"实时监听 {state.name}: 初始化失败: {e}")
+            # 在缓存文件追加错误提示
+            try:
+                with open(state.cache_path, "a", encoding="utf-8") as f:
+                    f.write(f"\n[初始化失败: {e}]\n")
+            except OSError:
+                pass
 
-            self._monitors[name] = state
-
-            result: dict = {
-                "status": "started",
-                "name": name,
-                "display_name": display_name,
-                "initial_messages": len(initial_msgs),
-                "cache_path": str(cache_path),
-                "last_msg_ts": state.last_msg_ts,
-                "poll_interval": poll_interval,
-                "fetch_limit": fetch_limit,
-            }
-
-            # 可选：附带 brief 快照
-            if include_brief:
-                result["brief"] = self._get_brief_snapshot(config, wxid, display_name)
-
-            return result
+        # 进入轮询循环（即使初始化失败也进入，后续重试可能成功）
+        self._poll_loop(state, config, state._client)
 
     def stop(self, name: str | None = None) -> dict:
         """停止监听。name 为空时停止所有。"""
@@ -226,6 +267,8 @@ class LiveMonitorManager:
                     "name": name,
                     "display_name": state.display_name,
                     "started_at": state.started_at,
+                    "initialized": state.initialized,
+                    "init_error": state.init_error,
                     "last_msg_ts": state.last_msg_ts,
                     "new_msg_count": state.new_msg_count,
                     "unread_count": state.unread_count,
@@ -255,6 +298,12 @@ class LiveMonitorManager:
 
         # 更新心跳
         state.last_heartbeat = time.time()
+
+        # 初始化未完成时返回提示（不阻塞，后台线程仍在工作）
+        if not state.initialized:
+            if state.init_error:
+                return f"初始化失败: {state.init_error}\n（后台线程仍在重试中）"
+            return "初始化中，请稍后再读..."
 
         # 增量读取模式
         if since_last_read:

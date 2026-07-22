@@ -13,6 +13,7 @@ from engine.config import load_config, DB_PATH
 from engine.analyzers.metrics import compute_metrics_for_contact
 from engine.analyzers.exclude import filter_contacts, parse_labels
 from engine.analyzers.metrics import get_all_contacts_with_messages
+from engine.importers.db_init import connect_db
 
 
 EXCLUDE_LABELS = {"同门", "非攻略对象", "群友"}
@@ -22,8 +23,7 @@ def main():
     config = load_config()
     my_wxid = config.my_wxid
     
-    conn = sqlite3.connect(str(config.db_path))
-    conn.row_factory = sqlite3.Row
+    conn = connect_db(config.db_path)
     
     contacts = get_all_contacts_with_messages(conn, min_messages=30)
     print(f"总联系人（≥30条消息）: {len(contacts)}")

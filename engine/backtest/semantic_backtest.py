@@ -26,6 +26,7 @@ from engine.analyzers.semantic import (
     _compute_friendship_signal, _compute_conversation_depth,
     LABELS,
 )
+from engine.importers.db_init import connect_db
 
 
 # 案例定义：wxid, 姓名, 结果, 分析起始, 分析结束, 备注
@@ -144,8 +145,7 @@ def analyze_case(conn, config, wxid, name, start_dt, end_dt):
 
 def main():
     config = load_config()
-    conn = sqlite3.connect(str(config.db_path))
-    conn.row_factory = sqlite3.Row
+    conn = connect_db(config.db_path)
 
     print("=" * 160)
     print("语义回测：B0' / B2 双模型三趟对比验证")

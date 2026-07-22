@@ -29,6 +29,8 @@ import threading
 from pathlib import Path
 from typing import Literal, Optional
 
+from engine.importers.db_init import connect_db
+
 logger = logging.getLogger(__name__)
 
 TranscribeMode = Literal["async", "sync", "off"]
@@ -111,7 +113,7 @@ class AsyncTranscriber:
         """
         # 查询未转写的语音/图片消息
         try:
-            db = sqlite3.connect(str(db_path))
+            db = connect_db(db_path)
             try:
                 cursor = db.execute(
                     """
@@ -206,7 +208,7 @@ class AsyncTranscriber:
         voice_ids = [mid for mid, mt in zip(msg_ids, msg_types) if mt == 34]
         image_ids = [mid for mid, mt in zip(msg_ids, msg_types) if mt == 3]
 
-        db = sqlite3.connect(str(db_path))
+        db = connect_db(db_path)
         try:
             if voice_ids:
                 self._transcribe_voices(db, voice_ids, decrypted_db_dir, my_wxid)
@@ -466,7 +468,7 @@ def _sync_transcribe(
             )
             media_db_path = find_media_db_path(decrypted_db_dir, config.my_wxid)
             if media_db_path:
-                db = sqlite3.connect(str(db_path))
+                db = connect_db(db_path)
                 try:
                     transcriber = VoiceTranscriber(
                         media_db_path=media_db_path,
@@ -499,7 +501,7 @@ def _sync_transcribe(
             )
             transcriber = create_transcriber_from_config(config)
             if transcriber:
-                db = sqlite3.connect(str(db_path))
+                db = connect_db(db_path)
                 try:
                     image_success, image_failed = transcribe_image_messages(
                         db, transcriber,

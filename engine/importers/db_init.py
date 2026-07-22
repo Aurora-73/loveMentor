@@ -210,6 +210,7 @@ def init_db(db_path: str | Path) -> sqlite3.Connection:
 
     conn = sqlite3.connect(str(db_path))
     conn.executescript(SCHEMA_SQL)
+    conn.execute("PRAGMA busy_timeout = 5000")  # 5s 等待锁，避免偶发 "database is locked"
     conn.row_factory = sqlite3.Row
     _migrate(conn)
     return conn
@@ -378,6 +379,32 @@ def get_db(db_path: str | Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path))
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA busy_timeout = 5000")  # 5s 等待锁，避免偶发 "database is locked"
     conn.row_factory = sqlite3.Row
     _migrate(conn)
+    return conn
+
+
+def connect_db(db_path: str | Path, *, readonly: bool = False, **kwargs) -> sqlite3.Connection:
+    """连接数据库（统一 busy_timeout + row_factory，不执行迁移）。
+
+    用于替代直接 sqlite3.connect()，确保所有连接都有 busy_timeout。
+    与 get_db()/init_db() 的区别：不执行 _migrate()，适合非同步场景
+    （backtest、wechat_sender、transcriber 等）。
+
+    Args:
+        db_path: 数据库路径
+        readonly: True 时以只读模式打开（URI 格式，不创建文件）
+        **kwargs: 传递给 sqlite3.connect 的额外参数（如 check_same_thread=False）
+
+    Returns:
+        sqlite3.Connection（busy_timeout=5s, row_factory=Row）
+    """
+    if readonly:
+        path = Path(db_path).resolve()
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, **kwargs)
+    else:
+        conn = sqlite3.connect(str(db_path), **kwargs)
+    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.row_factory = sqlite3.Row
     return conn

@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from engine.config import load_config
 from engine.analyzers.metrics import compute_metrics_for_contact
 from engine.backtest.load_cases import get_ts_cases
+from engine.importers.db_init import connect_db
 
 
 TS_CASES = get_ts_cases()
@@ -40,8 +41,7 @@ def linear_slope(points):
 
 def main():
     config = load_config()
-    conn = sqlite3.connect(str(config.db_path))
-    conn.row_factory = sqlite3.Row
+    conn = connect_db(config.db_path)
 
     print("=" * 130)
     print("时间序列趋势分析：composite 曲线斜率 vs 最终结果")

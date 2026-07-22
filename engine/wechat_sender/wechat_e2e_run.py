@@ -954,8 +954,9 @@ def send_message_with_retry(name: str, message: str,
                     )
                     # 更新数据库
                     import sqlite3
+                    from engine.importers.db_init import connect_db
                     DB_PATH = os.path.join(_PROJECT_ROOT, "data", "raw", "core.db")
-                    conn = sqlite3.connect(DB_PATH)
+                    conn = connect_db(DB_PATH)
                     try:
                         conn.execute(
                             "UPDATE contacts SET display_name = ?, nickname = ?, updated_at = strftime('%s','now') WHERE id = ?",

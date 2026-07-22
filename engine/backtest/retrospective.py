@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from engine.config import load_config
 from engine.analyzers.metrics import compute_metrics_for_contact
 from engine.backtest.load_cases import get_retro_cases
+from engine.importers.db_init import connect_db
 
 
 RETRO_CASES = get_retro_cases()
@@ -47,8 +48,7 @@ def find_peak_date(conn, contact_wxid, window_days=30):
 
 def main():
     config = load_config()
-    conn = sqlite3.connect(str(config.db_path))
-    conn.row_factory = sqlite3.Row
+    conn = connect_db(config.db_path)
 
     print("=" * 170)
     print("时间点回溯分析：验证'在一起前'的指标预测能力")

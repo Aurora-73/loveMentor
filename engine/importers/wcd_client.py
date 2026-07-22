@@ -17,6 +17,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from engine.importers.db_init import connect_db
+
 logger = logging.getLogger(__name__)
 
 
@@ -58,10 +60,12 @@ def is_wechat_running() -> bool:
 class WCDClient:
 
     def __init__(self, base_url: str, token: str = "", timeout: int = 30,
-                 decrypted_db_dir: str | None = None):
+                 decrypted_db_dir: str | None = None,
+                 decrypt_timeout: int = 120):
         self.base_url = base_url.rstrip("/")
         self.token = token
         self.timeout = timeout
+        self._decrypt_timeout = decrypt_timeout  # 解密操作单独的超时（可能需要几分钟）
         self._decrypted_db_dir = Path(decrypted_db_dir) if decrypted_db_dir else None
         self._label_cache: dict[str, list[str]] | None = None
 
@@ -103,8 +107,12 @@ class WCDClient:
         except urllib.error.URLError as e:
             raise WCDError(f"连接 WCD API 失败: {e.reason}") from e
 
-    def _post(self, path: str, data: dict | None = None) -> dict:
-        """POST 请求（用于 /api/decrypt 等）。"""
+    def _post(self, path: str, data: dict | None = None, timeout: int | None = None) -> dict:
+        """POST 请求（用于 /api/decrypt 等）。
+
+        Args:
+            timeout: 单次请求超时秒数，None 时使用 self._decrypt_timeout
+        """
         url = f"{self.base_url}{path}"
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if self.token:
@@ -113,7 +121,7 @@ class WCDClient:
         body = json.dumps(data).encode("utf-8") if data else b""
         req = urllib.request.Request(url, data=body, headers=headers, method="POST")
         try:
-            with urllib.request.urlopen(req, timeout=120) as resp:
+            with urllib.request.urlopen(req, timeout=timeout or self._decrypt_timeout) as resp:
                 raw = resp.read().decode("utf-8")
                 return json.loads(raw) if raw else {}
         except urllib.error.HTTPError as e:
@@ -697,8 +705,7 @@ def _read_label_name_map(contact_db_path: Path) -> dict[int, str]:
     """从 contact_label 表读取 {label_id → label_name} 映射。"""
     label_map: dict[int, str] = {}
     try:
-        conn = sqlite3.connect(str(contact_db_path))
-        conn.row_factory = sqlite3.Row
+        conn = connect_db(contact_db_path)
         # 检查 contact_label 表是否存在
         table_check = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='contact_label'"
@@ -821,8 +828,7 @@ def _read_contact_labels(decrypted_db_dir: Path) -> dict[str, list[str]]:
 
     result: dict[str, list[str]] = {}
     try:
-        conn = sqlite3.connect(str(contact_db))
-        conn.row_factory = sqlite3.Row
+        conn = connect_db(contact_db)
         rows = conn.execute("SELECT username, extra_buffer FROM contact").fetchall()
         for row in rows:
             username = str(row[0] or "").strip()
