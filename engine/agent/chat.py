@@ -107,6 +107,10 @@ def _parse_appmsg_xml(content: str) -> str:
     if appmsg_type in ("2000", "2001"):
         return _parse_pay_info(appmsg, appmsg_type)
 
+    # 引用消息 (type 57)：title 是被引用消息的内容摘要
+    if appmsg_type == "57":
+        return f"[引用] {title}" if title else "[引用]"
+
     # appmsg type: 5=链接 33=小程序 36=小程序 57=引用 51=视频号 19=合并转发 6=文件
     type_label = ""
     if appmsg_type == "33" or appmsg_type == "36":
@@ -275,6 +279,57 @@ def _parse_emoji_xml(content: str) -> str:
     return "[表情]"
 
 
+def _parse_voice_length(raw_content: str) -> int:
+    """解析 type 34 语音消息 XML，提取语音时长（秒）。
+
+    格式：<msg><voicemsg voicelength="9760" voiceformat="4" .../></msg>
+
+    voicelength 单位是毫秒，返回时转为秒（四舍五入）。
+    WCD 返回的 rawContent 可能被截断（XML 不完整），所以除了 ET 解析外还有正则 fallback。
+    """
+    if not raw_content:
+        return 0
+    # 跳过群消息 wxid 前缀
+    stripped = raw_content.lstrip()
+    if not stripped.startswith("<"):
+        lt_idx = raw_content.find("<")
+        if lt_idx > 0:
+            raw_content = raw_content[lt_idx:]
+        else:
+            return 0
+    # 尝试 ET 解析
+    try:
+        root = ET.fromstring(raw_content)
+        voicemsg = root.find(".//voicemsg")
+        if voicemsg is None and root.tag == "voicemsg":
+            voicemsg = root
+        if voicemsg is not None:
+            vl = voicemsg.get("voicelength")
+            if vl:
+                try:
+                    return round(int(vl) / 1000)  # 毫秒 → 秒
+                except ValueError:
+                    pass
+    except ET.ParseError:
+        pass
+    # 正则 fallback（XML 不完整时）
+    m = re.search(r'voicelength="(\d+)"', raw_content)
+    if m:
+        try:
+            return round(int(m.group(1)) / 1000)  # 毫秒 → 秒
+        except ValueError:
+            pass
+    return 0
+
+
+def _format_voice_length(seconds: int) -> str:
+    """格式化语音时长：15 -> 15", 65 -> 1'5", 3600 -> 60'0" """
+    if seconds < 60:
+        return f'{seconds}"'
+    minutes, secs = divmod(seconds, 60)
+    return f"{minutes}'{secs}\""
+
+
 def _parse_contact_card_xml(content: str) -> str:
     """解析 type 42 名片消息 XML。"""
     if not content or not content.lstrip().startswith("<"):
@@ -352,7 +407,7 @@ def extract_display_content(
     策略：
     - 文本消息(type 1)：原样返回
     - 图片(type 3)：有 image_text 用 image_text，否则 "[图片]"
-    - 语音(type 34)：有 voice_text 用 voice_text，否则 "[语音]"
+    - 语音(type 34)：解析 voicelen 显示时长，有 voice_text 附加 (时长)
     - 表情贴纸(type 47)："[表情]"
     - 名片(type 42)：解析 XML 提取昵称 → "[名片] 昵称"
     - 视频(type 43)："[视频]"
@@ -385,10 +440,16 @@ def extract_display_content(
             return image_text  # 已带 [图片描述] 前缀
         return "[图片]"
 
-    # type 34: 语音消息
+    # type 34: 语音消息（解析 voicelen 显示时长）
     if base == 34:
+        voice_len = _parse_voice_length(raw_content)
+        len_str = _format_voice_length(voice_len) if voice_len else ""
         if voice_text and voice_text != "__FAILED__":
+            if len_str:
+                return f"{voice_text} ({len_str})"
             return voice_text  # 已带 [语音转文字] 前缀
+        if len_str:
+            return f"[语音 {len_str}]"
         return "[语音]"
 
     # type 47: 表情贴纸
