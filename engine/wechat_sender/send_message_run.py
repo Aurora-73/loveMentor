@@ -262,9 +262,37 @@ def run_send_message(message, do_send=True):
     logger.info(f"\n[6] 输入消息: {message!r}")
 
     if len(message) <= MAX_MSG_LENGTH:
-        # 短消息：一次性输入+发送
-        input_text_via_clipboard(hwnd, message)
-        time.sleep(0.8)
+        # 短消息：一次性输入+发送（带粘贴验证重试）
+        # 剪贴板粘贴后文本可能未完全渲染到输入框，通过对比输入框区域差异验证
+        max_paste_retries = 2
+        img_after_input = None
+        for paste_attempt in range(max_paste_retries + 1):
+            input_text_via_clipboard(hwnd, message)
+            time.sleep(0.8 if paste_attempt == 0 else 1.2)
+
+            # 7. 重新截图（此时发送按钮应变绿）
+            logger.info("\n[7] 重新截图（发送按钮应变绿）")
+            img_after_input = capture_screenshot(hwnd, "stage_3_after_input.png")
+            if img_after_input is None:
+                return False
+
+            # 粘贴验证：对比输入框区域（before vs after）
+            # 阈值 1.5：短文本（8-10 字）差异约 2-3，长文本差异 9+，真正失败差异 <0.5
+            h_img = img.shape[0]
+            input_box_before = img[h_img - 120:h_img, session_right:]
+            input_box_after = img_after_input[h_img - 120:h_img, session_right:]
+            paste_diff = cv2.absdiff(input_box_after, input_box_before)
+            paste_mean = float(paste_diff.mean())
+
+            if paste_mean > 1.5:
+                logger.info(f"    ✅ 粘贴验证通过（输入框差异值 {paste_mean:.2f}）")
+                break
+
+            if paste_attempt < max_paste_retries:
+                logger.warning(f"    ⚠️ 粘贴可能失败（差异值 {paste_mean:.2f} < 1.5），重试第 {paste_attempt + 2}/{max_paste_retries + 1} 次...")
+                click_input_box(hwnd, img, session_right)
+            else:
+                logger.warning(f"    ⚠️ 粘贴验证未通过（差异值 {paste_mean:.2f}），已达最大重试，继续尝试发送...")
     else:
         # 长消息：分段输入+发送
         logger.info(f"    消息较长（{len(message)} 字符），分 {(len(message) + MAX_MSG_LENGTH - 1) // MAX_MSG_LENGTH} 段发送")
@@ -299,9 +327,8 @@ def run_send_message(message, do_send=True):
         logger.info("=" * 60)
         return True
 
-    # 7. 重新截图（此时发送按钮应变绿）
-    logger.info("\n[7] 重新截图（发送按钮应变绿）")
-    img_after_input = capture_screenshot(hwnd, "stage_3_after_input.png")
+    # img_after_input 已在短消息粘贴验证循环中设置
+    # （长消息在分段发送中已 return True，不会执行到这里）
     if img_after_input is None:
         return False
 
