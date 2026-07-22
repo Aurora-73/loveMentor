@@ -129,12 +129,86 @@ class WCDClient:
     # ── 解密节流 ──
     _DECRYPT_MARKER = ".last_decrypt"
     _DECRYPT_INTERVAL = 1800  # 30 分钟内不重复解密
+    # 方向C：mtime 防抖最小间隔（避免微信持续运行时每秒解密）
+    _DECRYPT_MIN_INTERVAL = 300  # 5 分钟防抖
+
+    def _read_last_decrypt_ts(self) -> int:
+        """读取上次解密时间戳。返回 0 表示未解密过或标记损坏。"""
+        marker_file = self._decrypted_db_dir.parent / self._DECRYPT_MARKER
+        if not marker_file.is_file():
+            return 0
+        try:
+            return int(marker_file.read_text(encoding="utf-8").strip())
+        except (ValueError, OSError):
+            return 0
+
+    def _get_db_storage_path(self) -> str:
+        """从 account_keys.json 读取 db_storage 路径。"""
+        keys_file = self._decrypted_db_dir.parent / "account_keys.json"
+        if not keys_file.is_file():
+            return ""
+        try:
+            data = json.loads(keys_file.read_text(encoding="utf-8"))
+            if not data or not isinstance(data, dict):
+                return ""
+            account = list(data.values())[0]
+            return str(account.get("db_key_source_db_storage_path", "") or "")
+        except Exception:
+            return ""
+
+    def _check_db_storage_changed(self, last_decrypt_ts: int) -> tuple[bool, str]:
+        """方向C：基于 db_storage mtime 判断是否需要解密。
+
+        对比上次解密时间与 db_storage 中 .db 文件最新 mtime：
+        - mtime > last_decrypt_ts → 有新数据，需要解密
+        - mtime <= last_decrypt_ts → 无新数据，可跳过
+
+        Args:
+            last_decrypt_ts: 上次解密的 Unix 时间戳
+
+        Returns:
+            (need_decrypt, reason): 是否需要解密, 原因说明
+        """
+        db_storage_path = self._get_db_storage_path()
+        if not db_storage_path or not os.path.isdir(db_storage_path):
+            # 路径不可用，保守返回需要解密
+            return True, "db_storage 路径不可用，保守触发解密"
+
+        # 扫描 db_storage 下所有 .db 文件，找最新 mtime
+        latest_mtime = 0
+        latest_db = ""
+        try:
+            for root, _dirs, files in os.walk(db_storage_path):
+                for f in files:
+                    if f.endswith(".db"):
+                        db_file = os.path.join(root, f)
+                        try:
+                            mtime = int(os.path.getmtime(db_file))
+                            if mtime > latest_mtime:
+                                latest_mtime = mtime
+                                latest_db = f
+                        except OSError:
+                            pass
+        except Exception as e:
+            logger.debug(f"扫描 db_storage mtime 失败: {e}")
+            return True, f"扫描失败: {e}"
+
+        if latest_mtime == 0:
+            return True, "未找到 .db 文件"
+
+        if latest_mtime > last_decrypt_ts:
+            return True, f"检测到新数据（{latest_db} mtime={latest_mtime} > 上次解密 {last_decrypt_ts}）"
+        return False, f"数据库无变化（最新 mtime={latest_mtime} <= 上次解密 {last_decrypt_ts}）"
 
     def decrypt_databases(self, *, force: bool = False) -> dict:
         """用缓存密钥重新解密微信数据库（不重启微信，不重新获取密钥）。
 
         同步流程中自动调用，确保 WCD 数据库快照与微信最新数据同步。
         密钥从 account_keys.json 读取，无需用户交互。
+
+        方向C 优化：基于 db_storage mtime 智能节流（替代固定 30 分钟）：
+        - 5 分钟防抖（避免微信持续运行时频繁解密）
+        - mtime 未变化则跳过（无新数据时不浪费解密开销）
 
         Args:
             force: 为 True 时跳过节流检查，强制解密。
@@ -148,20 +222,24 @@ class WCDClient:
             logger.info(f"密钥文件不存在: {keys_file}，跳过数据库解密")
             return {"status": "skipped", "reason": f"文件不存在: {keys_file}"}
 
-        # 节流检查：最近解密过则跳过
+        # 节流检查（方向C：mtime 智能节流 + 防抖）
         if not force:
-            marker_file = self._decrypted_db_dir.parent / self._DECRYPT_MARKER
-            if marker_file.is_file():
-                try:
-                    last_ts = int(marker_file.read_text(encoding="utf-8").strip())
-                    elapsed = int(time.time()) - last_ts
-                    if 0 <= elapsed < self._DECRYPT_INTERVAL:
-                        logger.info(
-                            f"数据库解密跳过（{elapsed}s 前刚解密过，阈值 {self._DECRYPT_INTERVAL}s）"
-                        )
-                        return {"status": "fresh", "reason": f"已是最新（{elapsed}s 前解密）"}
-                except (ValueError, OSError):
-                    pass  # 标记文件损坏，继续解密
+            last_ts = self._read_last_decrypt_ts()
+            elapsed = int(time.time()) - last_ts if last_ts > 0 else 999999
+
+            # 防抖：5 分钟内不重复解密（即使有新数据）
+            if 0 <= elapsed < self._DECRYPT_MIN_INTERVAL:
+                logger.info(
+                    f"数据库解密跳过（{elapsed}s 前刚解密过，防抖阈值 {self._DECRYPT_MIN_INTERVAL}s）"
+                )
+                return {"status": "fresh", "reason": f"防抖中（{elapsed}s 前解密）"}
+
+            # mtime 检查：无新数据则跳过（替代原固定 30 分钟节流）
+            if last_ts > 0:
+                need_decrypt, reason = self._check_db_storage_changed(last_ts)
+                if not need_decrypt:
+                    logger.info(f"数据库解密跳过: {reason}")
+                    return {"status": "fresh", "reason": reason}
 
         try:
             data = json.loads(keys_file.read_text(encoding="utf-8"))
