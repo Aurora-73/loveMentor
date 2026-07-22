@@ -1032,6 +1032,28 @@ def send_emoji_with_retry(name: str, emoji_keyword: str) -> dict:
                                     stage3_func=run_send_emoji)
 
 
+def send_image_with_retry(name: str, image_path: str) -> dict:
+    """发送图片完整业务编排（v4 第十六章多媒体发送能力）。
+
+    复用 send_message_with_retry 的全部业务逻辑（联系人解析、头像获取、
+    窗口检查等），仅通过 stage3_func 参数切换阶段三为图片发送流程。
+
+    技术方案（v4 16.2 节）：复用文本发送的剪贴板机制，把剪贴板内容从文字换成图片。
+    流程：点击输入框 → 剪贴板放图片 → Ctrl+V → 微信显示预览 → 点击发送
+
+    Args:
+        name: 联系人标识符（微信号/wxid/昵称/备注名 均可）
+        image_path: 图片文件路径（支持 jpg/jpeg/png/bmp/gif/webp/tiff）
+
+    Returns:
+        dict: 与 send_message_with_retry 相同的结构
+    """
+    # 延迟导入，避免模块加载时循环依赖
+    from send_image_run import run_send_image
+    return send_message_with_retry(name, image_path,
+                                    stage3_func=run_send_image)
+
+
 def main():
     if len(sys.argv) < 3:
         logger.info("用法: python E:\\Code\\loveMentor\\send_message\\wechat_e2e_run.py <联系人名> \"<消息内容>\"")

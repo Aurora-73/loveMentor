@@ -412,6 +412,13 @@ tools:
       - conversation_thread
     description: "【v4 覆盖学习】record 记录用户手动回复差异 / mark_applied 标记已应用。学习候选需 Agent 审核"
 
+  wechat_send_image:
+    skill_ref: workflows/auto_reply.md
+    next_step:
+      - wechat_ocr
+      - effect_tracking
+    description: "【v4 图片发送】复用剪贴板机制发送图片。含三重硬约束（线索已读+冷却+互斥锁）。支持 jpg/png/bmp/gif/webp/tiff"
+
   live_monitor_status:
     skill_ref: mcp-tools.md
     next_step:

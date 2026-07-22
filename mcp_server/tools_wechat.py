@@ -488,3 +488,134 @@ def wechat_send_emoji(name: str, emoji_keyword: str) -> dict:
             _wechat_op_lock.release()
 
     return with_recording(name, _impl)
+
+
+def wechat_send_image(name: str, image_path: str, urgent: bool = False) -> dict:
+    """向微信联系人自动发送图片（v4 第十六章多媒体发送能力 + 三重硬约束）。
+
+    技术方案（v4 16.2 节）：复用文本发送的剪贴板机制，把剪贴板内容从文字换成图片。
+    流程：
+    1. 解析联系人 → 微信号搜索 + 头像定位（与 wechat_send 相同）
+    2. 搜索联系人 + 点击头像进入聊天界面（阶段一/二与 wechat_send 相同）
+    3. 阶段三：点击输入框 → 剪贴板放图片 → Ctrl+V → 微信显示预览 → 点击发送
+
+    与 wechat_send 的区别：
+    - 阶段一/二完全相同（搜索联系人 + 点击头像 + 验证）
+    - 阶段三不同：不输入文字，而是通过剪贴板粘贴图片
+    - 图片预览加载比文字慢，等待时间更长（1.5s vs 0.8s）
+    - 验证方式不同：用发送按钮颜色变化判断（无法用 OCR 文字验证）
+
+    支持的图片格式：jpg/jpeg/png/bmp/gif/webp/tiff
+
+    v4 三重硬约束（与 wechat_send 相同）：
+    1. 线索已读校验：未读取最新消息时拒绝发送
+    2. 回复冷却校验：urgent=True 可绕过
+    3. 互斥锁校验：视觉自动化串行
+
+    Args:
+        name: 微信联系人标识符（微信号 / wxid / 昵称 / 备注名 均可）
+        image_path: 图片文件路径（支持 jpg/jpeg/png/bmp/gif/webp/tiff）
+        urgent: 紧急模式（True 时绕过回复冷却校验，但仍然校验线索已读）。
+
+    Returns:
+        dict: {
+            "success": bool,
+            "message": str,
+            "contact": str,
+            "search_term": str,
+            "template": str,
+            "attempts": int,
+            "error": str|None,
+            "window_restored": bool,
+            "matches": list|None,
+            "recording_path": str|None,
+            "hard_constraints": dict,  # 三重硬约束校验结果
+        }
+    """
+    import os as _os
+    from engine.wechat_sender.wechat_recorder import with_recording
+    from engine.wechat_sender.wechat_e2e_run import send_image_with_retry
+
+    # 前置检查：图片文件
+    if not image_path or not _os.path.exists(image_path):
+        return {
+            "success": False,
+            "error": "IMAGE_NOT_FOUND",
+            "message": f"图片文件不存在: {image_path}",
+            "contact": name,
+            "search_term": name,
+            "template": "",
+            "attempts": 0,
+            "window_restored": False,
+            "matches": None,
+            "recording_path": None,
+            "hard_constraints": {
+                "thread_read": "skipped",
+                "cooldown": "skipped",
+                "mutex": "skipped",
+                "urgent": urgent,
+            },
+        }
+
+    # v4 硬约束 1：校验线索已读
+    thread_check = _check_thread_read(name)
+    if not thread_check["passed"]:
+        return {
+            "success": False,
+            "error": "THREAD_NOT_CAUGHT_UP",
+            "message": f"线索未读取最新消息：{thread_check['reason']}",
+            "suggestion": thread_check.get("suggestion", ""),
+            "unprocessed_count": thread_check.get("unprocessed_count", 0),
+            "hard_constraints": {
+                "thread_read": "failed",
+                "cooldown": "skipped",
+                "mutex": "skipped",
+                "urgent": urgent,
+            },
+        }
+
+    # v4 硬约束 2：回复冷却校验
+    stage = _get_person_stage_num(name)
+    cooldown_check = _check_cooldown(name, urgent=urgent, stage=stage)
+    if not cooldown_check["passed"]:
+        return {
+            "success": False,
+            "error": "COOLDOWN_ACTIVE",
+            "message": cooldown_check["reason"],
+            "wait_seconds": cooldown_check.get("wait_seconds", 0),
+            "cooldown_seconds": cooldown_check.get("cooldown_seconds", 0),
+            "elapsed_seconds": cooldown_check.get("elapsed_seconds", 0),
+            "stage": stage,
+            "suggestion": "等待冷却结束后重试，或使用 urgent=True 绕过（仅紧急情况）",
+            "hard_constraints": {
+                "thread_read": "passed",
+                "cooldown": "failed",
+                "mutex": "skipped",
+                "stage": stage,
+                "urgent": urgent,
+            },
+        }
+
+    # v4 硬约束 3：互斥锁 + 正常发送流程
+    def _impl():
+        _wechat_op_lock.acquire()
+        try:
+            return send_image_with_retry(name, image_path)
+        finally:
+            _wechat_op_lock.release()
+
+    result = with_recording(name, _impl)
+
+    # 发送成功后更新 last_send_time
+    if result.get("success"):
+        _update_send_time(name)
+
+    result["hard_constraints"] = {
+        "thread_read": "passed",
+        "cooldown": "bypassed" if urgent else "passed",
+        "mutex": "passed",
+        "stage": stage,
+        "urgent": urgent,
+    }
+
+    return result

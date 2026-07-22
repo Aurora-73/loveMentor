@@ -536,6 +536,22 @@ mcp.tool(
 )(tools_wechat.wechat_send_emoji)
 
 mcp.tool(
+    name="wechat_send_image",
+    description="【微信自动发图片 v4】向微信联系人自动发送图片（通过剪贴板粘贴机制操作微信 PC 客户端）。"
+               "⚠️ 会抢鼠标：执行期间会移动鼠标并占用键鼠，调用前 Agent 应当口头提醒用户"
+               "'即将发送微信图片，执行期间请勿操作鼠标键盘'（不需要阻塞等待确认，说出来即可）。"
+               "前置条件：微信已运行并登录，联系人头像模板已存放在 data/avatars/<wxid>.jpg。"
+               "参数：name（联系人标识符：微信号/wxid/昵称/备注名 均可），image_path（图片文件路径，"
+               "支持 jpg/jpeg/png/bmp/gif/webp/tiff），urgent（紧急模式，True 时绕过回复冷却校验）。"
+               "流程：解析联系人→搜索微信号→点击头像进入聊天→点击输入框→剪贴板放图片→Ctrl+V 粘贴→"
+               "微信显示图片预览→点击发送按钮。"
+               "v4 三重硬约束：1.线索已读校验 2.回复冷却校验（urgent 可绕过）3.互斥锁校验。"
+               "与 wechat_send 的区别：阶段一/二相同，阶段三用剪贴板粘贴图片替代输入文字，"
+               "图片预览加载比文字慢（等待 1.5s），验证用发送按钮颜色变化判断（无法用 OCR 文字验证）。"
+               "示例：wechat_send_image('[REDACTED]', 'C:\\\\Users\\\\test\\\\photo.jpg') → 发送 photo.jpg 给 [REDACTED]",
+)(tools_wechat.wechat_send_image)
+
+mcp.tool(
     name="wechat_ocr",
     description="【微信截图OCR】截图微信窗口并进行 OCR 文字识别，返回带位置信息的文字列表。"
                "适用于：读取聊天界面文字、提取联系人信息、识别界面元素等场景。"
