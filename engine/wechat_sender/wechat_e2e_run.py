@@ -1054,6 +1054,188 @@ def send_image_with_retry(name: str, image_path: str) -> dict:
                                     stage3_func=run_send_image)
 
 
+def send_message_batch(name: str, messages: list) -> dict:
+    """连续发送多条消息的业务编排（v4 连续发送能力）。
+
+    第一条消息走完整流程（搜索+点击头像+发送），
+    后续消息跳过搜索，直接在当前聊天界面发送，
+    每次发送前校验聊天框左上角显示名。
+    校验失败则回退到完整流程（重新搜索联系人）。
+
+    适用场景：分段发送长文本、连续发送多条独立消息。
+
+    Args:
+        name: 联系人标识符（微信号/wxid/昵称/备注名 均可）
+        messages: 要发送的消息列表（每条独立发送）
+
+    Returns:
+        dict: {
+            "success": bool,       # 全部成功=True，任一失败=False
+            "total": int,          # 总消息数
+            "succeeded": int,      # 成功数
+            "failed": int,         # 失败数
+            "results": list[dict], # 每条消息的结果
+            "contact": str,
+            "error": str|None,
+        }
+    """
+    import time
+    from engine.wechat_sender.contact_profile import (
+        resolve_contact, ContactProfile
+    )
+
+    if not messages:
+        return {
+            "success": False,
+            "total": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "results": [],
+            "contact": name,
+            "error": "消息列表为空",
+        }
+
+    logger.info("=" * 60)
+    logger.info(f"  连续发送多条消息: {name!r}，共 {len(messages)} 条")
+    logger.info("=" * 60)
+
+    results = []
+    succeeded = 0
+    failed = 0
+    contact_display_name = name
+
+    # ── 预解析联系人，用于后续 display_name 校验 ──
+    # 第一条消息会走 send_message_with_retry（内部也会解析），这里预解析是为了
+    # 后续消息能构建 ContactProfile 做校验
+    pre_resolution = None
+    try:
+        pre_resolution = resolve_contact(name)
+        if pre_resolution.get("success"):
+            contact_display_name = pre_resolution.get("display_name") or name
+    except Exception as e:
+        logger.warning(f"预解析联系人失败: {e}，后续消息校验可能回退到完整流程")
+
+    # ── 发送第一条消息（走完整流程） ──
+    logger.info(f"\n[1/{len(messages)}] 第一条消息（完整流程）: {messages[0]!r}")
+    first_result = send_message_with_retry(name, messages[0])
+    results.append({
+        "index": 0,
+        "message": messages[0],
+        "success": first_result.get("success", False),
+        "error": first_result.get("error"),
+        "mode": "full_flow",
+    })
+    if first_result.get("success"):
+        succeeded += 1
+        logger.info(f"   ✅ 第一条消息发送成功")
+    else:
+        failed += 1
+        logger.warning(f"   ❌ 第一条消息发送失败: {first_result.get('error')}")
+        # 第一条失败，后续消息仍尝试发送（可能第一条是网络问题，后续能成功）
+
+    # ── 发送后续消息（跳过搜索，校验后直接发送） ──
+    for i in range(1, len(messages)):
+        msg = messages[i]
+        logger.info(f"\n[{i+1}/{len(messages)}] 后续消息: {msg!r}")
+
+        # 消息间间隔（模拟人工操作，避免发送过快）
+        time.sleep(2.0)
+
+        # 校验聊天框左上角显示名
+        verify_passed = False
+        if pre_resolution and pre_resolution.get("success"):
+            try:
+                # 构建 ContactProfile 用于校验
+                avatars_dir = os.path.join(_PROJECT_ROOT, "data", "avatars")
+                wxid = pre_resolution.get("id", "")
+                template_path = os.path.join(avatars_dir, f"{wxid}.jpg") if wxid else ""
+                contact_profile = ContactProfile.from_resolution(
+                    pre_resolution, avatar_path=template_path
+                )
+
+                logger.info(f"   [校验] 检查聊天框显示名: {contact_profile.display_name!r}")
+                verify_passed = _verify_chat_header_display_name(contact_profile)
+                if not verify_passed:
+                    logger.warning(f"   ⚠️ 显示名校验失败，回退到完整流程")
+            except Exception as e:
+                logger.warning(f"   ⚠️ 显示名校验异常: {e}，回退到完整流程")
+        else:
+            logger.info(f"   [校验] 无预解析数据，回退到完整流程")
+
+        if verify_passed:
+            # 校验通过，直接调用 run_send_message（跳过阶段一/二）
+            logger.info(f"   ✅ 校验通过，直接发送（跳过搜索）")
+            try:
+                stage3_ok = run_send_message(msg, do_send=True)
+                if stage3_ok:
+                    succeeded += 1
+                    results.append({
+                        "index": i,
+                        "message": msg,
+                        "success": True,
+                        "error": None,
+                        "mode": "direct_send",
+                    })
+                    logger.info(f"   ✅ 第 {i+1} 条消息发送成功（直接发送）")
+                else:
+                    failed += 1
+                    results.append({
+                        "index": i,
+                        "message": msg,
+                        "success": False,
+                        "error": "STAGE3_FAILED",
+                        "mode": "direct_send",
+                    })
+                    logger.warning(f"   ❌ 第 {i+1} 条消息发送失败（直接发送 stage3 失败）")
+            except Exception as e:
+                failed += 1
+                results.append({
+                    "index": i,
+                    "message": msg,
+                    "success": False,
+                    "error": f"DIRECT_SEND_ERROR: {e}",
+                    "mode": "direct_send",
+                })
+                logger.error(f"   ❌ 第 {i+1} 条消息发送异常: {e}")
+        else:
+            # 校验失败或无预解析数据，回退到完整流程
+            logger.info(f"   [回退] 走完整流程重新发送")
+            retry_result = send_message_with_retry(name, msg)
+            results.append({
+                "index": i,
+                "message": msg,
+                "success": retry_result.get("success", False),
+                "error": retry_result.get("error"),
+                "mode": "fallback_full_flow",
+            })
+            if retry_result.get("success"):
+                succeeded += 1
+                logger.info(f"   ✅ 第 {i+1} 条消息发送成功（完整流程回退）")
+            else:
+                failed += 1
+                logger.warning(f"   ❌ 第 {i+1} 条消息发送失败: {retry_result.get('error')}")
+
+    # ── 汇总结果 ──
+    all_success = (failed == 0)
+    summary = f"连续发送完成: {succeeded}/{len(messages)} 成功"
+    if failed > 0:
+        summary += f"，{failed} 失败"
+
+    logger.info("\n" + "=" * 60)
+    logger.info(f"  {summary}")
+    logger.info("=" * 60)
+
+    return {
+        "success": all_success,
+        "total": len(messages),
+        "succeeded": succeeded,
+        "failed": failed,
+        "results": results,
+        "contact": contact_display_name,
+        "error": None if all_success else f"{failed} 条消息发送失败",
+    }
+
+
 def main():
     if len(sys.argv) < 3:
         logger.info("用法: python E:\\Code\\loveMentor\\send_message\\wechat_e2e_run.py <联系人名> \"<消息内容>\"")

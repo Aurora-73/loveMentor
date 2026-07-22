@@ -691,3 +691,160 @@ def wechat_send_image(name: str, image_path: str, urgent: bool = False) -> dict:
     }
 
     return result
+
+
+# ── 工具4: wechat_send_batch ────────────────────────────────────
+
+def wechat_send_batch(name: str, messages: list, urgent: bool = False) -> dict:
+    """向同一联系人连续发送多条消息（v4 连续发送能力 + 三重硬约束）。
+
+    第一条消息走完整流程（搜索+点击头像+发送），
+    后续消息跳过搜索，直接在当前聊天界面发送，
+    每次发送前校验聊天框左上角显示名。
+    校验失败则回退到完整流程（重新搜索联系人）。
+
+    适用场景：分段发送长文本、连续发送多条独立消息。
+
+    v4 三重硬约束（与 wechat_send 相同，只在第一条消息前校验一次）：
+    1. 线索已读校验：未读取最新消息时拒绝发送
+    2. 回复冷却校验：urgent=True 可绕过
+    3. 互斥锁校验：整个批量发送过程串行
+
+    Args:
+        name: 微信联系人标识符（微信号 / wxid / 昵称 / 备注名 均可）
+        messages: 要发送的消息列表（每条独立发送）
+        urgent: 紧急模式（True 时绕过回复冷却校验，但仍然校验线索已读）。
+
+    Returns:
+        dict: {
+            "success": bool,       # 全部成功=True，任一失败=False
+            "message": str,        # 结果摘要
+            "contact": str,
+            "total": int,          # 总消息数
+            "succeeded": int,      # 成功数
+            "failed": int,         # 失败数
+            "results": list[dict], # 每条消息的详细结果
+            "error": str|None,
+            "hard_constraints": dict,
+        }
+    """
+    from engine.wechat_sender.wechat_recorder import with_recording
+    from engine.wechat_sender.wechat_e2e_run import send_message_batch
+
+    # 前置检查：消息列表
+    if not messages:
+        return {
+            "success": False,
+            "error": "EMPTY_MESSAGES",
+            "message": "消息列表为空",
+            "contact": name,
+            "total": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "results": [],
+            "hard_constraints": {
+                "user_took_over": "skipped",
+                "thread_read": "skipped",
+                "cooldown": "skipped",
+                "mutex": "skipped",
+                "urgent": urgent,
+            },
+        }
+
+    # v4 硬约束 0：用户介入取消校验
+    took_over_check = _check_user_took_over(name)
+    if not took_over_check["passed"]:
+        return {
+            "success": False,
+            "error": "USER_TOOK_OVER",
+            "message": took_over_check["reason"],
+            "suggestion": took_over_check.get("suggestion", ""),
+            "contact": name,
+            "total": len(messages),
+            "succeeded": 0,
+            "failed": len(messages),
+            "results": [],
+            "hard_constraints": {
+                "user_took_over": "failed",
+                "thread_read": "skipped",
+                "cooldown": "skipped",
+                "mutex": "skipped",
+                "urgent": urgent,
+            },
+        }
+
+    # v4 硬约束 1：校验线索已读
+    thread_check = _check_thread_read(name)
+    if not thread_check["passed"]:
+        return {
+            "success": False,
+            "error": "THREAD_NOT_CAUGHT_UP",
+            "message": f"线索未读取最新消息：{thread_check['reason']}",
+            "suggestion": thread_check.get("suggestion", ""),
+            "unprocessed_count": thread_check.get("unprocessed_count", 0),
+            "contact": name,
+            "total": len(messages),
+            "succeeded": 0,
+            "failed": len(messages),
+            "results": [],
+            "hard_constraints": {
+                "user_took_over": "passed",
+                "thread_read": "failed",
+                "cooldown": "skipped",
+                "mutex": "skipped",
+                "urgent": urgent,
+            },
+        }
+
+    # v4 硬约束 2：回复冷却校验
+    stage = _get_person_stage_num(name)
+    cooldown_check = _check_cooldown(name, urgent=urgent, stage=stage)
+    if not cooldown_check["passed"]:
+        return {
+            "success": False,
+            "error": "COOLDOWN_ACTIVE",
+            "message": cooldown_check["reason"],
+            "wait_seconds": cooldown_check.get("wait_seconds", 0),
+            "cooldown_seconds": cooldown_check.get("cooldown_seconds", 0),
+            "elapsed_seconds": cooldown_check.get("elapsed_seconds", 0),
+            "stage": stage,
+            "suggestion": "等待冷却结束后重试，或使用 urgent=True 绕过（仅紧急情况）",
+            "contact": name,
+            "total": len(messages),
+            "succeeded": 0,
+            "failed": len(messages),
+            "results": [],
+            "hard_constraints": {
+                "user_took_over": "passed",
+                "thread_read": "passed",
+                "cooldown": "failed",
+                "mutex": "skipped",
+                "stage": stage,
+                "urgent": urgent,
+            },
+        }
+
+    # v4 硬约束 3：互斥锁 + 批量发送流程
+    def _impl():
+        _wechat_op_lock.acquire()
+        try:
+            return send_message_batch(name, messages)
+        finally:
+            _wechat_op_lock.release()
+
+    result = with_recording(name, _impl)
+
+    # 发送成功后更新 last_send_time（只要有任意一条成功）
+    if result.get("succeeded", 0) > 0:
+        _update_send_time(name)
+
+    result["hard_constraints"] = {
+        "user_took_over": "passed",
+        "thread_read": "passed",
+        "cooldown": "bypassed" if urgent else "passed",
+        "mutex": "passed",
+        "stage": stage,
+        "urgent": urgent,
+    }
+
+    return result

@@ -419,6 +419,13 @@ tools:
       - effect_tracking
     description: "【v4 图片发送】复用剪贴板机制发送图片。含三重硬约束（线索已读+冷却+互斥锁）。支持 jpg/png/bmp/gif/webp/tiff"
 
+  wechat_send_batch:
+    skill_ref: workflows/auto_reply.md
+    next_step:
+      - wechat_ocr
+      - effect_tracking
+    description: "【v4 连续发送】向同一联系人连续发多条消息。第一条走完整流程，后续跳过搜索直接发送+显示名校验。含三重硬约束"
+
   reply_state_manage:
     skill_ref: workflows/auto_reply.md
     next_step:
