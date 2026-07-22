@@ -313,10 +313,11 @@ def _query_chat_messages(
             conditions.append("m.timestamp <= ?")
             params.append(end_ts)
         # 查询所有消息类型，包含 raw_content/voice_text/image_text 用于内容提取
+        # reply_to_id 用于显示引用回复关系（引用消息的 svrid）
         sql = (
             f"SELECT m.id, m.conversation_id, m.sender_id, m.content, "
             f"m.raw_content, m.voice_text, m.image_text, "
-            f"m.timestamp, m.type, m.platform, m.source "
+            f"m.timestamp, m.type, m.platform, m.source, m.reply_to_id "
             f"FROM messages m WHERE {' AND '.join(conditions)} ORDER BY m.timestamp ASC"
         )
         rows = conn.execute(sql, params).fetchall()
@@ -343,6 +344,7 @@ def _query_chat_messages(
                 "type": msg_type,
                 "platform": row["platform"] or "wechat",
                 "source": row["source"] or "sync",
+                "reply_to_id": row["reply_to_id"] or None,
             })
     messages.sort(key=lambda m: m["timestamp"])
 
@@ -366,6 +368,71 @@ def _query_chat_messages(
         "returned": len(messages),
         "total_before_filter": total_before_filter,
     }
+
+
+def _build_reply_lookup(
+    conn: sqlite3.Connection, config: Config, person: IdentityPerson, messages: list[dict]
+) -> dict[str, dict]:
+    """构建引用消息查找表：reply_to_id -> {content, sender_label}。
+
+    先用当前消息列表中的消息构建查找表（避免额外 DB 查询），
+    对于不在当前列表中的被引用消息，批量查询 DB。
+    被引用消息可能是任意类型（文本/图片/语音/卡片等），统一用 extract_display_content 转可读文本。
+    """
+    # 1. 收集所有需要查找的 reply_to_id
+    reply_ids = {m["reply_to_id"] for m in messages if m.get("reply_to_id")}
+    if not reply_ids:
+        return {}
+
+    lookup: dict[str, dict] = {}
+
+    # 2. 先从当前消息列表中查找（这些消息已经在内存中）
+    in_list_ids = {m["id"] for m in messages}
+    for msg in messages:
+        if msg["id"] in reply_ids:
+            sender_label = "我" if msg.get("is_mine") else person.display_name
+            lookup[msg["id"]] = {
+                "content": msg["content"],
+                "sender_label": sender_label,
+            }
+
+    # 3. 对于不在当前列表中的被引用消息，批量查询 DB
+    missing_ids = reply_ids - in_list_ids
+    if missing_ids:
+        placeholders = ",".join("?" * len(missing_ids))
+        sql = (
+            f"SELECT id, sender_id, content, raw_content, voice_text, image_text, type "
+            f"FROM messages WHERE id IN ({placeholders})"
+        )
+        rows = conn.execute(sql, tuple(missing_ids)).fetchall()
+        for row in rows:
+            sender_id = row["sender_id"] or ""
+            sender_label = "我" if sender_id == config.my_wxid else person.display_name
+            display = extract_display_content(
+                row["type"], row["content"] or "", row["raw_content"] or "",
+                row["voice_text"] or "", row["image_text"] or "",
+            )
+            lookup[row["id"]] = {
+                "content": display,
+                "sender_label": sender_label,
+            }
+
+    return lookup
+
+
+def _format_reply_prefix(reply_lookup: dict, reply_to_id: str | None) -> str:
+    """格式化引用回复前缀。找不到被引用消息时返回空字符串。
+
+    格式：↩回复[发送方: 内容前50字...]
+    """
+    if not reply_to_id or reply_to_id not in reply_lookup:
+        return ""
+    ref = reply_lookup[reply_to_id]
+    # 截断过长的被引用消息内容（只显示前 50 字）
+    ref_content = ref["content"]
+    if len(ref_content) > 50:
+        ref_content = ref_content[:50] + "..."
+    return f"↩回复[{ref['sender_label']}: {ref_content}] "
 
 
 def agent_chat_data(
@@ -401,7 +468,10 @@ def agent_chat(
     recent: int = 50, from_date: str | None = None, to_date: str | None = None,
     keyword: str | None = None, context_lines: int = 0, output_file: str | None = None,
 ) -> str:
-    """聊天记录（按日期分组 Markdown，已标注"我"/对方名字）。"""
+    """聊天记录（按日期分组 Markdown，已标注"我"/对方名字）。
+
+    引用回复消息会显示被引用消息的内容，格式：↩回复[发送方: 内容前50字...] 实际消息内容
+    """
     result = _query_chat_messages(
         conn, config, person,
         recent=recent, from_date=from_date, to_date=to_date,
@@ -410,6 +480,9 @@ def agent_chat(
     messages = result["messages"]
     total = result["total"]
     total_before_filter = result["total_before_filter"]
+
+    # 构建引用消息查找表（用于显示 ↩回复 关系）
+    reply_lookup = _build_reply_lookup(conn, config, person, messages)
 
     grouped: OrderedDict[str, list] = OrderedDict()
     for msg in messages:
@@ -437,7 +510,8 @@ def agent_chat(
         for msg in day_msgs:
             ts = datetime.fromtimestamp(msg["timestamp"]).strftime("%H:%M")
             sender_label = "我" if msg.get("is_mine") else person.display_name
-            parts.append(f"- **{ts}** {sender_label}: {msg['content']}")
+            reply_prefix = _format_reply_prefix(reply_lookup, msg.get("reply_to_id"))
+            parts.append(f"- **{ts}** {sender_label}: {reply_prefix}{msg['content']}")
         parts.append("")
 
     parts.append(_build_cross_refs(person, has_fact=True, has_event=True))
