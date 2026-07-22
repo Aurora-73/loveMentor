@@ -571,18 +571,36 @@ def run_send_file(file_path, do_send=True):
     if after_img is None:
         return False
 
-    # 11. 文件发送验证：对比输入框区域，检查文件预览是否消失
-    logger.info("\n[11] 文件发送验证（输入框清空检测）")
+    # 11. 文件发送验证：检查输入框清空 OR 聊天区域有新消息
+    # 文件发送与图片发送的 UI 变化不同：
+    # - 图片发送：图片预览在输入框区域，发送后预览消失 → 输入框差异大
+    # - 文件发送：文件消息直接出现在聊天区域 → 聊天区域差异大，输入框差异小
+    # 因此需要同时检查两个区域，任一差异大即认为发送成功
+    logger.info("\n[11] 文件发送验证（输入框清空 + 聊天区域新消息检测）")
     h_img = img_after_input.shape[0]
+
+    # 检查输入框区域（图片预览消失检测）
     input_box_before = img_after_input[h_img - 120:h_img, session_right:]
     input_box_after = after_img[h_img - 120:h_img, session_right:]
-    diff = cv2.absdiff(input_box_after, input_box_before)
-    mean_diff = float(diff.mean())
+    input_diff = cv2.absdiff(input_box_after, input_box_before)
+    input_mean = float(input_diff.mean())
 
-    if mean_diff > 5.0:
-        logger.info(f"    ✅ 输入框已清空（差异值 {mean_diff:.2f}），文件发送成功")
+    # 检查聊天区域（新消息出现检测）
+    chat_before = img_after_input[100:h_img - 120, session_right:]
+    chat_after = after_img[100:h_img - 120, session_right:]
+    chat_diff = cv2.absdiff(chat_after, chat_before)
+    chat_mean = float(chat_diff.mean())
+
+    logger.info(f"    输入框差异: {input_mean:.2f}, 聊天区域差异: {chat_mean:.2f}")
+
+    # 输入框清空 OR 聊天区域有新消息 → 发送成功
+    if input_mean > 5.0 or chat_mean > 5.0:
+        if chat_mean > 5.0:
+            logger.info(f"    ✅ 聊天区域检测到新消息（差异值 {chat_mean:.2f}），文件发送成功")
+        else:
+            logger.info(f"    ✅ 输入框已清空（差异值 {input_mean:.2f}），文件发送成功")
     else:
-        logger.warning(f"    ⚠️ 输入框未清空（差异值 {mean_diff:.2f}），可能未发送成功")
+        logger.warning(f"    ⚠️ 输入框未清空（{input_mean:.2f}）且聊天区域无新消息（{chat_mean:.2f}），可能未发送成功")
         return False
 
     logger.info("\n" + "=" * 60)
