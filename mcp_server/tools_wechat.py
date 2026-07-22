@@ -15,7 +15,6 @@
 import os
 import sys
 import logging
-import threading
 import traceback
 import yaml
 from datetime import datetime, timedelta
@@ -36,7 +35,11 @@ if _WECHAT_SENDER_DIR not in sys.path:
 
 
 # ── 并发锁（防止 wechat_send / wechat_ocr 并发执行互相干扰）──
-_wechat_op_lock = threading.Lock()
+# v4 升级：从 threading.Lock（进程内）改为 CrossProcessLock（跨进程 Win32 Named Mutex）
+# 防止 Agent 进程 + 其他工具进程同时调用 wechat_send 导致视觉自动化冲突
+# 进程崩溃时 Windows 自动释放锁（WAIT_ABANDONED 机制），避免死锁
+from cross_process_lock import CrossProcessLock
+_wechat_op_lock = CrossProcessLock("loveMentor_wechat_op")
 
 # ── 发送状态文件（记录 last_send_time，用于回复冷却校验）──
 _SEND_STATE_FILE = os.path.join(_PROJECT_ROOT, "data", "system", "wechat_send_state.yaml")
