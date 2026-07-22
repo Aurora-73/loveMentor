@@ -724,3 +724,43 @@ scenarios:
       - live_chat_read
       - wiki_context
       - live_monitor_stop
+
+  # ── v4 自动回复架构场景 ──────────────────────────────────────
+
+  "自动回复":
+    workflow: auto_reply
+    tools:
+      - live_monitor_start
+      - live_chat_read
+      - conversation_thread
+      - wiki_context
+      - recent_replies_check
+      - wechat_send
+      - effect_tracking
+
+  "邀约":
+    workflow: auto_reply_invite
+    tools:
+      - person_brief
+      - schedule_manage
+      - wiki_context
+      - date_briefing
+      - contact_priority_manage
+
+  "约会后反馈":
+    workflow: null
+    tools:
+      - date_feedback_loop
+      - events_save
+      - person_note
+      - conversation_thread
+      - wiki_context
+
+  "紧急通知":
+    workflow: auto_reply_notify
+    tools:
+      - live_chat_read
+      - conversation_thread
+      - wiki_context
+      - wechat_send
+      - server_chan_notify
