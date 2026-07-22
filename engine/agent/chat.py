@@ -57,9 +57,25 @@ def _parse_appmsg_xml(content: str) -> str:
 
     常见场景：QQ 音乐卡片、微信公众号文章、小程序分享、文件分享、
             合并转发(type 19)、转账(type 2000)、红包(type 2001)等。
+
+    注意：群消息的 raw_content 可能含 "wxid_xxx:\\n" 发送者前缀，
+          需要跳过前缀找到 <msg> 开始的 XML 部分。
     """
-    if not content or not content.lstrip().startswith("<"):
-        return content or ""
+    if not content:
+        return ""
+    # 群消息 raw_content 可能含 "wxid_xxx:\n<msg>..." 前缀，跳到首个 <
+    stripped = content.lstrip()
+    if not stripped.startswith("<"):
+        lt_idx = content.find("<")
+        if lt_idx > 0:
+            content = content[lt_idx:]
+        else:
+            # 不含 XML 标签，返回纯文本（WCD 有时把文本消息标记为 type 49）
+            return content[:100]
+
+    # 去掉 XML 声明（WCD 有时在 <msg> 标签后插入 <?xml version="1.0"?>，
+    # ElementTree 会报 ParseError）
+    content = re.sub(r'<\?xml[^>]*\?>', '', content)
 
     try:
         root = ET.fromstring(content)
