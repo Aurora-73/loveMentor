@@ -14,6 +14,7 @@
 
 import os
 import sys
+import re
 import logging
 import traceback
 import yaml
@@ -249,6 +250,70 @@ def _update_send_time(name: str) -> None:
     _save_send_state(state)
 
 
+# ── 微信消息切分（模拟真人发送习惯）──
+# 用户要求：发送工具层自动删除所有标点和 emoji，并按这些位置切分为多条短消息
+# 这样委员会审查时不需要担心草案过长或风格不符（审查时告知会自动切分）
+
+# 标点符号模式（中文+英文标点+换行+省略号+引号+括号等）
+_PUNCTUATION_PATTERN = re.compile(
+    r'[，。！？、；：,.!?;:\n\r…~～\u3000'
+    r'“”‘’\"\'()（）【】《》〈〉「」『』·•・]'
+)
+
+# Emoji Unicode 范围
+_EMOJI_PATTERN = re.compile(
+    '['
+    '\U0001F600-\U0001F64F'  # 表情符号
+    '\U0001F300-\U0001F5FF'  # 符号和象形文字
+    '\U0001F680-\U0001F6FF'  # 交通和地图符号
+    '\U0001F1E0-\U0001F1FF'  # 旗帜
+    '\U00002700-\U000027BF'  # 装饰符号
+    '\U0001F900-\U0001F9FF'  # 补充表情符号
+    '\U0001FA00-\U0001FA6F'  # 扩展表情符号A
+    '\U0001FA70-\U0001FAFF'  # 扩展表情符号B
+    '\U00002600-\U000026FF'  # 杂项符号
+    '\U0000FE00-\U0000FE0F'  # 变体选择符
+    '\U00002B00-\U00002BFF'  # 其他符号
+    ']'
+)
+
+# 合并的分割模式（标点 OR emoji，任一匹配即作为切段点）
+_SPLIT_PATTERN = re.compile(
+    _PUNCTUATION_PATTERN.pattern + '|' + _EMOJI_PATTERN.pattern
+)
+
+
+def split_message_for_wechat(text: str) -> list:
+    """将文本按标点和 emoji 切分为多条短消息（模拟真人微信发送习惯）。
+
+    - 删除所有标点符号（中英文标点、换行、省略号、引号、括号等）
+    - 删除所有 emoji（表情、符号、旗帜等）
+    - 按标点和 emoji 的位置切分为多条短消息
+    - 空段（连续标点/emoji）会被过滤
+    - 全部被删除时返回 [text]（兜底，避免空列表）
+
+    Args:
+        text: 原始消息文本
+
+    Returns:
+        list[str]: 切分后的消息列表（至少 1 条）
+    """
+    if not text or not text.strip():
+        return [""]
+
+    # 按标点/emoji 切分（同时删除这些字符）
+    parts = _SPLIT_PATTERN.split(text)
+
+    # 去除空白段
+    result = [p.strip() for p in parts if p and p.strip()]
+
+    # 兜底：如果全部是标点/emoji/空白，返回空字符串列表（不发送含标点/emoji 的原文）
+    if not result:
+        return [""]
+
+    return result
+
+
 # ── 工具1: wechat_send ──────────────────────────────────────────
 
 def wechat_send(name: str, message: str, urgent: bool = False) -> dict:
@@ -374,10 +439,18 @@ def wechat_send(name: str, message: str, urgent: bool = False) -> dict:
         }
 
     # v4 硬约束 3：互斥锁（原有逻辑）+ 正常发送流程
+    # 消息切分：自动删除标点+emoji 并按位置切分为多条短消息（模拟真人微信发送习惯）
+    # 多段 → 调用 send_message_batch 连续发送；单段 → 走原 send_message_with_retry
     def _impl():
         _wechat_op_lock.acquire()
         try:
-            return send_message_with_retry(name, message)
+            segments = split_message_for_wechat(message)
+            if len(segments) > 1:
+                from engine.wechat_sender.wechat_e2e_run import send_message_batch
+                logger.info(f"消息切分：{len(segments)} 段 → {segments}")
+                return send_message_batch(name, segments)
+            else:
+                return send_message_with_retry(name, segments[0] if segments else message)
         finally:
             _wechat_op_lock.release()
 
