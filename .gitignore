@@ -49,7 +49,9 @@ ml/models/
 *.sqlite
 
 # ===================== 环境与密钥 =====================
-Agent/
+# 仅忽略项目根目录的 Agent/（persistent-agent 状态文件夹），
+# 加 / 前缀避免误伤 engine/agent/ 等子目录
+/Agent/
 .env
 .env.*
 !.env.example

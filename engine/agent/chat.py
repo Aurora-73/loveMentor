@@ -55,7 +55,8 @@ def _parse_appmsg_xml(content: str) -> str:
         <msg><appmsg><title>...</title><des>...</des><url>...</url>
         <type>...</type><appname>...</appname></appmsg></msg>
 
-    常见场景：QQ 音乐卡片、微信公众号文章、小程序分享、文件分享等。
+    常见场景：QQ 音乐卡片、微信公众号文章、小程序分享、文件分享、
+            合并转发(type 19)、转账(type 2000)、红包(type 2001)等。
     """
     if not content or not content.lstrip().startswith("<"):
         return content or ""
@@ -81,6 +82,14 @@ def _parse_appmsg_xml(content: str) -> str:
     url = (appmsg.findtext("url") or "").strip()
     appname = (appmsg.findtext("appname") or "").strip()
     appmsg_type = (appmsg.findtext("type") or "").strip()
+
+    # 合并转发 (type 19)：解析嵌套消息列表
+    if appmsg_type == "19":
+        return _parse_merged_forward(appmsg, title)
+
+    # 转账/红包 (type 2000/2001)：解析 wcpayinfo
+    if appmsg_type in ("2000", "2001"):
+        return _parse_pay_info(appmsg, appmsg_type)
 
     # appmsg type: 5=链接 33=小程序 36=小程序 57=引用 51=视频号 19=合并转发 6=文件
     type_label = ""
@@ -113,8 +122,123 @@ def _parse_appmsg_xml(content: str) -> str:
     return result if result != f"[{type_label}]" else f"[{type_label}] {title or des or '未知内容'}"
 
 
+def _parse_merged_forward(appmsg, title: str) -> str:
+    """解析合并转发消息（appmsg type 19）的 recorditem 嵌套消息列表。
+
+    格式：
+        <recorditem>
+          <datalist count="3">
+            <dataitem datatype="0" dataid="1">
+              <sourcename>张三</sourcename>
+              <datadesc><![CDATA[消息内容]]></datadesc>
+              <contenttime>2024-01-01 10:00:00</contenttime>
+            </dataitem>
+            ...
+          </datalist>
+        </recorditem>
+
+    注意：recorditem 文本可能被 CDATA 包裹（整段 XML 作为文本），需要先提取再解析。
+    """
+    recorditem = appmsg.find(".//recorditem")
+    if recorditem is None:
+        return f"[合并转发] {title}" if title else "[合并转发]"
+
+    # recorditem 可能直接含 <datalist>，也可能用 CDATA 包裹 XML 字符串
+    datalist = recorditem.find(".//datalist")
+    if datalist is None:
+        # 尝试从 CDATA/文本中解析
+        raw_text = recorditem.text or ""
+        if raw_text.strip():
+            try:
+                inner_root = ET.fromstring(raw_text)
+                datalist = inner_root if inner_root.tag == "datalist" else inner_root.find(".//datalist")
+            except ET.ParseError:
+                pass
+
+    if datalist is None:
+        return f"[合并转发] {title}" if title else "[合并转发]"
+
+    items = []
+    for dataitem in datalist.findall("dataitem"):
+        sourcename = (dataitem.findtext("sourcename") or "").strip()
+        datadesc = (dataitem.findtext("datadesc") or "").strip()
+        # contenttime 可能为空或格式不一，只取展示部分
+        if sourcename and datadesc:
+            items.append(f"{sourcename}: {datadesc}")
+        elif datadesc:
+            items.append(datadesc)
+
+    if title:
+        summary = f"[合并转发 {title} {len(items)}条]"
+    else:
+        summary = f"[合并转发 {len(items)}条]"
+
+    if not items:
+        return summary
+    # 限制条数避免过长（合并转发可能包含很多条）
+    max_show = 10
+    if len(items) > max_show:
+        return summary + "\n" + "\n".join(items[:max_show]) + f"\n... 还有 {len(items) - max_show} 条"
+    return summary + "\n" + "\n".join(items)
+
+
+def _parse_pay_info(appmsg, appmsg_type: str) -> str:
+    """解析转账(type 2000)/红包(type 2001)消息的 wcpayinfo。
+
+    转账 XML：
+        <wcpayinfo>
+          <feedesc><![CDATA[转账金额：￥100.00]]></feedesc>
+          <pay_memo>备注</pay_memo>
+          <transcationid>...</transcationid>
+        </wcpayinfo>
+
+    红包 XML：
+        <wcpayinfo>
+          <feedesc><![CDATA[微信红包，已领完]]></feedesc>
+          <wishing>恭喜发财</wishing>
+          <sendername>张三</sendername>
+        </wcpayinfo>
+    """
+    wcpayinfo = appmsg.find(".//wcpayinfo")
+    if wcpayinfo is None:
+        label = "转账" if appmsg_type == "2000" else "红包"
+        return f"[{label}]"
+
+    feedesc = (wcpayinfo.findtext("feedesc") or "").strip()
+    if appmsg_type == "2000":
+        # 转账：feedesc 形如 "转账金额：￥100.00"
+        memo = (wcpayinfo.findtext("pay_memo") or "").strip()
+        parts = ["[转账]"]
+        if feedesc:
+            parts.append(feedesc)
+        if memo:
+            parts.append(f"(备注: {memo})")
+        result = " ".join(parts)
+        return result if result != "[转账]" else "[转账]"
+    else:
+        # 红包：feedesc 形如 "微信红包，已领完"
+        wishing = (wcpayinfo.findtext("wishing") or "").strip()
+        sender = (wcpayinfo.findtext("sendername") or "").strip()
+        parts = ["[红包]"]
+        if feedesc:
+            parts.append(feedesc)
+        if wishing:
+            parts.append(f"(祝福: {wishing})")
+        if sender:
+            parts.append(f"(来自: {sender})")
+        result = " ".join(parts)
+        return result if result != "[红包]" else "[红包]"
+
+
 def _parse_emoji_xml(content: str) -> str:
-    """解析 type 47 表情贴纸 XML。"""
+    """解析 type 47 表情贴纸 XML。
+
+    表情贴纸 XML 格式：
+        <msg><emoji md5="..." cdnurl="..." type="2" name="[doge]" width="240" height="240"/></msg>
+
+    name 属性通常包含表情的中文描述（如 [doge]、[微笑]、[流泪]），
+    提取后让 Agent 至少知道对方发的是什么表情。
+    """
     if not content or not content.lstrip().startswith("<"):
         return "[表情]"
     try:
@@ -124,7 +248,11 @@ def _parse_emoji_xml(content: str) -> str:
         if emoji is None and root.tag == "emoji":
             emoji = root
         if emoji is not None:
-            # 表情贴纸没有文字内容，返回占位
+            # name 属性包含表情描述（如 [doge]、[微笑]）
+            name = (emoji.get("name") or "").strip()
+            if name:
+                # name 已含方括号（如 "[doge]"），直接返回
+                return f"[表情 {name}]" if not name.startswith("[") else f"[表情] {name}"
             return "[表情]"
     except ET.ParseError:
         pass
@@ -317,7 +445,7 @@ def _query_chat_messages(
         sql = (
             f"SELECT m.id, m.conversation_id, m.sender_id, m.content, "
             f"m.raw_content, m.voice_text, m.image_text, "
-            f"m.timestamp, m.type, m.platform, m.source, m.reply_to_id "
+            f"m.timestamp, m.type, m.platform, m.source, m.reply_to_id, m.revoked "
             f"FROM messages m WHERE {' AND '.join(conditions)} ORDER BY m.timestamp ASC"
         )
         rows = conn.execute(sql, params).fetchall()
@@ -328,10 +456,14 @@ def _query_chat_messages(
             image_text = row["image_text"] or ""
             msg_type = row["type"]
             content = row["content"] or ""
+            revoked = int(row["revoked"] or 0)
             # 非文本消息提取可读内容（卡片解析标题/链接、图片/语音用转写文字等）
             display_content = extract_display_content(
                 msg_type, content, raw_content, voice_text, image_text
             )
+            # 撤回消息加前缀，让 Agent 知道这条消息已被撤回（原始内容仍可读）
+            if revoked:
+                display_content = f"[已撤回] {display_content}" if display_content else "[已撤回]"
             messages.append({
                 "id": row["id"],
                 "conversation_id": row["conversation_id"],
@@ -345,6 +477,7 @@ def _query_chat_messages(
                 "platform": row["platform"] or "wechat",
                 "source": row["source"] or "sync",
                 "reply_to_id": row["reply_to_id"] or None,
+                "revoked": revoked,
             })
     messages.sort(key=lambda m: m["timestamp"])
 

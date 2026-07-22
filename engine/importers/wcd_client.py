@@ -577,6 +577,8 @@ class WCDClient:
                 "mediaLocalPath": "",
                 "groupNickname": m.get("groupNickname", ""),
                 "accountName": m.get("accountName", ""),
+                # 撤回标记：WCD 返回 isRevoked 布尔，或 status==1 表示撤回
+                "isRevoked": bool(m.get("isRevoked") or m.get("status", 0) == 1),
             })
 
         # WCD 没有 hasMore 字段，用消息数量推断

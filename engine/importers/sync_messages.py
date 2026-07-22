@@ -45,15 +45,16 @@ _SQL_UPSERT_MESSAGE = """
         id, conversation_id, sender_id, sender_name,
         timestamp, type, content, raw_content,
         reply_to_id, media_path, group_nickname,
-        raw_json, synced_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s','now'))
+        raw_json, synced_at, revoked
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s','now'), ?)
     ON CONFLICT(id) DO UPDATE SET
         content = excluded.content,
         raw_content = excluded.raw_content,
         sender_name = excluded.sender_name,
         media_path = excluded.media_path,
         raw_json = excluded.raw_json,
-        synced_at = excluded.synced_at
+        synced_at = excluded.synced_at,
+        revoked = excluded.revoked
 """
 
 _SQL_UPSERT_ATTACHMENT = """
@@ -71,7 +72,7 @@ _SQL_UPSERT_ATTACHMENT = """
 def _prepare_message_params(session_id: str, msg: dict) -> tuple:
     """提取消息参数，返回 (message_params, attachment_params_or_None)。
 
-    message_params: 12 元组，对应 _SQL_UPSERT_MESSAGE 的占位符
+    message_params: 13 元组，对应 _SQL_UPSERT_MESSAGE 的占位符（含 revoked）
     attachment_params: 7 元组或 None（无媒体时）
     """
     server_id = msg.get("serverId") or msg.get("platformMessageId")
@@ -91,6 +92,8 @@ def _prepare_message_params(session_id: str, msg: dict) -> tuple:
     reply_to = msg.get("replyToMessageId")
     media_path = msg.get("mediaUrl") or msg.get("mediaPath")
     group_nick = msg.get("groupNickname")
+    # 撤回标记：WCD 返回 isRevoked（或 status==1 表示撤回），写入 DB 为 0/1
+    revoked = 1 if (msg.get("isRevoked") or msg.get("status", 0) == 1) else 0
 
     msg_params = (
         str(server_id),
@@ -105,6 +108,7 @@ def _prepare_message_params(session_id: str, msg: dict) -> tuple:
         media_path,
         group_nick,
         json.dumps(msg, ensure_ascii=False),
+        revoked,
     )
 
     # 准备附件参数（如果有媒体信息）
