@@ -370,6 +370,48 @@ tools:
       - wechat_send
     description: "【v4 跨联系人查重】发送前检查是否对其他人发过相同话术。通过后调 wechat_send 发送"
 
+  # ── v4 P1 工具 ──────────────────────────────────────────────
+
+  server_chan_notify:
+    skill_ref: workflows/auto_reply.md
+    next_step: []
+    description: "【v4 Server酱推送】紧急事件推送到用户微信。Agent 自主判断紧急程度后调用"
+
+  server_chan_config:
+    skill_ref: workflows/auto_reply.md
+    next_step:
+      - server_chan_notify
+    description: "【v4 Server酱配置】配置推送 sckey/enabled/min_priority。配置后调 server_chan_notify"
+
+  date_feedback_loop:
+    skill_ref: workflows/auto_reply.md
+    next_step:
+      - wiki_context
+    description: "【v4 约会后反馈】记录约会反馈 + 生成待分析项。Agent 基于 pending_items 询问用户后更新数据"
+
+  date_feedback_mark_analyzed:
+    skill_ref: workflows/auto_reply.md
+    next_step: []
+    description: "【v4 标记反馈已分析】Agent 完成反馈分析后标记。只更新状态，不生成内容"
+
+  effect_tracking:
+    skill_ref: workflows/auto_reply.md
+    next_step: []
+    description: "【v4 效果追踪】record 记录发送效果 / stats 统计回复率延迟等 / report 详细报告。不做归因分析"
+
+  contact_priority_manage:
+    skill_ref: workflows/auto_reply.md
+    next_step:
+      - person_brief
+    description: "【v4 优先级管理】get/list/set_eval/set_override/reset。工具只持久化，分数由 Agent 计算"
+
+  override_learning:
+    skill_ref: workflows/auto_reply.md
+    next_step:
+      - user_profile_manage
+      - conversation_thread
+    description: "【v4 覆盖学习】record 记录用户手动回复差异 / mark_applied 标记已应用。学习候选需 Agent 审核"
+
   live_monitor_status:
     skill_ref: mcp-tools.md
     next_step:

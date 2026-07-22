@@ -15,6 +15,7 @@
 import os
 import sys
 import logging
+from datetime import datetime
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -468,3 +469,190 @@ def _parse_time_range(s: str) -> tuple[int, int]:
         return int(h) * 60 + int(m)
 
     return to_minutes(parts[0]), to_minutes(parts[1])
+
+
+# ── date_feedback_loop（v4 10.5 节，P1）──────────────────────────
+
+
+def date_feedback_loop(
+    name: str,
+    date_event_id: str,
+    feedback_text: Optional[str] = None,
+    feedback_structured: Optional[dict] = None,
+) -> dict:
+    """约会后反馈循环工具。
+
+    什么时候用：约会结束（日程时间到点 +1 小时 / 用户手动告知回来了）后。
+    返回什么：反馈记录结果 + 待分析项列表（Agent 应询问用户的问题 +
+              应更新的数据条目）。
+    边界是什么：不评估约会是否成功；不生成改进建议；不决策"下一步怎么做"；
+                不做情感分析。Agent 需自行调 AskUserQuestion 询问用户，
+                然后调用 events_save / person_note / conversation_thread 更新数据。
+    """
+    import yaml as _yaml
+
+    feedback_file = os.path.join(_PROJECT_ROOT, "data", "system", "date_feedback.yaml")
+
+    try:
+        # 加载已有反馈记录
+        data = _load_feedback_file(feedback_file)
+
+        # 构建反馈记录
+        now = datetime.now().isoformat(timespec="minutes")
+        record = {
+            "record_id": f"fb_{now.replace(':', '').replace('-', '')}",
+            "time": now,
+            "person": name,
+            "date_event_id": date_event_id,
+            "feedback_text": feedback_text or "",
+            "feedback_structured": feedback_structured or {},
+            "status": "pending_analysis",  # pending_analysis / analyzed
+            "pending_items": _build_pending_items(name, date_event_id),
+        }
+
+        # 追加到记录列表
+        records = data.setdefault("feedback_records", [])
+        records.append(record)
+        # 保留最近 200 条
+        if len(records) > 200:
+            data["feedback_records"] = records[-200:]
+
+        # 保存
+        data["last_updated"] = now
+        os.makedirs(os.path.dirname(feedback_file), exist_ok=True)
+        with open(feedback_file, "w", encoding="utf-8") as f:
+            _yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+        return {
+            "success": True,
+            "record_id": record["record_id"],
+            "status": "pending_analysis",
+            "pending_items": record["pending_items"],
+            "next_step": (
+                "Agent 应使用 AskUserQuestion 询问用户约会反馈（参考 pending_items 中的问题），"
+                "然后根据用户回答调用 events_save（记录关键事件）、person_note（记录观察要点）、"
+                "conversation_thread（更新 key_context 和 her_emotion）。"
+                "分析完成后可调用 mark_analyzed 标记此记录已分析。"
+            ),
+        }
+    except Exception as e:
+        logger.exception("date_feedback_loop 异常")
+        return {"error": "TOOL_ERROR", "message": str(e)}
+
+
+def mark_analyzed(record_id: str, analysis_summary: str = "") -> dict:
+    """标记反馈记录已分析（Agent 完成分析后调用）。
+
+    只更新状态字段，不生成任何分析内容。
+    """
+    import yaml as _yaml
+
+    feedback_file = os.path.join(_PROJECT_ROOT, "data", "system", "date_feedback.yaml")
+
+    try:
+        if not os.path.exists(feedback_file):
+            return {"error": "NOT_FOUND", "message": f"反馈记录文件不存在: {record_id}"}
+
+        with open(feedback_file, "r", encoding="utf-8") as f:
+            data = _yaml.safe_load(f) or {}
+
+        records = data.get("feedback_records", [])
+        found = False
+        for r in records:
+            if r.get("record_id") == record_id:
+                r["status"] = "analyzed"
+                r["analyzed_time"] = datetime.now().isoformat(timespec="minutes")
+                r["analysis_summary"] = analysis_summary
+                found = True
+                break
+
+        if not found:
+            return {"error": "NOT_FOUND", "message": f"未找到反馈记录: {record_id}"}
+
+        with open(feedback_file, "w", encoding="utf-8") as f:
+            _yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+        return {
+            "success": True,
+            "record_id": record_id,
+            "status": "analyzed",
+            "message": "已标记为已分析",
+        }
+    except Exception as e:
+        logger.exception("mark_analyzed 异常")
+        return {"error": "TOOL_ERROR", "message": str(e)}
+
+
+def _load_feedback_file(filepath: str) -> dict:
+    """加载约会反馈记录文件。"""
+    import yaml as _yaml
+    if not os.path.exists(filepath):
+        return {"feedback_records": [], "last_updated": None}
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            data = _yaml.safe_load(f) or {}
+        if "feedback_records" not in data:
+            data["feedback_records"] = []
+        return data
+    except Exception:
+        return {"feedback_records": [], "last_updated": None}
+
+
+def _build_pending_items(name: str, date_event_id: str) -> list:
+    """构建待分析项列表（Agent 应询问用户的问题 + 应更新的数据条目）。
+
+    问题列表来自 v4 10.5 节"约会后询问的关键问题"。
+    工具只提供问题模板，不生成分析性内容。
+    """
+    return [
+        {
+            "type": "question",
+            "question": "整体感觉：约会总体怎么样？（好/一般/不好）",
+            "target": "user_input",
+        },
+        {
+            "type": "question",
+            "question": "对方反应：她的态度如何？（热情/平淡/冷淡）",
+            "target": "user_input",
+        },
+        {
+            "type": "question",
+            "question": "关键信号：有没有观察到特别的好感信号或警示信号？",
+            "target": "user_input",
+        },
+        {
+            "type": "question",
+            "question": "下次意向：还想约第二次吗？（想/不确定/不想）",
+            "target": "user_input",
+        },
+        {
+            "type": "data_update",
+            "description": "根据用户反馈更新约会记录",
+            "target_tool": "events_save",
+            "target_action": "记录关键事件（正面/中性/负面）",
+        },
+        {
+            "type": "data_update",
+            "description": "记录 Agent 观察和用户反馈要点",
+            "target_tool": "person_note",
+            "target_action": "添加备注到事实档案",
+        },
+        {
+            "type": "data_update",
+            "description": "更新对话线索的关键上下文和对方情绪",
+            "target_tool": "conversation_thread",
+            "target_action": "update key_context + her_emotion",
+        },
+        {
+            "type": "data_update",
+            "description": "如关系阶段可能变化，重新计算阶段",
+            "target_tool": "person_stage",
+            "target_action": "重新计算关系阶段（Agent 判断是否需要）",
+        },
+        {
+            "type": "wiki_ref",
+            "description": "Wiki 依据：第一次约会回来之后 — 黄金窗口 2-6 小时",
+            "target_tool": "wiki_context",
+            "queries": ["第一次约会回来之后", "约会后如何回访"],
+        },
+    ]

@@ -22,6 +22,7 @@ from fastmcp import FastMCP
 
 from mcp_server import tools_read, tools_write, tools_formula, tools_guide, tools_config, tools_workflow, tools_live, tools_wechat, tools_avatar
 from mcp_server import tools_thread, tools_schedule, tools_profile, tools_date, tools_replies
+from mcp_server import tools_notify, tools_priority, tools_override
 
 mcp = FastMCP("LoveMentor")
 
@@ -641,6 +642,97 @@ mcp.tool(
                "文件：data/system/recent_replies.yaml（最多 500 条，超出自动裁剪）。",
     annotations={"readOnlyHint": False},
 )(tools_replies.recent_replies_check)
+
+# ── 注册 v4 自动回复架构新工具（P1）──────────────────────────────
+
+mcp.tool(
+    name="server_chan_notify",
+    description="【v4 Server酱推送】将紧急事件推送到用户微信（Server酱）。"
+               "参数：title（标题），content（正文，支持 Markdown），priority（0-3，"
+               "0=Debug 1=Info 2=Warning 3=Urgent，默认 2）。"
+               "推送条件：enabled=true 且 priority >= min_priority 时推送。"
+               "Agent 自主判断事件紧急程度并决定是否调用，参考场景（非硬性规则）："
+               "邀约窗口开启/成功、对方情绪突变/断联风险、委员会连续驳回、系统异常。"
+               "明确不做：❌ 不决策'该不该通知' ❌ 不生成通知内容（Agent 撰写）"
+               "❌ 不评估紧急程度 ❌ 不做频率控制（Agent 判断）。",
+    annotations={"readOnlyHint": False},
+)(tools_notify.server_chan_notify)
+
+mcp.tool(
+    name="server_chan_config",
+    description="【v4 Server酱配置】管理 Server酱推送配置（get/set）。"
+               "action=get 返回当前配置；action=set 更新配置（enabled/sckey/min_priority）。"
+               "配置文件：data/system/config.yaml 的 serverchan 段。"
+               "sckey 需用户在 https://sct.ftqq.com/ 注册后获取。",
+    annotations={"readOnlyHint": False},
+)(tools_notify.server_chan_config)
+
+mcp.tool(
+    name="date_feedback_loop",
+    description="【v4 约会后反馈循环】约会结束后记录反馈并生成待分析项列表。"
+               "触发时机：日程时间到点（约会计划结束+1小时）/ 用户手动告知约会结束。"
+               "参数：name（联系人），date_event_id（约会事件 ID），"
+               "feedback_text（用户手动输入的反馈，可选），feedback_structured（结构化反馈，可选）。"
+               "返回：record_id + pending_items（Agent 应询问用户的问题 + 应更新的数据条目）。"
+               "pending_items 包含问题模板（整体感觉/对方反应/关键信号/下次意向）+ "
+               "数据更新指引（events_save/person_note/conversation_thread/person_stage）+ Wiki 依据。"
+               "明确不做：❌ 不评估约会是否成功 ❌ 不生成改进建议 ❌ 不决策'下一步怎么做' ❌ 不做情感分析。"
+               "Agent 应基于 pending_items 调 AskUserQuestion 询问用户，然后更新数据。",
+    annotations={"readOnlyHint": False},
+)(tools_date.date_feedback_loop)
+
+mcp.tool(
+    name="date_feedback_mark_analyzed",
+    description="【v4 约会反馈标记已分析】标记某条约会反馈记录为已分析状态。"
+               "Agent 完成约会反馈分析（询问用户 + 更新数据）后调用。"
+               "参数：record_id（反馈记录 ID），analysis_summary（分析摘要，可选）。"
+               "只更新状态字段，不生成任何分析内容。",
+    annotations={"readOnlyHint": False},
+)(tools_date.mark_analyzed)
+
+mcp.tool(
+    name="effect_tracking",
+    description="【v4 效果追踪】追踪自动发送回复的效果（对方是否回复/回复延迟/回复情感）。"
+               "action：record（记录一条发送效果，需 person + message_type）/ "
+               "update_response（更新待响应记录的回复信息）/ stats（统计：回复率/平均回复间隔/"
+               "正面回复率/按类型分组/委员会结果分布）/ report（详细报告：含按联系人分组 + "
+               "最近 10 条记录 + 无回复记录列表）。"
+               "message_type：auto_reply（自动回复）/ initiative（主动发起）/ invitation（邀约）。"
+               "response_sentiment：positive/neutral/negative/no_response。"
+               "文件：data/system/effect_tracking.yaml（最多 1000 条）。"
+               "明确不做：❌ 不决策'系统好不好' ❌ 不生成优化方案 ❌ 不评估'哪条回复失败' ❌ 不做归因分析。"
+               "所有效果判断由 Agent 基于 stats/report 数据自主完成。",
+    annotations={"readOnlyHint": False},
+)(tools_replies.effect_tracking)
+
+mcp.tool(
+    name="contact_priority_manage",
+    description="【v4 联系人优先级管理】持久化管理联系人优先级权重（get/list/set_eval/set_override/reset）。"
+               "⚠️ 工具不计算优先级分数（分数由 Agent 基于 person_stage/person_signals/person_metrics 计算），"
+               "工具只持久化 user_eval（用户主观评价 high/medium/low）和 override_score（手动覆盖分数 0-1）。"
+               "action=get（查单人）/ list（列出所有，按 override+eval 排序）/ "
+               "set_eval（设置用户主观评价）/ set_override（手动覆盖分数，需 reason）/ reset（重置）。"
+               "优先级影响约会安排顺序，但不机械影响每条消息的回复及时性（回复间隔按各自关系阶段决定）。"
+               "文件：data/system/contact_priority.yaml。"
+               "明确不做：❌ 不计算优先级分数 ❌ 不决策'先回谁' ❌ 不评估关系重要性 ❌ 不生成调整建议。",
+    annotations={"readOnlyHint": False},
+)(tools_priority.contact_priority_manage)
+
+mcp.tool(
+    name="override_learning",
+    description="【v4 手动覆盖学习闭环】记录用户手动回复（绕过 Agent）的差异并生成学习规则候选。"
+               "触发：Agent 检测到用户手动回复后，对比 Agent 草案与用户实际发送内容。"
+               "action：record（记录差异 + 生成学习候选）/ query（查询历史事件）/ "
+               "stats（统计：按差异类型/按联系人/已应用数）/ mark_applied（标记事件已应用）。"
+               "record 参数：original_draft（Agent 草案）+ final_sent（用户实际发送）+ "
+               "context（上下文 dict）+ person（联系人）。"
+               "差异类型：identical（一致）/ style（风格差异）/ strategy（策略差异）/ content（内容差异）。"
+               "差异分析只做客观对比（长度/标点/问句/语气词），不做语义分析。"
+               "学习规则候选需 Agent 审核后决定是否应用（应用后调 mark_applied）。"
+               "文件：data/system/override_learning.yaml（最多 500 条）。"
+               "明确不做：❌ 不自动应用学习规则 ❌ 不决策'下次该怎么回' ❌ 不评估编辑好坏 ❌ 不做人设推断。",
+    annotations={"readOnlyHint": False},
+)(tools_override.override_learning)
 
 if __name__ == "__main__":
     try:
