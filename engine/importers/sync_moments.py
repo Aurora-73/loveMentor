@@ -117,7 +117,8 @@ def sync_moments(
     while True:
         resp = client.get_moments_timeline(limit=page_size, offset=offset)
 
-        timeline = resp.get("timeline", [])
+        # WeFlow 返回 {"timeline": [...]}，WCD 返回 {"posts": [...]}
+        timeline = resp.get("timeline") or resp.get("posts") or []
         if not timeline:
             break
 
