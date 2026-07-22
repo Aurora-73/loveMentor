@@ -61,6 +61,7 @@ description: |
 | `workflows/` | `auto_reply.md` | 【v4】自动回复 8 步流程（监听→线索→Wiki→查重→委员会→发送→更新） |
 | `workflows/` | `auto_reply_invite.md` | 【v4】自动邀约 7 步流程（窗口→日程→方案→确认→简报→记录） |
 | `workflows/` | `auto_reply_notify.md` | 【v4】紧急通知 5 步流程（检测→线索→Wiki→紧急发送→通知用户） |
+| `committee/` | `README.md` + 5 个 prompt 模板 | 【v4 P2】委员会审查 subagent 设计（5 官 prompt + 信息隔离 + 编排示例） |
 | `signals/` | `basic_signals.md` | IOI、冷落、窗口、需求感等基础信号 |
 | `signals/` | `manipulation_signals.md` | 废物测试、框架操控、情绪操控等 |
 | `metrics/` | `metrics_system.md` | 15+1 维指标体系详解（15个有效指标 + 1旧版兼容） |
