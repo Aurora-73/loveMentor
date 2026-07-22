@@ -553,6 +553,22 @@ mcp.tool(
 )(tools_wechat.wechat_send_image)
 
 mcp.tool(
+    name="wechat_send_file",
+    description="【微信自动发文件/视频 v4】向微信联系人自动发送文件或视频（通过 CF_HDROP 剪贴板格式，模拟 Explorer 复制粘贴）。"
+               "⚠️ 会抢鼠标：执行期间会移动鼠标并占用键鼠，调用前 Agent 应当口头提醒用户"
+               "'即将发送微信文件，执行期间请勿操作鼠标键盘'（不需要阻塞等待确认，说出来即可）。"
+               "前置条件：微信已运行并登录，联系人头像模板已存放在 data/avatars/<wxid>.jpg。"
+               "参数：name（联系人标识符：微信号/wxid/昵称/备注名 均可），file_path（文件路径，支持视频和任意文件），"
+               "urgent（紧急模式，True 时绕过回复冷却校验）。"
+               "支持的视频格式：mp4/mov/avi/mkv/flv/wmv/m4v/3gp（微信自动识别为视频发送）。"
+               "其他文件：pdf/doc/zip 等（微信发送为文件）。"
+               "技术方案：CF_HDROP 剪贴板格式（模拟 Explorer 复制文件）→ Ctrl+V 粘贴 → 微信自动识别类型 → 点击发送。"
+               "与 wechat_send_image 的区别：剪贴板用 CF_HDROP（文件拖放）而非 CF_DIB（位图），支持任意文件类型。"
+               "v4 三重硬约束：1.线索已读校验 2.回复冷却校验（urgent 可绕过）3.互斥锁校验。"
+               "示例：wechat_send_file('[REDACTED]', 'C:\\\\Users\\\\test\\\\video.mp4') → 发送 video.mp4 给 [REDACTED]",
+)(tools_wechat.wechat_send_file)
+
+mcp.tool(
     name="wechat_send_batch",
     description="【微信连续发消息 v4】向同一联系人连续发送多条消息（第一条走完整流程，后续跳过搜索直接发送）。"
                "⚠️ 会抢鼠标：执行期间会移动鼠标并占用键鼠，调用前 Agent 应当口头提醒用户"

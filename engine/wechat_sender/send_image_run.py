@@ -71,6 +71,12 @@ OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
 # 支持的图片格式
 _SUPPORTED_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp", ".tiff"}
 
+# 支持的视频格式（CF_HDROP 发送，微信自动识别为视频）
+_SUPPORTED_VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".m4v", ".3gp"}
+
+# 所有支持的格式（图片 + 视频 + 其他文件）
+_SUPPORTED_MEDIA_EXTS = _SUPPORTED_IMAGE_EXTS | _SUPPORTED_VIDEO_EXTS
+
 
 def _set_clipboard_image(image_path: str) -> bool:
     """用 ctypes 直接设置剪贴板图片（CF_DIB 格式）。
@@ -336,6 +342,251 @@ def run_send_image(image_path, do_send=True):
 
     logger.info("\n" + "=" * 60)
     logger.info("  阶段三（图片版）完成")
+    logger.info("=" * 60)
+    return True
+
+
+# ── 视频/文件发送（CF_HDROP 剪贴板格式，模拟 Explorer 复制）──────────────────
+
+
+def _set_clipboard_file(file_path: str) -> bool:
+    """用 ctypes 设置剪贴板文件（CF_HDROP 格式，模拟 Explorer 复制）。
+
+    当你在 Explorer 中右键复制文件时，Windows 将文件路径以 CF_HDROP 格式放入剪贴板。
+    微信接受此格式，根据文件类型自动处理：
+    - 视频文件 → 显示视频预览/发送为视频
+    - 其他文件 → 发送为文件
+
+    Args:
+        file_path: 文件路径（视频/文档/任意文件）
+
+    Returns:
+        bool: True=成功，False=失败
+    """
+    import struct
+
+    CF_HDROP = 15  # File drop format
+    GMEM_MOVEABLE = 0x0002
+
+    kernel32 = ctypes.windll.kernel32
+
+    # 64位系统必须设置函数原型
+    kernel32.GlobalAlloc.restype = wintypes.HGLOBAL
+    kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+    kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+    user32.OpenClipboard.restype = wintypes.BOOL
+    user32.OpenClipboard.argtypes = [wintypes.HWND]
+    user32.SetClipboardData.restype = wintypes.HANDLE
+    user32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
+
+    # DROPFILES structure (20 bytes)
+    # typedef struct {
+    #     DWORD pFiles;     // offset to file list (= sizeof(DROPFILES) = 20)
+    #     POINT pt;         // drop point (0, 0) — 2x DWORD = 8 bytes
+    #     BOOL  fNC;        // non-client area flag (FALSE = 0)
+    #     BOOL  fWide;      // Unicode flag (TRUE = 1)
+    # } DROPFILES;
+    # Layout: pFiles(4) + pt.x(4) + pt.y(4) + fNC(4) + fWide(4) = 20 bytes
+
+    abs_path = os.path.abspath(file_path)
+    # 文件列表：UTF-16-LE 编码，以双 \0 结尾
+    file_list = (abs_path + "\0\0").encode("utf-16-le")
+
+    dropfiles = struct.pack("IiiII", 20, 0, 0, 0, 1)  # pFiles=20, pt=(0,0), fNC=0, fWide=1
+    data = dropfiles + file_list
+
+    if not user32.OpenClipboard(None):
+        logger.error("❌ OpenClipboard 失败")
+        return False
+    try:
+        user32.EmptyClipboard()
+        h_global = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(data))
+        if not h_global:
+            logger.error("❌ GlobalAlloc 失败")
+            return False
+        ptr = kernel32.GlobalLock(h_global)
+        if not ptr:
+            logger.error("❌ GlobalLock 失败")
+            return False
+        ctypes.memmove(ptr, data, len(data))
+        kernel32.GlobalUnlock(h_global)
+        result = user32.SetClipboardData(CF_HDROP, h_global)
+        if not result:
+            logger.error("❌ SetClipboardData(CF_HDROP) 失败")
+            return False
+        logger.info(f"   ✅ 剪贴板已设置文件 HDROP ({len(data)} bytes): {abs_path}")
+        return True
+    finally:
+        user32.CloseClipboard()
+
+
+def input_file_via_clipboard(hwnd, file_path):
+    """用剪贴板 + Ctrl+V 输入文件（视频/文档/任意文件，模拟 Explorer 复制粘贴）。
+
+    流程：
+    1. 验证文件存在
+    2. 把文件路径以 CF_HDROP 格式放到剪贴板（模拟 Explorer 复制）
+    3. 在目标窗口按 Ctrl+V 粘贴
+
+    微信会根据文件类型自动处理：
+    - 视频（mp4/mov 等）→ 发送为视频
+    - 其他文件 → 发送为文件
+
+    Args:
+        hwnd: 目标窗口句柄
+        file_path: 文件路径
+
+    Returns:
+        bool: True=成功，False=失败
+    """
+    if not os.path.exists(file_path):
+        logger.error(f"❌ 文件不存在: {file_path}")
+        return False
+
+    logger.info(f"   [剪贴板] 准备粘贴文件: {file_path}")
+
+    # 设置剪贴板（CF_HDROP）
+    if not _set_clipboard_file(file_path):
+        return False
+
+    # Ctrl+V 粘贴
+    _press_ctrl_v(hwnd)
+
+    logger.info(f"   ✅ 文件已粘贴到输入框")
+    return True
+
+
+def run_send_file(file_path, do_send=True):
+    """执行阶段三（文件版）：粘贴文件（视频/文档）并发送。
+
+    与 run_send_image 的区别：
+    - 使用 CF_HDROP 剪贴板格式（模拟 Explorer 复制），而非 CF_DIB（位图）
+    - 支持视频（mp4/mov 等）和任意文件类型
+    - 微信自动识别文件类型并处理
+    - 视频文件较大时等待时间更长（3.0s vs 1.5s）
+
+    技术原理（用户指导）：
+    "视频和文件的逻辑是一样的，都是复制粘贴然后发送，就是 explorer 里的那种复制，
+     然后就可以粘贴到微信里"
+
+    Args:
+        file_path: 文件路径（视频/文档/任意文件）
+        do_send: True=发送，False=只检测不发送
+
+    Returns:
+        bool: 是否成功
+    """
+    from send_common import (
+        check_wechat_login, find_wechat_main_window,
+        capture_and_detect_layout, click_input_box,
+        capture_screenshot, find_send_button, click_send_button,
+    )
+
+    logger.info("=" * 60)
+    if do_send:
+        logger.info(f"  阶段三（文件版）：粘贴并发送文件  path={file_path!r}")
+    else:
+        logger.info("  阶段三（文件版）：只检测布局（粘贴文件但不发送）")
+    logger.info("=" * 60)
+
+    # 前置检查：文件存在
+    if not os.path.exists(file_path):
+        logger.error(f"❌ 文件不存在: {file_path}")
+        return False
+
+    # 检查文件大小（视频可能很大，警告 > 100MB）
+    file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+    if file_size_mb > 100:
+        logger.warning(f"⚠️ 文件较大 ({file_size_mb:.1f} MB)，发送可能需要较长时间")
+    elif file_size_mb > 25:
+        logger.info(f"   文件大小: {file_size_mb:.1f} MB")
+
+    # 0. 前置检查：微信是否已登录
+    logged_in, _ = check_wechat_login()
+    if not logged_in:
+        return False
+
+    # 1. 找微信窗口
+    window = find_wechat_main_window()
+    if not window:
+        return False
+    hwnd = window["hwnd"]
+
+    # 2-3. 截图 + 检测聊天区域分界线
+    img, nav_right, session_right = capture_and_detect_layout(
+        hwnd, screenshot_name="stage_3_file_before_send.png"
+    )
+    if img is None:
+        return False
+
+    h, w = img.shape[:2]
+
+    # 4-5. 计算输入框位置 + 物理点击输入框
+    offset_x, offset_y = click_input_box(hwnd, img, session_right, draw_annotation=False)
+    if offset_x is None:
+        return False
+
+    # 6. 粘贴文件（CF_HDROP 格式，微信自动识别类型）
+    logger.info(f"\n[6] 粘贴文件: {file_path}")
+    if not input_file_via_clipboard(hwnd, file_path):
+        logger.error("❌ 粘贴文件失败")
+        return False
+
+    # 等待微信处理文件（视频/大文件加载比图片慢）
+    # 根据文件大小动态调整等待时间
+    if file_size_mb > 50:
+        wait_time = 4.0  # 大文件等待 4s
+    elif file_size_mb > 10:
+        wait_time = 3.0  # 中等文件等待 3s
+    else:
+        wait_time = 2.0  # 小文件等待 2s
+    logger.info(f"   等待微信处理文件 ({wait_time}s)...")
+    time.sleep(wait_time)
+
+    # 7. 重新截图（此时发送按钮应变绿）
+    logger.info("\n[7] 重新截图（发送按钮应变绿）")
+    img_after_input = capture_screenshot(hwnd, "stage_3_file_after_input.png")
+    if img_after_input is None:
+        return False
+
+    # 8. 定位发送按钮
+    send_cx, send_cy, _ = find_send_button(
+        img_after_input, session_right, screenshot_name="stage_3_file_send_button.png"
+    )
+    if send_cx is None:
+        return False
+
+    if not do_send:
+        logger.info("\n[只检测模式] 已找到发送按钮，未点击发送")
+        return True
+
+    # 9. 物理点击发送按钮（文件上传慢，等待更久）
+    click_send_button(hwnd, send_cx, send_cy, offset_x, offset_y, wait_seconds=4.0)
+
+    # 10. 截图验证（发送后）
+    logger.info("\n[10] 截图验证（发送后）")
+    after_img = capture_screenshot(hwnd, "stage_3_file_after_send.png")
+    if after_img is None:
+        return False
+
+    # 11. 文件发送验证：对比输入框区域，检查文件预览是否消失
+    logger.info("\n[11] 文件发送验证（输入框清空检测）")
+    h_img = img_after_input.shape[0]
+    input_box_before = img_after_input[h_img - 120:h_img, session_right:]
+    input_box_after = after_img[h_img - 120:h_img, session_right:]
+    diff = cv2.absdiff(input_box_after, input_box_before)
+    mean_diff = float(diff.mean())
+
+    if mean_diff > 5.0:
+        logger.info(f"    ✅ 输入框已清空（差异值 {mean_diff:.2f}），文件发送成功")
+    else:
+        logger.warning(f"    ⚠️ 输入框未清空（差异值 {mean_diff:.2f}），可能未发送成功")
+        return False
+
+    logger.info("\n" + "=" * 60)
+    logger.info("  阶段三（文件版）完成")
     logger.info("=" * 60)
     return True
 

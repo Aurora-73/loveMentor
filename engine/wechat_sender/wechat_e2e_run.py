@@ -1163,12 +1163,41 @@ def send_image_with_retry(name: str, image_path: str) -> dict:
                                     stage3_func=run_send_image)
 
 
+def send_file_with_retry(name: str, file_path: str) -> dict:
+    """发送文件/视频完整业务编排（v4 第十六章多媒体发送能力扩展）。
+
+    复用 send_message_with_retry 的全部业务逻辑，通过 stage3_func 参数
+    切换阶段三为文件发送流程（CF_HDROP 剪贴板格式，模拟 Explorer 复制）。
+
+    技术方案（用户指导）：
+    "视频和文件的逻辑是一样的，都是复制粘贴然后发送，就是 explorer 里的那种复制，
+     然后就可以粘贴到微信里"
+
+    与 send_image_with_retry 的区别：
+    - 剪贴板格式：CF_HDROP（文件拖放）vs CF_DIB（位图）
+    - 支持文件类型：视频（mp4/mov 等）+ 任意文件（pdf/doc/zip 等）
+    - 微信自动识别文件类型并处理
+    - 文件较大时等待时间更长
+
+    Args:
+        name: 联系人标识符（微信号/wxid/昵称/备注名 均可）
+        file_path: 文件路径（视频/文档/任意文件）
+
+    Returns:
+        dict: 与 send_message_with_retry 相同的结构
+    """
+    # 延迟导入，避免模块加载时循环依赖
+    from send_image_run import run_send_file
+    return send_message_with_retry(name, file_path,
+                                    stage3_func=run_send_file)
+
+
 def _normalize_batch_message(msg):
     """标准化批量消息格式（v4 混合连续发送能力）。
 
     支持两种输入格式：
     - 字符串：当作文字消息 {"type": "text", "content": msg}
-    - 字典：{"type": "text"|"emoji"|"image", "content": "..."}
+    - 字典：{"type": "text"|"emoji"|"image"|"video"|"file", "content": "..."}
 
     Args:
         msg: 原始消息（字符串或字典）
@@ -1186,9 +1215,9 @@ def _normalize_batch_message(msg):
     if isinstance(msg, dict):
         msg_type = msg.get("type", "text")
         content = msg.get("content", "")
-        if msg_type not in ("text", "emoji", "image"):
+        if msg_type not in ("text", "emoji", "image", "video", "file"):
             raise ValueError(
-                f"不支持的消息类型: {msg_type!r}（支持: text/emoji/image）"
+                f"不支持的消息类型: {msg_type!r}（支持: text/emoji/image/video/file）"
             )
         if not content:
             raise ValueError(f"消息内容为空: {msg!r}")
@@ -1200,13 +1229,14 @@ def _get_stage3_func_for_type(msg_type):
     """根据消息类型返回对应的 stage3 执行函数。
 
     Args:
-        msg_type: 消息类型（text/emoji/image）
+        msg_type: 消息类型（text/emoji/image/video/file）
 
     Returns:
         callable 或 None:
         - text → None（表示用默认的 run_send_message）
         - emoji → run_send_emoji
         - image → run_send_image
+        - video/file → run_send_file（CF_HDROP 剪贴板格式）
     """
     if msg_type == "emoji":
         from send_emoji_run import run_send_emoji
@@ -1214,6 +1244,9 @@ def _get_stage3_func_for_type(msg_type):
     if msg_type == "image":
         from send_image_run import run_send_image
         return run_send_image
+    if msg_type in ("video", "file"):
+        from send_image_run import run_send_file
+        return run_send_file
     return None  # text 用默认的 run_send_message
 
 

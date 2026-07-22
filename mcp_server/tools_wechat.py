@@ -696,12 +696,163 @@ def wechat_send_image(name: str, image_path: str, urgent: bool = False) -> dict:
     return result
 
 
+def wechat_send_file(name: str, file_path: str, urgent: bool = False) -> dict:
+    """向微信联系人自动发送文件/视频（v4 第十六章多媒体发送能力扩展 + 三重硬约束）。
+
+    技术方案（用户指导）：
+    "视频和文件的逻辑是一样的，都是复制粘贴然后发送，就是 explorer 里的那种复制，
+     然后就可以粘贴到微信里"
+
+    使用 CF_HDROP 剪贴板格式（模拟 Explorer 复制文件），微信自动识别文件类型：
+    - 视频（mp4/mov/avi/mkv/flv/wmv/m4v/3gp）→ 发送为视频
+    - 其他文件（pdf/doc/zip 等）→ 发送为文件
+
+    与 wechat_send_image 的区别：
+    - 剪贴板格式：CF_HDROP（文件拖放）vs CF_DIB（位图）
+    - 支持文件类型：视频 + 任意文件（不限图片）
+    - 文件较大时等待时间更长（根据文件大小动态调整 2-4s）
+
+    v4 三重硬约束（与 wechat_send 相同）：
+    1. 线索已读校验：未读取最新消息时拒绝发送
+    2. 回复冷却校验：urgent=True 可绕过
+    3. 互斥锁校验：视觉自动化串行
+
+    Args:
+        name: 微信联系人标识符（微信号 / wxid / 昵称 / 备注名 均可）
+        file_path: 文件路径（视频/文档/任意文件）
+        urgent: 紧急模式（True 时绕过回复冷却校验，但仍然校验线索已读）。
+
+    Returns:
+        dict: {
+            "success": bool,
+            "message": str,
+            "contact": str,
+            "search_term": str,
+            "template": str,
+            "attempts": int,
+            "error": str|None,
+            "window_restored": bool,
+            "matches": list|None,
+            "recording_path": str|None,
+            "hard_constraints": dict,
+        }
+    """
+    import os as _os
+    from engine.wechat_sender.wechat_recorder import with_recording
+    from engine.wechat_sender.wechat_e2e_run import send_file_with_retry
+
+    # 前置检查：文件存在
+    if not file_path or not _os.path.exists(file_path):
+        return {
+            "success": False,
+            "error": "FILE_NOT_FOUND",
+            "message": f"文件不存在: {file_path}",
+            "contact": name,
+            "search_term": name,
+            "template": "",
+            "attempts": 0,
+            "window_restored": False,
+            "matches": None,
+            "recording_path": None,
+            "hard_constraints": {
+                "user_took_over": "skipped",
+                "thread_read": "skipped",
+                "cooldown": "skipped",
+                "mutex": "skipped",
+                "urgent": urgent,
+            },
+        }
+
+    # v4 硬约束 0：用户介入取消校验
+    took_over_check = _check_user_took_over(name)
+    if not took_over_check["passed"]:
+        return {
+            "success": False,
+            "error": "USER_TOOK_OVER",
+            "message": took_over_check["reason"],
+            "suggestion": took_over_check.get("suggestion", ""),
+            "hard_constraints": {
+                "user_took_over": "failed",
+                "thread_read": "skipped",
+                "cooldown": "skipped",
+                "mutex": "skipped",
+                "urgent": urgent,
+            },
+        }
+
+    # v4 硬约束 1：校验线索已读
+    thread_check = _check_thread_read(name)
+    if not thread_check["passed"]:
+        return {
+            "success": False,
+            "error": "THREAD_NOT_CAUGHT_UP",
+            "message": f"线索未读取最新消息：{thread_check['reason']}",
+            "suggestion": thread_check.get("suggestion", ""),
+            "unprocessed_count": thread_check.get("unprocessed_count", 0),
+            "hard_constraints": {
+                "user_took_over": "passed",
+                "thread_read": "failed",
+                "cooldown": "skipped",
+                "mutex": "skipped",
+                "urgent": urgent,
+            },
+        }
+
+    # v4 硬约束 2：回复冷却校验
+    stage = _get_person_stage_num(name)
+    cooldown_check = _check_cooldown(name, urgent=urgent, stage=stage)
+    if not cooldown_check["passed"]:
+        return {
+            "success": False,
+            "error": "COOLDOWN_ACTIVE",
+            "message": cooldown_check["reason"],
+            "wait_seconds": cooldown_check.get("wait_seconds", 0),
+            "cooldown_seconds": cooldown_check.get("cooldown_seconds", 0),
+            "elapsed_seconds": cooldown_check.get("elapsed_seconds", 0),
+            "stage": stage,
+            "suggestion": "等待冷却结束后重试，或使用 urgent=True 绕过（仅紧急情况）",
+            "hard_constraints": {
+                "user_took_over": "passed",
+                "thread_read": "passed",
+                "cooldown": "failed",
+                "mutex": "skipped",
+                "stage": stage,
+                "urgent": urgent,
+            },
+        }
+
+    # v4 硬约束 3：互斥锁 + 正常发送流程
+    def _impl():
+        _wechat_op_lock.acquire()
+        try:
+            return send_file_with_retry(name, file_path)
+        finally:
+            _wechat_op_lock.release()
+
+    result = with_recording(name, _impl)
+
+    # 发送成功后更新 last_send_time
+    if result.get("success"):
+        _update_send_time(name)
+
+    result["hard_constraints"] = {
+        "user_took_over": "passed",
+        "thread_read": "passed",
+        "cooldown": "bypassed" if urgent else "passed",
+        "mutex": "passed",
+        "stage": stage,
+        "urgent": urgent,
+    }
+
+    return result
+
+
 # ── 工具4: wechat_send_batch ────────────────────────────────────
 
 def wechat_send_batch(name: str, messages: list, urgent: bool = False) -> dict:
     """向同一联系人连续发送多条混合消息（v4 连续发送 + 混合消息能力 + 三重硬约束）。
 
-    支持在一次调用中连续发送文字/表情/图片混合消息：
+    支持在一次调用中连续发送文字/表情/图片/视频/文件混合消息：
     - 第一条消息走完整流程（搜索+点击头像+发送）
     - 后续消息跳过搜索，直接在当前聊天界面发送
     - 每次发送前校验聊天框左上角显示名
@@ -710,10 +861,12 @@ def wechat_send_batch(name: str, messages: list, urgent: bool = False) -> dict:
 
     消息格式（两种，可混用）：
     - 字符串：当作文字消息
-    - 字典：{"type": "text"|"emoji"|"image", "content": "..."}
+    - 字典：{"type": "text"|"emoji"|"image"|"video"|"file", "content": "..."}
       - text: content 为消息文本
       - emoji: content 为表情搜索关键词（如"微笑"、"加油"）
       - image: content 为图片文件路径（支持 jpg/png/bmp 等常见格式）
+      - video: content 为视频文件路径（支持 mp4/mov/avi 等，使用 CF_HDROP 剪贴板）
+      - file: content 为任意文件路径（pdf/doc/zip 等，使用 CF_HDROP 剪贴板）
 
     示例：
         messages = [
@@ -721,9 +874,11 @@ def wechat_send_batch(name: str, messages: list, urgent: bool = False) -> dict:
             {"type": "text", "content": "今天天气不错"},     # 文字（字典形式）
             {"type": "emoji", "content": "微笑"},            # 表情
             {"type": "image", "content": "C:/pic.jpg"},      # 图片
+            {"type": "video", "content": "C:/video.mp4"},    # 视频
+            {"type": "file", "content": "C:/doc.pdf"},       # 文件
         ]
 
-    适用场景：分段发送长文本、文字+表情混合、文字+图片混合等。
+    适用场景：分段发送长文本、文字+表情混合、文字+图片/视频混合等。
 
     v4 三重硬约束（与 wechat_send 相同，只在第一条消息前校验一次）：
     1. 线索已读校验：未读取最新消息时拒绝发送
