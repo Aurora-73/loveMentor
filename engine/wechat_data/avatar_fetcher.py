@@ -544,9 +544,15 @@ def _query_avatar_via_wcd_api(
         return None
 
     # 1. 轻量解密 contact.db + head_image.db 以刷新 WCD 数据快照
+    #   - 仅微信运行时需要（WCDB 文件锁占用，必须走解密快照）
+    #   - 微信未运行时跳过解密，直接用 realtime 直读加密库
     #   - 比 decrypt_databases(force=True) 快 30-100 倍（跳过 message_*.db）
     #   - 不写节流标记，不影响全量解密的节流逻辑
-    if force_refresh:
+    from engine.importers.wcd_client import is_wechat_running
+    wechat_running = is_wechat_running()
+    query_source = "decrypted" if wechat_running else None  # None=realtime 直读
+
+    if force_refresh and wechat_running:
         try:
             logger.info(
                 f"WCD 轻量解密以刷新 {wxid_hint or identifier!r} 的头像（仅 contact.db + head_image.db）..."
@@ -564,17 +570,22 @@ def _query_avatar_via_wcd_api(
         except Exception as e:
             logger.warning(f"WCD decrypt_databases_lite 失败: {e}")
             # 继续尝试查询，WCD 内部可能已有较新数据
+    elif force_refresh and not wechat_running:
+        logger.info("微信未运行，跳过轻量解密，使用 realtime 直读")
 
     # 2. 查询联系人头像
     # 优先用 wxid 精确查询，其次用 identifier
-    # 使用 source=decrypted 读取解密后的 DB 副本（微信运行时也能工作）
-    # 因为前面已调 decrypt_databases(force=True) 刷新了解密快照，decrypted 数据是最新的
+    # 微信运行时：source=decrypted 读解密快照（前面已 lite 解密刷新）
+    # 微信未运行时：source=None 用 realtime 直读（无需解密）
     search_keyword = wxid_hint if wxid_hint else identifier
 
     try:
-        contacts = client.list_contacts(keyword=search_keyword, limit=20, source="decrypted")
+        if query_source:
+            contacts = client.list_contacts(keyword=search_keyword, limit=20, source=query_source)
+        else:
+            contacts = client.list_contacts(keyword=search_keyword, limit=20)
     except Exception as e:
-        logger.warning(f"WCD list_contacts({search_keyword!r}, source=decrypted) 失败: {e}")
+        logger.warning(f"WCD list_contacts({search_keyword!r}, source={query_source or 'auto'}) 失败: {e}")
         # 回退到默认 source（可能微信未运行时 realtime 也能用）
         try:
             contacts = client.list_contacts(keyword=search_keyword, limit=20)
@@ -974,10 +985,11 @@ def get_avatar_url(
         # 优先返回 CDN URL；代理 URL 也返回（调用方自行判断是否可用）
         return url
 
-    # 2. API 查询
+    # 2. API 查询（智能选择数据源）
     client = _create_client(config)
     if client.health():
-        api_result = _query_api_avatar(client, identifier)
+        api_source = _smart_wcd_source(config)
+        api_result = _query_api_avatar(client, identifier, source=api_source)
         if api_result:
             return api_result["avatar_url"]
 
