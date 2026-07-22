@@ -360,6 +360,11 @@ def run_send_emoji(emoji_keyword, do_send=True):
     Returns:
         bool: 是否成功
     """
+    from send_common import (
+        check_wechat_login, find_wechat_main_window,
+        capture_and_detect_layout,
+    )
+
     logger.info("=" * 60)
     if do_send:
         logger.info(f"  阶段三（表情包版）：搜索并发送表情  keyword={emoji_keyword!r}")
@@ -368,48 +373,22 @@ def run_send_emoji(emoji_keyword, do_send=True):
     logger.info("=" * 60)
 
     # 0. 前置检查：微信是否已登录
-    try:
-        from wechat_window_utils import check_login_status
-        login_info = check_login_status()
-        if not login_info["logged_in"]:
-            logger.error("❌ 微信未登录，拒绝发送表情")
-            logger.info(f"   登录状态: tray_icon={login_info['tray_icon_found']} "
-                        f"main_window_size={login_info['main_window_size']}")
-            return False
-        logger.info(f"[0] 登录状态: 已登录 (tray={login_info['tray_method']}, "
-                    f"main_size={login_info['main_window_size']})")
-    except Exception as e:
-        logger.warning(f"⚠️ 登录状态检测异常: {e}，继续尝试发送")
+    logged_in, _ = check_wechat_login()
+    if not logged_in:
+        return False
 
     # 1. 找微信主窗口
-    window = find_largest_wechat_window()
+    window = find_wechat_main_window()
     if not window:
-        logger.error("❌ 未找到微信窗口")
         return False
     main_hwnd = window["hwnd"]
-    logger.info(f"\n[1] 微信主窗口: hwnd={main_hwnd} size={window['width']}x{window['height']}")
 
-    if window["width"] < 500 or window["height"] < 400:
-        logger.error(f"❌ 微信窗口太小 ({window['width']}x{window['height']})，可能不是主窗口")
-        return False
-
-    # 2. 截图主窗口
-    logger.info("\n[2] 截图主窗口（发送前）")
-    img = screencap_window(main_hwnd)
+    # 2-3. 截图主窗口 + 检测布局
+    img, nav_right, session_right = capture_and_detect_layout(
+        main_hwnd, screenshot_name="stage_3_emoji_before.png"
+    )
     if img is None:
-        logger.error("❌ 截图失败")
         return False
-    img_path = os.path.join(OUTPUT_DIR, "stage_3_emoji_before.png")
-    cv2.imwrite(img_path, img)
-    logger.info(f"    截图: {img_path} ({img.shape[1]}x{img.shape[0]})")
-
-    h, w = img.shape[:2]
-
-    # 3. 检测布局
-    logger.info("\n[3] 检测聊天区域分界线")
-    detector = WeChatLayoutDetector()
-    nav_right, session_right = detector.detect(img)
-    logger.info(f"    nav_right={nav_right} session_right={session_right}")
 
     # 4. 在主窗口上定位表情按钮
     logger.info("\n[4] 定位表情按钮（聊天输入框旁的笑脸图标）")

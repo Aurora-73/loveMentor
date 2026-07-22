@@ -220,6 +220,12 @@ def draw_input_box(image, input_cx, input_cy, session_right):
 
 def run_send_message(message, do_send=True):
     """执行阶段三：输入和发送消息"""
+    from send_common import (
+        check_wechat_login, find_wechat_main_window,
+        capture_and_detect_layout, click_input_box,
+        capture_screenshot, find_send_button, click_send_button,
+    )
+
     logger.info("=" * 60)
     if do_send:
         logger.info(f"  阶段三：输入和发送消息  message={message!r}")
@@ -227,80 +233,28 @@ def run_send_message(message, do_send=True):
         logger.info("  阶段三：只检测布局（输入测试文本但不发送）")
     logger.info("=" * 60)
 
-    # 0. 前置检查：微信是否已登录（避免在未登录窗口上操作）
-    try:
-        from wechat_window_utils import check_login_status
-        login_info = check_login_status()
-        if not login_info["logged_in"]:
-            logger.error("❌ 微信未登录，拒绝发送消息")
-            logger.info(f"   登录状态: tray_icon={login_info['tray_icon_found']} "
-                        f"main_window_size={login_info['main_window_size']} "
-                        f"hidden_subwindow={login_info['has_hidden_subwindow']}")
-            logger.info("   请先调用 wechat_start 启动并登录微信")
-            return False
-        logger.info(f"[0] 登录状态: 已登录 (tray={login_info['tray_method']}, "
-                    f"main_size={login_info['main_window_size']})")
-    except Exception as e:
-        logger.warning(f"⚠️ 登录状态检测异常: {e}，继续尝试发送")
+    # 0. 前置检查：微信是否已登录
+    logged_in, _ = check_wechat_login()
+    if not logged_in:
+        return False
 
-    # 1. 找微信窗口（选最大的，避免找到托盘图标等小窗口）
-    window = find_largest_wechat_window()
+    # 1. 找微信窗口
+    window = find_wechat_main_window()
     if not window:
-        logger.error("❌ 未找到微信窗口")
         return False
     hwnd = window["hwnd"]
-    logger.info(f"\n[1] 微信窗口: hwnd={hwnd} size={window['width']}x{window['height']}")
 
-    # 检查窗口大小（避免找到托盘图标等小窗口）
-    if window["width"] < 500 or window["height"] < 400:
-        logger.error(f"❌ 微信窗口太小 ({window['width']}x{window['height']})，可能不是主窗口")
-        logger.info("   请确认微信主窗口已打开并显示在屏幕上")
-        return False
-
-    # 2. 截图（发送前）
-    logger.info("\n[2] 截图（发送前）")
-    img = screencap_window(hwnd)
+    # 2-3. 截图 + 检测聊天区域分界线
+    img, nav_right, session_right = capture_and_detect_layout(hwnd)
     if img is None:
-        logger.error("❌ 截图失败")
         return False
-    img_path = os.path.join(OUTPUT_DIR, "stage_3_before_send.png")
-    cv2.imwrite(img_path, img)
-    logger.info(f"    截图: {img_path} ({img.shape[1]}x{img.shape[0]})")
 
     h, w = img.shape[:2]
 
-    # 3. 检测聊天区域分界线
-    logger.info("\n[3] 检测聊天区域分界线")
-    detector = WeChatLayoutDetector()
-    nav_right, session_right = detector.detect(img)
-    logger.info(f"    nav_right={nav_right} session_right={session_right}")
-
-    chat_x = session_right
-    chat_w = w - session_right
-    logger.info(f"    聊天区域: x={chat_x} w={chat_w}")
-
-    # 4. 计算输入框位置（聊天区域底部中心，距底部 80px）
-    input_cx = chat_x + chat_w // 2
-    input_cy = h - INPUT_BOX_OFFSET_FROM_BOTTOM
-    logger.info(f"\n[4] 输入框位置(截图坐标): ({input_cx}, {input_cy})")
-
-    # 标注输入框位置
-    input_vis = draw_input_box(img, input_cx, input_cy, session_right)
-    input_vis_path = os.path.join(OUTPUT_DIR, "stage_3_input_box.png")
-    cv2.imwrite(input_vis_path, input_vis)
-    logger.info(f"    输入框标注图: {input_vis_path}")
-
-    # 5. 物理点击输入框
-    logger.info(f"\n[5] 物理点击输入框")
-    offset_x, offset_y = get_client_offset(hwnd)
-    client_x = input_cx - offset_x
-    client_y = input_cy - offset_y
-    screen_x, screen_y = client_to_screen(hwnd, client_x, client_y)
-    logger.info(f"    输入框屏幕坐标: ({screen_x}, {screen_y})")
-    safe_set_foreground_window(hwnd)
-    time.sleep(0.5)
-    physical_click(screen_x, screen_y)
-    time.sleep(0.8)
+    # 4-5. 计算输入框位置 + 物理点击输入框
+    offset_x, offset_y = click_input_box(hwnd, img, session_right)
+    if offset_x is None:
+        return False
 
     # 6. 输入消息（此时发送按钮变绿）
     # 超长消息分段输入+发送，避免输入框滚动导致发送按钮位置变化
@@ -345,59 +299,29 @@ def run_send_message(message, do_send=True):
         logger.info("=" * 60)
         return True
 
-    # 7. 重新截图（此时发送按钮是绿色）
+    # 7. 重新截图（此时发送按钮应变绿）
     logger.info("\n[7] 重新截图（发送按钮应变绿）")
-    img_after_input = screencap_window(hwnd)
+    img_after_input = capture_screenshot(hwnd, "stage_3_after_input.png")
     if img_after_input is None:
-        logger.error("❌ 重新截图失败")
-        return False
-    img_after_input_path = os.path.join(OUTPUT_DIR, "stage_3_after_input.png")
-    cv2.imwrite(img_after_input_path, img_after_input)
-    logger.info(f"    截图: {img_after_input_path}")
-
-    # 8. 用 OCR 识别"发送"文字定位发送按钮（优先），回退到绿色按钮检测
-    logger.info("\n[8] 定位发送按钮（OCR 优先）")
-    send_cx, send_cy, send_debug = find_send_button_by_ocr(img_after_input)
-
-    if send_cx is None:
-        logger.info("    OCR 未找到，回退到绿色按钮检测...")
-        send_cx, send_cy, send_debug = find_send_button_from_bottom_right(
-            img_after_input, session_right
-        )
-
-    send_debug_path = os.path.join(OUTPUT_DIR, "stage_3_send_button.png")
-    cv2.imwrite(send_debug_path, send_debug)
-    logger.info(f"    发送按钮检测图: {send_debug_path}")
-
-    if send_cx is None:
-        logger.error("    ❌ 未找到发送按钮")
-        logger.info("    可能原因：消息未输入成功，或发送按钮位置不在右下角 1/3 区域")
         return False
 
-    logger.info(f"    ✅ 找到发送按钮: ({send_cx}, {send_cy})")
+    # 8. 定位发送按钮（OCR 优先，回退到绿色按钮检测）
+    send_cx, send_cy, _ = find_send_button(img_after_input, session_right)
+    if send_cx is None:
+        return False
 
     if not do_send:
         logger.info("\n[只检测模式] 已找到发送按钮，未点击发送")
         return True
 
     # 9. 物理点击发送按钮
-    logger.info(f"\n[9] 物理点击发送按钮 ({send_cx}, {send_cy})")
-    client_x = send_cx - offset_x
-    client_y = send_cy - offset_y
-    screen_x, screen_y = client_to_screen(hwnd, client_x, client_y)
-    logger.info(f"    发送按钮屏幕坐标: ({screen_x}, {screen_y})")
-    physical_click(screen_x, screen_y)
-    time.sleep(1.5)
+    click_send_button(hwnd, send_cx, send_cy, offset_x, offset_y, wait_seconds=1.5)
 
-    # 10. 截图验证 + OCR 确认消息已发送
+    # 10. 截图验证（发送后）
     logger.info("\n[10] 截图验证（发送后）")
-    after_img = screencap_window(hwnd)
+    after_img = capture_screenshot(hwnd, "stage_3_after_send.png")
     if after_img is None:
-        logger.error("❌ 发送后截图失败")
         return False
-    after_path = os.path.join(OUTPUT_DIR, "stage_3_after_send.png")
-    cv2.imwrite(after_path, after_img)
-    logger.info(f"    发送后截图: {after_path}")
 
     # 11. OCR 验证：确认消息出现在聊天记录中
     logger.info("\n[11] OCR 验证消息是否出现在聊天记录")
