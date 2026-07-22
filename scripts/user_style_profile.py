@@ -295,15 +295,17 @@ def _analyze_emoji_usage(weighted_messages: list[tuple[dict, float]]) -> dict:
     msgs_with_emoji = 0
 
     # 表情符号正则（Unicode emoji 范围）
+    # 注意：不能用 \U000024C2-\U0001F251 这种过宽的范围，会包含 CJK 汉字
     emoji_pattern = re.compile(
         "["
         "\U0001F600-\U0001F64F"  # 表情符号
         "\U0001F300-\U0001F5FF"  # 符号 & 象形文字
         "\U0001F680-\U0001F6FF"  # 交通和地图符号
         "\U0001F1E0-\U0001F1FF"  # 旗帜
-        "\U00002702-\U000027B0"  # 装饰符号
-        "\U000024C2-\U0001F251"
+        "\U00002600-\U000026FF"  # 杂项符号（太阳/月亮/星星等）
+        "\U00002700-\U000027BF"  # 装饰符号（剪刀/雪花等）
         "\U0001F900-\U0001F9FF"  # 补充表情符号
+        "\U0001FA70-\U0001FAFF"  # 符号和象形文字扩展 A
         "]+",
         flags=re.UNICODE,
     )
