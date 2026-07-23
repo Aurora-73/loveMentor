@@ -5,7 +5,7 @@
   - 工具只提供数据 + 模糊搜索能力
   - 不按 stage 过滤（stage 是 agent 的决策维度，不是工具的过滤维度）
   - suitable_stages 作为信息返回给 agent 参考，不用于过滤
-  - 隐私级别是安全控制（防止误发隐私图片），不是决策
+  - 不设分类级隐私等级，如某张图片需谨慎使用，在 description 中标注
 
 Agent 看不到图片内容，通过本工具搜索图片索引，返回匹配图片的描述和绝对路径。
 Agent 拿到描述后自行决定用哪张，拿到绝对路径后通过 wechat_send_image 发送。
@@ -70,20 +70,6 @@ def _fuzzy_match(keywords: list[str], target_keywords: list[str], search_text: s
     return False
 
 
-def _match_privacy(max_privacy_level: str, file_privacy: str) -> bool:
-    """检查隐私级别是否在允许范围内（安全控制，非决策）。
-
-    隐私级别：safe < internal < private
-    max_privacy_level=safe → 只返回 safe
-    max_privacy_level=internal → 返回 safe + internal
-    max_privacy_level=private → 返回所有
-    """
-    levels = {"safe": 0, "internal": 1, "private": 2}
-    max_level = levels.get(max_privacy_level, 0)
-    file_level = levels.get(file_privacy, 0)
-    return file_level <= max_level
-
-
 def _build_absolute_path(relative_path: str) -> str:
     """将相对路径转为绝对路径（规范化分隔符）。"""
     normalized_relative = relative_path.replace("/", os.sep)
@@ -114,7 +100,6 @@ def _collect_files(category_data: dict) -> list[dict]:
 def search_user_pictures(
     keywords: Optional[list[str]] = None,
     category: Optional[str] = None,
-    max_privacy_level: str = "safe",
     limit: int = 20,
 ) -> dict:
     """搜索用户图片库，返回匹配图片的描述和绝对路径。
@@ -122,7 +107,7 @@ def search_user_pictures(
     设计原则：工具只提供数据，不替 agent 做决策。
     - 不按 stage 过滤（agent 自行判断哪些图片适合当前阶段）
     - suitable_stages 作为信息返回，供 agent 参考
-    - 隐私级别是安全控制，防止误发隐私图片
+    - 不设隐私级别过滤，agent 读取 description 中的标注自行判断
 
     Args:
         keywords: 关键词列表（模糊匹配，任一匹配即可）
@@ -130,8 +115,6 @@ def search_user_pictures(
                   也搜索 description/suitable_when 等文本字段
         category: 分类精确过滤，如 "猫" / "旅行" / "游戏" / "美食" / "户外活动"
                   不传则返回所有分类
-        max_privacy_level: 最大隐私级别（安全控制），safe/internal/private（默认 safe）
-                          safe=只返回可随时发的 / internal=+特定话题 / private=+谨慎发
         limit: 最多返回结果数（默认 20，让 agent 看到更多选项）
 
     Returns:
@@ -144,11 +127,10 @@ def search_user_pictures(
                     "relative_path": "<category-a>/1000144894.jpg",
                     "category": "猫",
                     "subcategory": "顺拐（三花猫）",
-                    "description": "...",  # 图片描述（可能为空，需用户补充）
+                    "description": "...",  # 图片描述（可能包含隐私标注）
                     "category_description": "...",  # 分类描述
                     "suitable_stages": ["stage_1", "stage_2", ...],  # 供 agent 参考，不用于过滤
                     "keywords": ["猫", "三花猫", ...],
-                    "privacy_level": "safe",
                     "suitable_when": "聊到猫/宠物/流浪猫/校园生活时",
                     "can_relate_to_user": "用户真实经历，展示爱心和责任感"
                 },
@@ -156,8 +138,7 @@ def search_user_pictures(
             ],
             "search_criteria": {
                 "keywords": [...],
-                "category": "...",
-                "max_privacy_level": "..."
+                "category": "..."
             }
         }
     """
@@ -185,7 +166,6 @@ def search_user_pictures(
                 "subcategory": category_data.get("subcategory", ""),
                 "description": category_data.get("description", ""),
                 "file_count": files_count,
-                "privacy_level": category_data.get("privacy_level", "safe"),
                 "suitable_when": category_data.get("suitable_when", ""),
                 "keywords": category_data.get("keywords", []),
             })
@@ -201,11 +181,6 @@ def search_user_pictures(
 
         # 分类精确过滤
         if category and category_data.get("category", "") != category:
-            continue
-
-        # 隐私安全控制（非决策，是安全防护）
-        file_privacy = category_data.get("privacy_level", "safe")
-        if not _match_privacy(max_privacy_level, file_privacy):
             continue
 
         # 构建搜索文本（用于模糊匹配）
@@ -234,7 +209,6 @@ def search_user_pictures(
                 "category_description": category_desc,
                 "suitable_stages": category_data.get("suitable_stages", []),  # 信息，供 agent 参考
                 "keywords": target_keywords,
-                "privacy_level": file_privacy,
                 "suitable_when": suitable_when,
                 "can_relate_to_user": can_relate,
             })
@@ -253,6 +227,5 @@ def search_user_pictures(
         "search_criteria": {
             "keywords": keywords or [],
             "category": category,
-            "max_privacy_level": max_privacy_level,
         },
     }

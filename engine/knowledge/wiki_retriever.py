@@ -135,6 +135,11 @@ class WikiRetriever:
         query_lower = query_text.lower()
         title_lower = page.title.lower()
 
+        # 过滤空字符串（防御性编程：空字符串是任意字符串的子串会导致假匹配）
+        keywords = [kw for kw in page.keywords if kw and kw.strip()]
+        tags = [tag for tag in page.tags if tag and tag.strip()]
+        search_terms = [st for st in page.search_terms if st and st.strip()]
+
         # 标题完全命中
         if title_lower in query_lower or query_lower in title_lower:
             score += 10
@@ -146,27 +151,37 @@ class WikiRetriever:
                     break
 
         # keyword 命中（所有匹配，不只第一个）
-        kw_hits = sum(1 for kw in page.keywords if kw.lower() in query_lower)
+        kw_hits = sum(1 for kw in keywords if kw.lower() in query_lower)
         score += min(kw_hits, 3) * 5  # 最多 +15
 
         # 全查询命中加成：查询文本的大部分出现在 keywords 中
         query_words = [w for w in query_text.split() if len(w) >= 2]
         if query_words:
-            kw_text = " ".join(page.keywords).lower()
+            kw_text = " ".join(keywords).lower()
             matched_words = sum(1 for w in query_words if w.lower() in kw_text)
             if matched_words >= len(query_words) * 0.6 and matched_words >= 2:
                 score += 4  # 大部分查询词都命中了
 
         # tag 命中
-        tag_hits = sum(1 for tag in page.tags if tag.lower() in query_lower)
+        tag_hits = sum(1 for tag in tags if tag.lower() in query_lower)
         score += min(tag_hits, 2) * 4  # 最多 +8
 
-        # search_terms 命中（口语化查询词，权重低于 keywords）
-        if page.search_terms:
-            st_hits = sum(1 for st in page.search_terms if st.lower() in query_lower)
+        # search_terms 命中（口语化查询词，与 keywords 同权重）
+        # 设计依据：search_terms 是为匹配用户查询而专门设计的词，命中信号比抽象 keywords 更强
+        # 长词命中（4+ 字符）信号更强，给予额外加权
+        if search_terms:
+            st_hits = 0
+            st_long_hits = 0  # 长词命中（4+ 字符）
+            for st in search_terms:
+                st_lower = st.lower()
+                if st_lower in query_lower:
+                    st_hits += 1
+                    if len(st) >= 4:
+                        st_long_hits += 1
             if st_hits > 0:
-                score += min(st_hits, 3) * 3  # 最多 +9
-                score += 2  # search_terms 命中即相关，降低噪声分干扰
+                score += min(st_hits, 3) * 5  # 与 keywords 同权重，最多 +15
+                score += 2  # search_terms 命中即相关
+                score += min(st_long_hits, 2) * 3  # 长词命中额外加权，最多 +6
 
         # summary 命中
         if page.summary and any(w in page.summary for w in query_text.split() if len(w) >= 2):
@@ -190,7 +205,7 @@ class WikiRetriever:
 
         # focus 关键词加权
         if focus_keywords:
-            focus_text = (page.title + " " + " ".join(page.tags) + " " + page.summary + " " + " ".join(page.search_terms)).lower()
+            focus_text = (page.title + " " + " ".join(tags) + " " + page.summary + " " + " ".join(search_terms)).lower()
             focus_hits = sum(1 for fk in focus_keywords if fk in focus_text)
             score += focus_hits * 3
 
