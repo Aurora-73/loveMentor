@@ -9,7 +9,7 @@
 | 文件 | 内容 | 适用读者 |
 |------|------|---------|
 | `PROJECT.md` | 项目总览（架构、已实现功能、工具列表、使用方法） | 所有人 |
-| `tools.md` | Agent 工具详细文档（57 个工具的签名、参数、返回值） | 开发者、Agent |
+| `tools.md` | Agent 工具详细文档（工具的签名、参数、返回值） | 开发者、Agent |
 | `agent.md` | Agent 工具实现层文档（工具分层、返回 schema、权限规范） | 开发者 |
 | `analyzers.md` | 分析引擎文档（指标计算、排名、事件检测、阶段识别） | 开发者 |
 | `backtest.md` | 回测框架文档（案例内时序分析、描述性统计、校准闭环） | 开发者 |
@@ -19,7 +19,10 @@
 | `importers.md` | 同步管道文档（WCD/WeFlow 同步流程） | 开发者 |
 | `knowledge.md` | Wiki 知识库文档（检索机制、OKF 格式、渐进式披露） | 开发者、Agent |
 | `models.md` | 数据模型文档（dataclass 定义、字段说明） | 开发者 |
-| `mcp.md` | MCP 服务器文档（57 个工具清单、配置方法、错误处理） | 开发者、Agent |
+| `mcp.md` | MCP 服务器文档（工具清单、配置方法、错误处理） | 开发者、Agent |
+| `auto_reply_architecture.md` | v4 自动回复架构（委员会审查+四重硬约束+状态机） | 开发者、Agent |
+| `wechat_ocr_enhancement.md` | 微信 OCR 增强方案（图标模板+字体匹配+OCR验证） | 开发者 |
+| `data_backend_comparison.md` | wcda vs WeFlow 数据后端技术对比 | 开发者 |
 | `mcp_guide_completion.md` | MCP guide 工具完成记录 | 开发者 |
 | `mcp_information_gap.md` | MCP 工具信息缺口分析 | 开发者 |
 | `architecture_correction_completed.md` | 架构矫正完成记录 | 开发者 |
@@ -48,6 +51,9 @@
 | `importers.md` | engine/importers/ |
 | `knowledge.md` | engine/knowledge/ |
 | `models.md` | engine/models/ |
+| `auto_reply_architecture.md` | mcp_server/ (v4 自动回复) |
+| `wechat_ocr_enhancement.md` | engine/wechat_sender/ |
+| `data_backend_comparison.md` | engine/importers/ (参考) |
 
 ### 方法论文档
 
