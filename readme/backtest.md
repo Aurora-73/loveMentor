@@ -227,7 +227,7 @@ python -m engine.backtest.collect --slice-days 7
 
 **使用策略**：
 1. **先用默认值跑全量**：对所有案例运行 Phase B（不带 --sensitivity），获取 baseline
-2. **选代表性案例做敏感性分析**：选择 1-2 个典型案例（如 success_to_failure 案例"[REDACTED]"），用 --sensitivity 模式做参数扫描
+2. **选代表性案例做敏感性分析**：选择 1-2 个典型案例（如 success_to_failure 案例"test_case_contact_A"），用 --sensitivity 模式做参数扫描
 3. **对比分析**：根据敏感性分析结果，找出对公式输出影响最大的参数，重点校准
 
 ```bash
