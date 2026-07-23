@@ -19,13 +19,18 @@
 输出文件：data/user_facts_topics_profile.yaml
 结构：
   topics:
-    frequent_topics: [...]    # 高频话题（按权重排序）
+    frequent_topics: [...]    # 高频话题（附上下文描述，agent 自行判断适用性）
     recent_topics: [...]      # 近期话题（最近30天）
     avoid_topics: [...]       # 避免话题（通用雷区 + user_profile_fact 情感雷区）
   soft_facts:
     frequent_places: [...]    # 常提的地点
     frequent_people: [...]    # 常提的人
     attitudes: [...]          # 态度/观点
+
+设计原则（2026-07-24 v2）：
+  - 代码不替 agent 做决策，agent 是 LLM 大脑，自行决定用什么话题
+  - 不生成 weight/good_for_stages（避免用数学计算代替 agent 思考）
+  - 工具只提供话题列表 + 上下文描述，agent 结合 Wiki 和对话状态自行判断
 
 用法：
   python -m engine.user_facts_topics_profile
@@ -227,39 +232,33 @@ def _apply_time_decay(messages: list[dict]) -> list[tuple[dict, float]]:
 
 
 def _analyze_frequent_topics(weighted_messages: list[tuple[dict, float]]) -> list[dict]:
-    """分析高频话题（基于关键词匹配 + 时间衰减权重）。"""
+    """分析高频话题（基于关键词匹配 + 时间衰减权重排序）。
+
+    设计原则：不输出 weight 数值（避免用数学计算代替 agent 思考）。
+    时间衰减仅用于排序（近期话题优先），不暴露权重值给 agent。
+    """
     topic_weights: dict[str, float] = {topic: 0.0 for topic in TOPIC_KEYWORDS}
-    total_weight = 0.0
 
     for msg, weight in weighted_messages:
         content = msg["content"].lower()
         if not content:
             continue
-        total_weight += weight
         for topic, keywords in TOPIC_KEYWORDS.items():
             for kw in keywords:
                 if kw.lower() in content:
                     topic_weights[topic] += weight
                     break  # 每条消息每个话题只计一次
 
-    # 归一化为 0-1 权重
-    max_weight = max(topic_weights.values()) if topic_weights else 1.0
-    if max_weight == 0:
-        return []
-
-    # 按权重排序
+    # 按时间衰减权重排序（不输出权重值）
     sorted_topics = sorted(topic_weights.items(), key=lambda x: x[1], reverse=True)
 
     result = []
     for topic, weight in sorted_topics:
         if weight <= 0:
             continue
-        normalized_weight = round(weight / max_weight, 2)
         result.append({
             "topic": topic,
-            "weight": normalized_weight,
             "context": _get_topic_context(topic),
-            "good_for_stages": _get_topic_stages(topic),
         })
 
     return result
@@ -375,26 +374,6 @@ def _get_topic_context(topic: str) -> str:
     return contexts.get(topic, "")
 
 
-def _get_topic_stages(topic: str) -> list[str]:
-    """获取话题适合的关系阶段。"""
-    stage_map = {
-        "猫猫": ["stage_1", "stage_2", "stage_3", "stage_4"],
-        "代码/编程": ["stage_1", "stage_2", "stage_3"],
-        "AI工具": ["stage_1", "stage_2", "stage_3"],
-        "论文/学术": ["stage_2", "stage_3", "stage_4"],
-        "求职/秋招": ["stage_2", "stage_3", "stage_4"],
-        "美食": ["stage_1", "stage_2", "stage_3", "stage_4"],
-        "游戏（明日方舟）": ["stage_1", "stage_2", "stage_3"],
-        "轻音乐": ["stage_2", "stage_3", "stage_4"],
-        "动漫": ["stage_1", "stage_2"],
-        "剧本杀": ["stage_2", "stage_3"],
-        "爬虫": ["stage_1", "stage_2", "stage_3"],
-        "城市生活": ["stage_1", "stage_2", "stage_3"],
-        "美国/旅行": ["stage_2", "stage_3", "stage_4"],
-    }
-    return stage_map.get(topic, ["stage_1", "stage_2"])
-
-
 def _get_place_context(place: str) -> str:
     """获取地点的上下文说明。"""
     contexts = {
@@ -427,7 +406,7 @@ def _print_summary(profile: dict) -> None:
         print()
         print("[高频话题]")
         for t in profile["topics"]["frequent_topics"][:5]:
-            print(f"  - {t['topic']}: weight={t['weight']}")
+            print(f"  - {t['topic']}: {t.get('context', '')[:40]}")
         print(f"\n[近期话题] {profile['topics']['recent_topics']}")
         print(f"\n[常提地点] {[p['place'] for p in profile['soft_facts']['frequent_places'][:3]]}")
         print(f"\n[态度] {profile['soft_facts']['attitudes'][:3]}")

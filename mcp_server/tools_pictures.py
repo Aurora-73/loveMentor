@@ -4,20 +4,21 @@
   - 代码不替 agent 做决策，agent 是 LLM 大脑，自行决定用什么
   - 工具只提供数据 + 模糊搜索能力
   - 不按 stage 过滤（stage 是 agent 的决策维度，不是工具的过滤维度）
-  - suitable_stages 作为信息返回给 agent 参考，不用于过滤
-  - 不设分类级隐私等级，如某张图片需谨慎使用，在 description 中标注
+  - 不设隐私级别，如某张图片需谨慎使用，在 README 描述中标注
 
-Agent 看不到图片内容，通过本工具搜索图片索引，返回匹配图片的描述和绝对路径。
+数据来源：
+  - data/user_pictures/README.md — 主目录说明（分类列表 + 独立文件）
+  - data/user_pictures/{子文件夹}/README.md — 子文件夹详细描述
+  - 扫描子文件夹获取实际图片文件列表
+
+Agent 看不到图片内容，通过本工具搜索 README 描述，返回匹配图片的绝对路径。
 Agent 拿到描述后自行决定用哪张，拿到绝对路径后通过 wechat_send_image 发送。
-
-索引文件：data/user_pictures_index.yaml
-图片目录：data/user_pictures/
 """
 
 import os
+import re
 import sys
 import logging
-import yaml
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -26,21 +27,161 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-_DATA_DIR = os.path.join(_PROJECT_ROOT, "data")
-INDEX_FILE = os.path.join(_DATA_DIR, "user_pictures_index.yaml")
-PICTURES_DIR = os.path.join(_DATA_DIR, "user_pictures")
+PICTURES_DIR = os.path.join(_PROJECT_ROOT, "data", "user_pictures")
+MAIN_README = os.path.join(PICTURES_DIR, "README.md")
+
+# 支持的图片/视频扩展名
+_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".gif"}
+_VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".m4v", ".3gp"}
+# 忽略的文件
+_IGNORE_EXTS = {".trashed", ".txt", ".md", ".py"}
 
 
-def _load_index() -> dict:
-    """加载图片索引文件。"""
-    if not os.path.exists(INDEX_FILE):
-        return {}
+def _parse_main_readme() -> tuple[list[dict], list[dict]]:
+    """解析主 README.md，返回 (子文件夹分类列表, 独立文件列表)。
+
+    子文件夹分类: [{"name": "<category-a>", "description": "<category description>"}]
+    独立文件: [{"name": "体检-身高体重.jpg", "description": "体检报告..."}]
+    """
+    if not os.path.exists(MAIN_README):
+        return [], []
+
     try:
-        with open(INDEX_FILE, "r", encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
+        with open(MAIN_README, "r", encoding="utf-8") as f:
+            content = f.read()
     except Exception as e:
-        logger.warning(f"图片索引加载失败: {e}")
-        return {}
+        logger.warning(f"主 README 读取失败: {e}")
+        return [], []
+
+    categories = []
+    standalone_files = []
+
+    # 解析"目录结构"表格
+    in_dir_section = False
+    in_file_section = False
+
+    for line in content.splitlines():
+        line = line.strip()
+
+        if "## 目录结构" in line:
+            in_dir_section = True
+            in_file_section = False
+            continue
+        if "## 独立文件" in line:
+            in_file_section = True
+            in_dir_section = False
+            continue
+        if line.startswith("## ") and "目录结构" not in line and "独立文件" not in line:
+            in_dir_section = False
+            in_file_section = False
+            continue
+
+        # 解析表格行 | 目录/文件 | 描述 |
+        if (in_dir_section or in_file_section) and line.startswith("|") and not line.startswith("|--") and not line.startswith("|-"):
+            parts = [p.strip() for p in line.split("|")]
+            # parts[0] 是空（| 前缀），parts[-1] 是空（| 后缀）
+            parts = [p for p in parts if p]
+            if len(parts) >= 2 and parts[0] not in ("目录", "文件"):
+                name = parts[0].rstrip("/")
+                description = parts[1]
+                if in_dir_section:
+                    categories.append({"name": name, "description": description})
+                elif in_file_section:
+                    standalone_files.append({"name": name, "description": description})
+
+    return categories, standalone_files
+
+
+def _parse_subfolder_readme(subfolder_path: str) -> dict:
+    """解析子文件夹 README.md，返回详细描述信息。
+
+    返回: {"description": "...", "keywords": [...], "suitable_when": "...", "usage_tips": "..."}
+    """
+    readme_path = os.path.join(subfolder_path, "README.md")
+    result = {
+        "description": "",
+        "keywords": [],
+        "suitable_when": "",
+        "usage_tips": "",
+    }
+
+    if not os.path.exists(readme_path):
+        return result
+
+    try:
+        with open(readme_path, "r", encoding="utf-8") as f:
+            content = f.read()
+    except Exception as e:
+        logger.warning(f"子文件夹 README 读取失败 {readme_path}: {e}")
+        return result
+
+    # 按 section 解析
+    current_section = None
+    section_content = []
+
+    for line in content.splitlines():
+        # 检测 section 标题
+        section_match = re.match(r"^##\s+(.+)", line)
+        if section_match:
+            # 保存前一个 section
+            if current_section:
+                result[current_section] = "\n".join(section_content).strip()
+
+            current_section_raw = section_match.group(1).strip()
+            # 映射 section 名到字段
+            if "描述" in current_section_raw:
+                current_section = "description"
+            elif "适用场景" in current_section_raw:
+                current_section = "suitable_when"
+            elif "关键词" in current_section_raw:
+                current_section = "keywords"
+            elif "使用建议" in current_section_raw:
+                current_section = "usage_tips"
+            else:
+                current_section = None
+            section_content = []
+        elif current_section:
+            section_content.append(line)
+
+    # 保存最后一个 section
+    if current_section:
+        result[current_section] = "\n".join(section_content).strip()
+
+    # keywords 从逗号/顿号分隔的文本转为列表
+    if isinstance(result["keywords"], str) and result["keywords"]:
+        # 按顿号、逗号、空格分隔
+        kws = re.split(r"[、,\s]+", result["keywords"])
+        result["keywords"] = [kw.strip() for kw in kws if kw.strip()]
+    else:
+        result["keywords"] = []
+
+    return result
+
+
+def _scan_directory(subfolder_path: str) -> list[dict]:
+    """扫描子文件夹，返回图片/视频文件列表。"""
+    files = []
+    if not os.path.isdir(subfolder_path):
+        return files
+
+    try:
+        for name in sorted(os.listdir(subfolder_path)):
+            if name.startswith(".") or name == "README.md":
+                continue
+            ext = os.path.splitext(name)[1].lower()
+            if ext in _IGNORE_EXTS:
+                continue
+            file_type = "image" if ext in _IMAGE_EXTS else ("video" if ext in _VIDEO_EXTS else None)
+            if file_type is None:
+                continue
+            files.append({
+                "name": name,
+                "type": file_type,
+            })
+    except Exception as e:
+        logger.warning(f"目录扫描失败 {subfolder_path}: {e}")
+
+    return files
 
 
 def _fuzzy_match(keywords: list[str], target_keywords: list[str], search_text: str = "") -> bool:
@@ -70,33 +211,6 @@ def _fuzzy_match(keywords: list[str], target_keywords: list[str], search_text: s
     return False
 
 
-def _build_absolute_path(relative_path: str) -> str:
-    """将相对路径转为绝对路径（规范化分隔符）。"""
-    normalized_relative = relative_path.replace("/", os.sep)
-    return os.path.join(PICTURES_DIR, normalized_relative)
-
-
-def _filter_existing_files(files: list[dict]) -> list[dict]:
-    """过滤掉不存在的文件（如 .trashed 或已删除的文件）。"""
-    result = []
-    for f in files:
-        path = f.get("path", "")
-        if not path:
-            continue
-        abs_path = _build_absolute_path(path)
-        if os.path.exists(abs_path):
-            result.append(f)
-    return result
-
-
-def _collect_files(category_data: dict) -> list[dict]:
-    """收集分类下的所有文件（兼容 files 和 representative_files 字段）。"""
-    files = category_data.get("files", [])
-    if not files:
-        files = category_data.get("representative_files", [])
-    return _filter_existing_files(files)
-
-
 def search_user_pictures(
     keywords: Optional[list[str]] = None,
     category: Optional[str] = None,
@@ -106,14 +220,15 @@ def search_user_pictures(
 
     设计原则：工具只提供数据，不替 agent 做决策。
     - 不按 stage 过滤（agent 自行判断哪些图片适合当前阶段）
-    - suitable_stages 作为信息返回，供 agent 参考
-    - 不设隐私级别过滤，agent 读取 description 中的标注自行判断
+    - 不设隐私级别过滤，agent 读取描述中的标注自行判断
+
+    数据来源：data/user_pictures/README.md + 子文件夹 README.md + 目录扫描
 
     Args:
         keywords: 关键词列表（模糊匹配，任一匹配即可）
                   支持子串匹配：搜 "猫" 可匹配 "三花猫"/"猫咖"/"流浪猫"
                   也搜索 description/suitable_when 等文本字段
-        category: 分类精确过滤，如 "猫" / "旅行" / "游戏" / "美食" / "户外活动"
+        category: 分类精确过滤（子文件夹名，如 "<category-a>"/"<category-b>"/"<category-c>"）
                   不传则返回所有分类
         limit: 最多返回结果数（默认 20，让 agent 看到更多选项）
 
@@ -125,14 +240,12 @@ def search_user_pictures(
                 {
                     "absolute_path": "e:\\Code\\loveMentor\\data\\user_pictures\\<category-a>\\1000144894.jpg",
                     "relative_path": "<category-a>/1000144894.jpg",
-                    "category": "猫",
-                    "subcategory": "顺拐（三花猫）",
-                    "description": "...",  # 图片描述（可能包含隐私标注）
-                    "category_description": "...",  # 分类描述
-                    "suitable_stages": ["stage_1", "stage_2", ...],  # 供 agent 参考，不用于过滤
+                    "category": "<category-a>",
+                    "description": "...",  # 来自 README 的描述
                     "keywords": ["猫", "三花猫", ...],
                     "suitable_when": "聊到猫/宠物/流浪猫/校园生活时",
-                    "can_relate_to_user": "用户真实经历，展示爱心和责任感"
+                    "usage_tips": "...",  # 使用建议
+                    "file_type": "image" / "video",
                 },
                 ...
             ],
@@ -142,80 +255,140 @@ def search_user_pictures(
             }
         }
     """
-    index = _load_index()
-    if not index:
+    # 1. 解析主 README 获取分类列表
+    categories, standalone_files = _parse_main_readme()
+
+    if not categories and not standalone_files:
         return {
             "total_found": 0,
             "categories_summary": [],
             "results": [],
-            "error": "图片索引文件不存在或为空",
-            "index_path": INDEX_FILE,
+            "error": "主 README.md 不存在或为空",
+            "readme_path": MAIN_README,
         }
 
-    # 构建分类概览（供 agent 浏览所有可用分类）
-    categories_summary = []
-    for category_key, category_data in index.items():
-        if category_key == "meta":
-            continue
-        if not isinstance(category_data, dict):
-            continue
-        files_count = len(_collect_files(category_data))
-        if files_count > 0:
-            categories_summary.append({
-                "category": category_data.get("category", ""),
-                "subcategory": category_data.get("subcategory", ""),
-                "description": category_data.get("description", ""),
-                "file_count": files_count,
-                "suitable_when": category_data.get("suitable_when", ""),
-                "keywords": category_data.get("keywords", []),
-            })
+    # 2. 对每个分类，解析子文件夹 README + 扫描目录
+    enriched_categories = []
+    for cat in categories:
+        cat_name = cat["name"]
+        cat_path = os.path.join(PICTURES_DIR, cat_name)
 
+        # 解析子文件夹 README
+        readme_data = _parse_subfolder_readme(cat_path)
+
+        # 扫描目录获取实际文件
+        actual_files = _scan_directory(cat_path)
+
+        # 合并描述：优先用子文件夹 README 的描述，fallback 到主 README 的描述
+        description = readme_data.get("description", "") or cat["description"]
+
+        enriched_cat = {
+            "name": cat_name,
+            "description": description,
+            "keywords": readme_data.get("keywords", []),
+            "suitable_when": readme_data.get("suitable_when", ""),
+            "usage_tips": readme_data.get("usage_tips", ""),
+            "files": actual_files,
+            "file_count": len(actual_files),
+        }
+        enriched_categories.append(enriched_cat)
+
+    # 3. 处理独立文件（不在子文件夹中的）
+    standalone_enriched = []
+    for sf in standalone_files:
+        sf_path = os.path.join(PICTURES_DIR, sf["name"])
+        if os.path.exists(sf_path):
+            ext = os.path.splitext(sf["name"])[1].lower()
+            file_type = "image" if ext in _IMAGE_EXTS else ("video" if ext in _VIDEO_EXTS else None)
+            if file_type:
+                standalone_enriched.append({
+                    "name": sf["name"],
+                    "description": sf["description"],
+                    "files": [{"name": sf["name"], "type": file_type}],
+                    "keywords": re.split(r"[、,\s/]+", sf["description"]),
+                    "suitable_when": "",
+                    "usage_tips": "",
+                })
+
+    # 4. 构建分类概览（供 agent 浏览）
+    categories_summary = []
+    for cat in enriched_categories:
+        categories_summary.append({
+            "category": cat["name"],
+            "description": cat["description"],
+            "file_count": cat["file_count"],
+            "suitable_when": cat["suitable_when"],
+            "keywords": cat["keywords"],
+        })
+    for sf in standalone_enriched:
+        categories_summary.append({
+            "category": sf["name"],
+            "description": sf["description"],
+            "file_count": 1,
+            "suitable_when": sf["suitable_when"],
+            "keywords": sf["keywords"],
+        })
+
+    # 5. 关键词匹配 + 收集结果
     results = []
 
-    # 遍历索引中的每个分类
-    for category_key, category_data in index.items():
-        if category_key == "meta":
-            continue
-        if not isinstance(category_data, dict):
-            continue
-
+    # 匹配子文件夹分类
+    for cat in enriched_categories:
         # 分类精确过滤
-        if category and category_data.get("category", "") != category:
+        if category and cat["name"] != category:
             continue
 
-        # 构建搜索文本（用于模糊匹配）
-        category_desc = category_data.get("description", "")
-        suitable_when = category_data.get("suitable_when", "")
-        can_relate = category_data.get("can_relate_to_user", "")
-        search_text = f"{category_desc} {suitable_when} {can_relate}"
+        # 构建搜索文本
+        search_text = f"{cat['description']} {cat['suitable_when']} {cat['usage_tips']}"
 
         # 关键词模糊匹配
-        target_keywords = category_data.get("keywords", [])
-        if not _fuzzy_match(keywords or [], target_keywords, search_text):
+        if not _fuzzy_match(keywords or [], cat["keywords"], search_text):
             continue
 
         # 收集该分类下的文件
-        files = _collect_files(category_data)
-
-        for f in files:
-            abs_path = _build_absolute_path(f["path"])
-            file_desc = f.get("description", "")
+        for f in cat["files"]:
+            abs_path = os.path.join(PICTURES_DIR, cat["name"], f["name"])
+            rel_path = f"{cat['name']}/{f['name']}"
             results.append({
                 "absolute_path": abs_path,
-                "relative_path": f["path"],
-                "category": category_data.get("category", ""),
-                "subcategory": category_data.get("subcategory", ""),
-                "description": file_desc or category_desc,  # 优先用文件描述，无则用分类描述
-                "category_description": category_desc,
-                "suitable_stages": category_data.get("suitable_stages", []),  # 信息，供 agent 参考
-                "keywords": target_keywords,
-                "suitable_when": suitable_when,
-                "can_relate_to_user": can_relate,
+                "relative_path": rel_path,
+                "category": cat["name"],
+                "description": cat["description"],
+                "keywords": cat["keywords"],
+                "suitable_when": cat["suitable_when"],
+                "usage_tips": cat["usage_tips"],
+                "file_type": f["type"],
             })
 
-        # 限制总结果数
         if len(results) >= limit:
             break
+
+    # 匹配独立文件
+    if len(results) < limit:
+        for sf in standalone_enriched:
+            if category and sf["name"] != category:
+                continue
+
+            search_text = f"{sf['description']} {sf['suitable_when']}"
+            if not _fuzzy_match(keywords or [], sf["keywords"], search_text):
+                continue
+
+            for f in sf["files"]:
+                abs_path = os.path.join(PICTURES_DIR, f["name"])
+                rel_path = f["name"]
+                results.append({
+                    "absolute_path": abs_path,
+                    "relative_path": rel_path,
+                    "category": sf["name"],
+                    "description": sf["description"],
+                    "keywords": sf["keywords"],
+                    "suitable_when": sf["suitable_when"],
+                    "usage_tips": sf["usage_tips"],
+                    "file_type": f["type"],
+                })
+
+            if len(results) >= limit:
+                break
 
     # 截断到 limit
     results = results[:limit]
