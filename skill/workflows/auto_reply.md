@@ -164,4 +164,4 @@ description: 自动回复完整流程 — 8步从监听到发送
 
 - `skill/workflows/emergency_reply.md`：紧急回复流程（用户手动触发）
 - `skill/love-mentor.md`：基本流程
-- `plan/auto_reply_architecture_v4.md`：完整架构文档
+- `readme/auto_reply_architecture.md`：完整架构实现说明

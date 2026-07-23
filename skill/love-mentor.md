@@ -106,7 +106,7 @@ description: |
 
 ## v4 自动回复架构
 
-> 完整架构文档：`plan/auto_reply_architecture_v4.md`（2871 行 / 63 条决策 / 24 章）
+> 完整架构文档：`readme/auto_reply_architecture.md`（实现说明 + 工具清单 + 四重硬约束 + 委员会审查 + 状态机）
 
 ### 三大工作流
 

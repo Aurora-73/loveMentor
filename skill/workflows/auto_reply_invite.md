@@ -134,4 +134,4 @@ description: 自动邀约流程 — 7步从窗口检测到简报生成
 ## 相关 Skill 文档
 
 - `skill/workflows/auto_reply.md`：自动回复流程
-- `plan/auto_reply_architecture_v4.md`：完整架构文档（第十章）
+- `readme/auto_reply_architecture.md`：完整架构实现说明

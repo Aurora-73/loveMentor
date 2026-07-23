@@ -13,9 +13,9 @@
 输出文件：data/user_style_profile.yaml
 结构（v4 7.2.4 节）：
   vocabulary:
-    top_words: [...]         # 高频词
-    unique_phrases: [...]    # 独特短语
-    avoid_words: []          # 用户避免的词（暂不提取）
+    top_words: [...]         # 高频词（jieba 分词）
+    unique_phrases: [...]    # 特色词（3-30 次出现）
+    avoid_words: [...]       # 需避免的坏习惯词汇（基于 user_bad_patterns.yaml 检测）
   sentence_style:
     avg_length: 12           # 平均句长
     length_distribution: "偏短"  # 偏短/适中/偏长
@@ -50,6 +50,11 @@ from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import jieba
+
+# 抑制 jieba 加载日志
+jieba.setLogLevel(logging.WARNING)
+
 logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -69,13 +74,24 @@ MIN_SAMPLE_SIZE = 100
 
 # 中文常用停用词（用于 top_words 提取）
 _STOP_WORDS = {
+    # 代词
     "的", "了", "是", "在", "我", "你", "他", "她", "我们", "你们", "他们",
     "这", "那", "这个", "那个", "这些", "那些", "什么", "怎么", "为什么",
+    # 功能词
     "不", "没", "没有", "也", "都", "还", "就", "只", "才", "又", "再",
     "和", "与", "但", "但是", "因为", "所以", "如果", "虽然", "虽然如此",
     "一个", "一些", "一下", "可以", "能", "会", "要", "想", "觉得",
+    # 语气词
     "啊", "吧", "哦", "嗯", "呢", "哈", "哈哈", "嘿嘿", "呵呵",
+    # 程度副词
     "很", "太", "真", "非常", "特别", "超级", "超",
+    # 对话填充词（jieba 分词后高频但无风格信息）
+    "就是", "然后", "还是", "不是", "现在", "不过", "其实",
+    "感觉", "的话", "好像", "那种", "这种", "这样", "那样",
+    "一下", "这种", "那种", "的话", "出来", "起来", "下去",
+    "不是", "没有", "什么", "怎么", "为什么", "已经", "可能",
+    "应该", "或者", "或者", "肯定", "当然", "确实", "到底",
+    "之后", "之前", "以后", "以前", "只有", "不会", "这种",
 }
 
 
@@ -192,8 +208,78 @@ def _apply_time_decay(messages: list[dict]) -> list[tuple[dict, float]]:
 # ── 维度分析 ────────────────────────────────────────────────────
 
 
+# 坏习惯词汇映射：每个坏习惯对应的典型用词/短语
+_BAD_PATTERN_MARKERS = {
+    "太讨好": [
+        "你说得对", "都听你的", "你开心就好", "随便你", "好的好的",
+        "没问题没问题", "都可以", "你说了算",
+    ],
+    "太解释": [
+        "因为所以", "其实是因为", "主要是由于", "原因是因为",
+        "我跟你说", "我解释一下", "不是这样的",
+    ],
+    "太秒回": [],  # 无法从词汇检测，是行为模式
+    "太工具人": [
+        "好的收到", "收到收到", "没问题", "马上处理", "我去看一下",
+        "好的马上", "收到马上", "好的我改",
+    ],
+    "过度自我贬低": [
+        "我不配", "我太差了", "我怎么这么", "你看得上我",
+        "我这种", "像我这样的",
+    ],
+}
+
+# 客服化/过度正式用语（在私人聊天中应避免）
+_FORMAL_MARKERS = [
+    "您好", "请问", "抱歉抱歉", "非常感谢", "十分感谢",
+    "不好意思麻烦", "劳烦", "烦请", "敬请",
+]
+
+
+def _detect_avoid_words(weighted_messages: list[tuple[dict, float]]) -> list[str]:
+    """从用户消息中检测坏习惯词汇，返回需要避免的词/短语。
+
+    检测来源：
+    1. user_bad_patterns.yaml 中标记的坏习惯对应的典型用词
+    2. 客服化/过度正式用语（在私人聊天中显得生疏）
+    """
+    avoid_set: set[str] = set()
+
+    # 1. 从坏习惯模式检测
+    bad_patterns_file = os.path.join(_PROJECT_ROOT, "data", "user_bad_patterns.yaml")
+    active_patterns: set[str] = set()
+    if os.path.isfile(bad_patterns_file):
+        try:
+            with open(bad_patterns_file, "r", encoding="utf-8") as f:
+                bp = yaml.safe_load(f) or {}
+            for p in bp.get("patterns", []):
+                if p.get("status") == "active":
+                    active_patterns.add(p.get("name", ""))
+        except Exception:
+            pass
+
+    # 检测用户消息中是否出现了坏习惯典型用词
+    for pattern_name, markers in _BAD_PATTERN_MARKERS.items():
+        if pattern_name not in active_patterns:
+            continue
+        for marker in markers:
+            for msg, _ in weighted_messages:
+                if marker in msg["content"]:
+                    avoid_set.add(marker)
+                    break
+
+    # 2. 检测客服化/过度正式用语
+    for marker in _FORMAL_MARKERS:
+        for msg, _ in weighted_messages:
+            if marker in msg["content"]:
+                avoid_set.add(marker)
+                break
+
+    return sorted(avoid_set)
+
+
 def _analyze_vocabulary(weighted_messages: list[tuple[dict, float]]) -> dict:
-    """分析词汇使用（top_words + unique_phrases）。"""
+    """分析词汇使用（top_words + unique_phrases + avoid_words）。"""
     word_counter = Counter()
     total_weight = 0.0
 
@@ -202,7 +288,6 @@ def _analyze_vocabulary(weighted_messages: list[tuple[dict, float]]) -> dict:
         if not content:
             continue
         total_weight += weight
-        # 提取词（这里用简单分词：2-4 字滑动窗口 + 停用词过滤）
         words = _extract_words(content)
         for w in words:
             word_counter[w] += weight
@@ -213,19 +298,23 @@ def _analyze_vocabulary(weighted_messages: list[tuple[dict, float]]) -> dict:
         for w, c in word_counter.most_common(10)
     ]
 
-    # unique_phrases: 出现频次 2-10 次且不在停用词中的特殊短语
+    # unique_phrases: 出现频次 3-30 次且不在停用词中的特色词
+    # （jieba 分词后是真实词，降低频率下界到 3 避免噪音，上界提到 30 保留常用特色词）
     unique_phrases = []
-    for w, c in word_counter.most_common(50):
-        if 2 <= c <= 10 and w not in _STOP_WORDS and len(w) >= 2:
+    for w, c in word_counter.most_common(100):
+        if 3 <= c <= 30 and w not in _STOP_WORDS and len(w) >= 2:
             unique_phrases.append(w)
-        if len(unique_phrases) >= 5:
+        if len(unique_phrases) >= 10:
             break
+
+    # avoid_words: 从用户消息中检测到的坏习惯词汇
+    avoid_words = _detect_avoid_words(weighted_messages)
 
     return {
         "top_words": [item["word"] for item in top_words],
         "top_words_with_weight": top_words,
         "unique_phrases": unique_phrases,
-        "avoid_words": [],  # 暂不提取（需语义分析）
+        "avoid_words": avoid_words,
     }
 
 
@@ -500,28 +589,26 @@ def _analyze_tone_features(weighted_messages: list[tuple[dict, float]]) -> dict:
 
 
 def _extract_words(text: str) -> list[str]:
-    """简单中文分词（2-4 字滑动窗口 + 停用词过滤）。
+    """jieba 中文分词 + 停用词/标点/纯数字过滤。
 
-    这不是真正的分词，而是基于 n-gram 的近似。
-    对于风格画像的 top_words 来说足够使用。
+    使用精确模式（cut_all=False），返回长度 >= 2 的词。
     """
     text = text.strip()
     if not text:
         return []
 
     words = []
-    # 单字（过滤停用词和标点）
-    for ch in text:
-        if "\u4e00" <= ch <= "\u9fff" and ch not in _STOP_WORDS:
-            words.append(ch)
-
-    # 2-3 字组合
-    for n in (2, 3):
-        for i in range(len(text) - n + 1):
-            piece = text[i:i + n]
-            # 全中文才算
-            if all("\u4e00" <= c <= "\u9fff" for c in piece) and piece not in _STOP_WORDS:
-                words.append(piece)
+    for w in jieba.cut(text, cut_all=False):
+        w = w.strip()
+        if not w or w in _STOP_WORDS:
+            continue
+        # 过滤纯标点、纯数字、单字（单字信息量不足）
+        if len(w) < 2:
+            continue
+        # 过滤纯英文/数字（保留中文混合词）
+        if re.match(r"^[\d\Wa-zA-Z]+$", w):
+            continue
+        words.append(w)
 
     return words
 

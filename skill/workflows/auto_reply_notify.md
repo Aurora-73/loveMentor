@@ -110,4 +110,4 @@ description: 紧急通知流程 — 5步从检测到推送
 ## 相关 Skill 文档
 
 - `skill/workflows/auto_reply.md`：自动回复流程
-- `plan/auto_reply_architecture_v4.md`：完整架构文档（第十二章）
+- `readme/auto_reply_architecture.md`：完整架构实现说明
