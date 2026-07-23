@@ -16,7 +16,7 @@
 | `formulas.md` | 公式参考文档（IVI/SPE/EWS 等战态公式的原理和用法） | 开发者、Agent |
 | `facts.md` | 事实档案文档（evidence/evaluation 分层、自检清单） | 开发者、Agent |
 | `identity.md` | 身份目录文档（Person→Account→Alias 三层映射） | 开发者 |
-| `importers.md` | 同步管道文档（WCD/WeFlow 同步流程） | 开发者 |
+| `importers.md` | 同步管道文档（WCD/WeFlow 同步流程、智能数据源切换、mtime 解密节流） | 开发者 |
 | `knowledge.md` | Wiki 知识库文档（检索机制、OKF 格式、渐进式披露） | 开发者、Agent |
 | `models.md` | 数据模型文档（dataclass 定义、字段说明） | 开发者 |
 | `mcp.md` | MCP 服务器文档（工具清单、配置方法、错误处理） | 开发者、Agent |
@@ -25,6 +25,10 @@
 | `architecture_correction_completed.md` | 架构矫正完成记录 | 开发者 |
 | `future_formula_wiki_metadata.md` | P6 未来计划：公式-Wiki 结构化元数据 | 规划者 |
 | `maintain-relationship-workflow.md` | 维持关系工作流详细文档 | 开发者、Agent |
+| `auto_reply_architecture.md` | v4 自动回复架构实现说明（委员会审查 + 四重硬约束 + 状态机 + 多媒体发送） | 开发者 |
+| `wechat_ocr_enhancement.md` | 微信 OCR 增强方案实现说明（图标模板匹配 + 字体匹配 + OCR 验证） | 开发者 |
+| `wechat_auto_flow.md` | 微信自动化端到端流程图（v3.0：搜索→点击→验证→发送） | 开发者 |
+| `wechat_window_states.md` | 微信窗口状态说明（窗口类型、布局、判定方法） | 开发者 |
 
 ## 文档分类
 

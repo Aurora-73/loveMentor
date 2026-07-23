@@ -10,8 +10,8 @@
 |------|------|------|
 | `__init__.py` | 17 | 包导出（统一对外接口：WeFlowClient/WCDClient/run_sync/show_status 等） |
 | `weflow_client.py` | 169 | WeFlow HTTP API 客户端（纯 urllib，无第三方依赖） |
-| `wcd_client.py` | 635 | WCD HTTP API 客户端（兼容 WeFlowClient 接口） |
-| `sync.py` | 338 | 同步编排器：health check → contacts → conversations → 私聊消息 → moments，含 `show_status()` |
+| `wcd_client.py` | ~720 | WCD HTTP API 客户端（兼容 WeFlowClient 接口）+ `is_wechat_running()` + mtime 智能解密节流 |
+| `sync.py` | ~345 | 同步编排器：health check → 智能数据源选择 → contacts → conversations → 私聊消息 → moments，含 `show_status()` |
 | `sync_contacts.py` | 52 | 联系人同步（list_contacts → UPSERT contacts 表） |
 | `sync_conversations.py` | 65 | 会话同步（list_sessions → UPSERT conversations 表） |
 | `sync_messages.py` | 220 | 消息同步（get_messages → UPSERT messages 表） |
@@ -97,7 +97,9 @@ WCD API 返回格式与 WeFlow 不同，WCDClient 内部做映射：
 run_sync(config, mode='incremental')  # 默认增量，仅私聊
     │
     ├─ 1. health check（API 是否在线）
-    ├─ 2. decrypt_databases（WCD：用缓存密钥刷新数据库快照，不重启微信）
+    ├─ 2. 智能数据源选择（WCD 后端）：
+    │      is_wechat_running() → 运行中: source=decrypted + mtime 节流解密
+    │                          → 未运行: source=realtime（跳过全量解密）
     ├─ 3. sync_contacts（联系人 UPSERT）
     ├─ 4. sync_conversations（会话 UPSERT，自动判断 private/group/official）
     ├─ 5. 遍历所有私聊 session（WHERE type='private'）：
@@ -110,21 +112,37 @@ run_sync(config, mode='incremental')  # 默认增量，仅私聊
     └─ 6. sync_moments（朋友圈 timeline → moments + moment_interactions 表）
 ```
 
-**数据库快照刷新**：WCD 后端在同步前自动调用 `/api/decrypt`（使用缓存密钥，不重启微信、不需要扫码）。解密节流：最近 30 分钟内成功解密过则自动跳过，标记文件 `output/.last_decrypt`。`force=True` 可强制解密。WeFlow 后端跳过此步骤。
+**数据库快照刷新（智能数据源切换）**：WCD 后端在同步前根据微信进程状态动态选择数据源（`sync.py` 调用 `is_wechat_running()` 判断）：
 
-**`source=decrypted` 参数（WCD 后端关键）**：WeChat 运行时会锁定 `session.db`，导致 WCD 默认的 `realtime` 模式（直读 WCDB）超时失败（`open_account timed out after 5s`）。所有 WCD 读取调用（`list_contacts` / `list_sessions` / `get_messages`）都支持 `source` 参数：
-- `None`/`auto`：默认 realtime，微信运行时会失败
-- `realtime`：直读 WCDB，微信运行时会超时
-- `decrypted`：读解密后的 DB 副本，不受 WeChat 锁影响（推荐）
+| 微信状态 | 数据源 | 解密行为 | 开销 |
+|---------|--------|---------|------|
+| **运行中** | `source=decrypted` | 调用 `/api/decrypt` 刷新解密快照（缓存密钥，不重启微信） | 几分钟（首次）/ 跳过（无新数据） |
+| **未运行** | `source=realtime`（默认） | 跳过全量解密，native 直读加密库 | 毫秒级 |
 
-项目内统一约定：`backend=wcd` 时传 `source=decrypted`，由各调用点用 `wcd_source = "decrypted" if config.weflow.backend == "wcd" else None` 计算。涉及文件：`sync.py` / `sync_agent.py` / `screenshot_import.py` / `live_monitor.py` / `wechat_e2e_run.py` / `avatar_fetcher.py`。例外：`_query_avatar_via_wcd_api` 的 `decrypt_databases_lite()` 已刷新快照，之后 `list_contacts(source=decrypted)` 读到最新数据。
+**`is_wechat_running()`**（`wcd_client.py`）：用 `psutil` 扫描进程名 `Weixin.exe` / `WeChat.exe`。psutil 未安装时保守返回 True（走 decrypted 路径，兼容旧逻辑）。
+
+**mtime 智能解密节流**（替代原固定 30 分钟节流）：`decrypt_databases()` 现采用两层节流：
+1. **5 分钟防抖**（`_DECRYPT_MIN_INTERVAL=300`）：刚解密过则跳过，避免微信持续运行时频繁解密
+2. **db_storage mtime 检测**（`_check_db_storage_changed()`）：扫描 `db_storage` 下所有 `.db` 文件的 mtime，与上次解密时间戳对比：
+   - mtime > 上次解密时间 → 有新数据，触发解密
+   - mtime ≤ 上次解密时间 → 无新数据，跳过解密
+
+`force=True` 可跳过所有节流检查强制解密。标记文件 `output/.last_decrypt` 记录上次解密时间戳。WeFlow 后端跳过此步骤。
+
+**`source` 参数（WCD 后端关键）**：所有 WCD 读取调用（`list_contacts` / `list_sessions` / `get_messages`）都支持 `source` 参数：
+- `None`/`auto`：默认 realtime，微信未运行时可用（毫秒级）
+- `realtime`：直读 WCDB，微信运行时会超时（`open_account timed out after 5s`，WCDB 文件锁被占用）
+- `decrypted`：读解密后的 DB 副本，不受 WeChat 锁影响（微信运行时推荐）
+
+项目内统一约定：`backend=wcd` 时由 `is_wechat_running()` 动态决定 source——微信运行时 `wcd_source="decrypted"`，未运行时 `wcd_source=None`（realtime）。涉及文件：`sync.py` / `sync_agent.py` / `screenshot_import.py` / `live_monitor.py` / `wechat_e2e_run.py` / `avatar_fetcher.py`（`_smart_wcd_source()` 辅助函数）。
 
 **`/api/decrypt_lite` 端点（头像快速刷新）**：全量 `decrypt_databases(force=True)` 会解密所有数据库（含 GB 级 `message_*.db`），耗时几分钟。`/api/decrypt_lite` 只解密 `contact.db` + `head_image.db`（几 MB），**1-3 秒完成**，性能提升 30-100 倍。
 
 - 端点位置：`_reference/WeChatDataAnalysis/src/wechat_decrypt_tool/routers/decrypt.py`
 - 客户端方法：`WCDClient.decrypt_databases_lite()`
 - 调用方：`avatar_fetcher._query_avatar_via_wcd_api`（头像匹配失败时触发刷新）
-- 不写节流标记：lite 解密不影响全量解密的 30 分钟节流逻辑
+- 智能跳过：微信未运行时跳过 lite 解密，直接 realtime 直读
+- 不写节流标记：lite 解密不影响全量解密的节流逻辑
 - 与 WeFlow CDP `refreshContactAvatar` 速度相当（几秒级）
 
 **仅私聊**：消息同步默认只处理 `type='private'` 的会话（`wxid_` 开头或不含 `@` 的个人聊天）。群聊（`@chatroom`）和公众号（`gh_`）不会同步消息。

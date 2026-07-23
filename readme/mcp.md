@@ -1,7 +1,7 @@
 # LoveMentor MCP 服务器
 
 > **状态**：已完工 — 全量验收通过，Claude Desktop / Claude Code 实测可用
-> **最后更新**：2026-07-23（删除工具数量描述，统一 analysis 工作流为 12 步 wiki_context）
+> **最后更新**：2026-07-23（删除工具数量描述，统一 analysis 工作流为 12 步 wiki_context，补全 v4/微信/监控/头像工具清单）
 
 ---
 
@@ -115,12 +115,13 @@ python -X utf8 -m mcp_server.server
 
 ---
 
-## 五、工具清单（57 个）
+## 五、工具清单
 
-> **工具优先级**：Wiki 工具（`wiki_search`/`wiki_read`）是 Agent 推理的第一依据，方法论主轴；数据工具提供事实；公式工具仅作辅助参考视角。详见 `exchange/architecture/架构.md`。
+> **工具优先级**：Wiki 工具（`wiki_search`/`wiki_read`/`wiki_context`）是 Agent 推理的第一依据，方法论主轴；数据工具提供事实；公式工具仅作辅助参考视角。
 > **使用指南**：`guide` 工具提供 11 个主题的操作指南（分析流程/报告模板/方法论/权限规范等），Agent 不确定操作流程时调用。
+> **v4 自动回复工具**：详见 [auto_reply_architecture.md](auto_reply_architecture.md)。
 
-### 5.1 Phase 1 — 核心工具（8 个）
+### 5.1 Phase 1 — 核心工具
 
 | 工具名 | 参数 | 说明 | 类型 |
 |--------|------|------|------|
@@ -133,7 +134,7 @@ python -X utf8 -m mcp_server.server
 | `person_note` | `name, content` | 添加人物备注到事实档案 | 写入 |
 | `person_date_record` | `name, date_text, location, rating` | 记录约会信息 | 写入 |
 
-### 5.2 Phase 2 P0 — 即时补齐（4 个）
+### 5.2 Phase 2 P0 — 即时补齐
 
 | 工具名 | 说明 | 类型 |
 |--------|------|------|
@@ -142,21 +143,21 @@ python -X utf8 -m mcp_server.server
 | `person_sync` | 增量同步单个人最新消息（几秒完成）。支持 `transcribe_mode` 参数：`async`（默认，后台异步转写语音/图片）、`sync`（同步等待转写完成）、`off`（不转写） | 写入 |
 | `person_save_analysis` | 保存分析结论，旧版本自动转为 previous | 写入 |
 
-### 5.3 Phase 2 P1 — 已实现工具（16 个）
+### 5.3 Phase 2 P1 — 已实现工具
 
-**只读（11 个）：**
-`person_timeline`、`person_signals`、`person_evidence`、`person_stage`、`person_compare`、`weekly_report`、`person_moments_stats`、`maintain_list`、`events_scan`（只读检测）、`wcd_status`（WCD 后端状态检测）、`weflow_status`（WeFlow 后端状态检测）
+**只读：**
+`person_timeline`、`person_signals`、`person_evidence`、`person_stage`、`person_compare`、`weekly_report`、`person_moments_stats`、`maintain_list`、`events_scan`（只读检测）、`wcd_status`（WCD 后端状态检测）、`weflow_status`（WeFlow 后端状态检测）、`person_behaviors`（语义行为标签查询）、`person_behaviors_data`（语义行为原始数据）
 
-**写入（5 个）：**
+**写入：**
 `events_save`（检测写入）、`person_evaluate`（追加写入）、`system_sync`（全量/增量同步）、`wcd_start`（启动 WCD 后端进程）、`weflow_start`（启动 WeFlow 后端进程）
 
-### 5.4 Phase 2 P2 — 拆分工具（15 个）
+### 5.4 Phase 2 P2 — 拆分工具
 
 **只读：** `contact_search`、`sticker_scan`、`sticker_list`、`exclude_list`、`failure_list`、`message_context`
 
 **写入：** `contact_alias`、`contact_alias_remove`、`contact_merge`（不可逆，带 confirm）、`sticker_label`、`exclude_add`、`exclude_remove`、`failure_add`、`save_from_markdown`、`sync_moments`
 
-### 5.5 Phase 3 P3 — 公式工具（9 个，辅助参考视角）
+### 5.5 Phase 3 P3 — 公式工具（辅助参考视角）
 
 > 公式是 chat-skills 遗产的独立体系，通过标注 Wiki 依据做软关联。**Agent 核验而非套用**——读公式结果 → 结合 Wiki 知识核验 → 自己做判断。阈值是参考，不是硬规则。
 
@@ -172,13 +173,13 @@ python -X utf8 -m mcp_server.server
 | `formula_calc_cs` | 参考计算 CS（辅助视角，矛盾演化状态） |
 | `formula_calc_action` | 参考决策（辅助视角，进攻/拉扯/重置/维持） |
 
-### 5.6 使用指南工具（1 个）
+### 5.6 使用指南工具
 
 | 工具名 | 参数 | 说明 | 类型 |
 |--------|------|------|------|
 | `guide` | `topic` | 获取使用指南和工作流文档。11 个主题：getting-started / workflow/analysis / report-template / methodology / rules/evidence / rules/permissions / rules/reply / workflow/maintain / reference/sync / reference/formula / reference/stickers。支持中文别名 | 只读 |
 
-### 5.7 配置与导航工具（4 个）
+### 5.7 配置与导航工具
 
 | 工具名 | 参数 | 说明 | 类型 |
 |--------|------|------|------|
@@ -192,6 +193,47 @@ python -X utf8 -m mcp_server.server
 | 函数 | 原因 |
 |------|------|
 | `fetch_keys` | 会重启微信并要求扫码，AI 无法完成 |
+
+### 5.9 v4 自动回复工具
+
+> 详见 [auto_reply_architecture.md](auto_reply_architecture.md)。
+
+**对话与状态管理：**
+`conversation_thread`（对话线索 10 action）、`reply_state_manage`（回复状态机 6 action）、`recent_replies_check`（最近回复检查）、`effect_tracking`（发送效果追踪）
+
+**用户画像与日程：**
+`user_profile_manage`（用户画像 3 类文件）、`schedule_manage`（日程 7 action）、`contact_priority_manage`（联系人优先级）
+
+**约会闭环：**
+`date_briefing`（约会前简报）、`date_feedback_loop`（约会后反馈）、`override_learning`（手动覆盖学习）
+
+**通知：**
+`server_chan_notify`（Server酱推送）、`server_chan_config`（Server酱配置）
+
+### 5.10 微信发送与控制工具
+
+**发送（四重硬约束 + 自动切分）：**
+`wechat_send`（文本，IME_CHAR 逐字输入）、`wechat_send_emoji`（表情包）、`wechat_send_image`（图片）、`wechat_send_file`（视频/文件）、`wechat_send_batch`（批量混合）、`wechat_verify_send`（验证发送）
+
+**控制：**
+`wechat_status`（状态检查）、`wechat_start`（启动微信）、`wechat_stop`（停止微信）、`wechat_ocr`（OCR 识别）、`open_wechat_window`（打开/唤醒微信窗口）
+
+> 详见 [wechat_auto_flow.md](wechat_auto_flow.md) 端到端流程图。
+
+### 5.11 实时监控工具
+
+| 工具名 | 说明 | 类型 |
+|--------|------|------|
+| `live_monitor_start` | 启动联系人实时监控（`poll_interval` 默认 10s，`fetch_limit` 可调，`include_brief=True` 预加载快照） | 写入 |
+| `live_monitor_stop` | 停止监控 | 写入 |
+| `live_monitor_status` | 查询监控状态 | 只读 |
+| `live_chat_read` | 增量读取新消息（`since_last_read=True` 基于偏移量，避免全文件扫描） | 只读 |
+
+### 5.12 头像工具
+
+| 工具名 | 说明 | 类型 |
+|--------|------|------|
+| `person_avatar` | 获取联系人头像（5 级数据源优先级：本地缓存 → core.db → WCD/WeFlow API → contacts.json → CDP 强制刷新） | 只读 |
 
 ---
 
