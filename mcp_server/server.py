@@ -24,6 +24,7 @@ from mcp_server import tools_read, tools_write, tools_formula, tools_guide, tool
 from mcp_server import tools_thread, tools_schedule, tools_profile, tools_date, tools_replies
 from mcp_server import tools_notify, tools_priority, tools_override
 from mcp_server import tools_reply_state
+from mcp_server import tools_pictures, tools_canned
 
 mcp = FastMCP("LoveMentor")
 
@@ -151,10 +152,10 @@ mcp.tool(
 mcp.tool(
     name="wiki_context",
     description="【推荐·Wiki 主入口】批量构建 Wiki 知识上下文。传入多条查询 + 当前关系阶段 + 分析焦点，"
-               "一次返回格式化 prompt 段落（合并去重+阶段加权+预算裁剪）。"
+               "一次返回格式化 prompt 段落（合并去重+阶段排名+预算裁剪）。"
                "替代分析流程中多次 wiki_search+wiki_read 的重复调用。"
                "参数：queries（查询列表，最多5条，超出自动截断）/ task_type（reply/meet/ask/analyze，默认analyze）/ "
-               "stage（关系阶段，从 person_brief 的 relationship_stage 或 person_stage 的 current_stage 获取）/ "
+               "stage（可选，关系阶段，用于 Wiki 内容排名信号——非过滤，agent 可不传）/ "
                "focus（signals/strategy/risk/date/chat）/ max_chars（默认8000）/ max_pages（默认8）。"
                "返回：prompt_section（可直接嵌入推理的 Markdown 段落）+ meta + page_list。"
                "注意：wiki_search+wiki_read 保留用于精确单页钻取，wiki_context 是批量建框架的主入口。",
@@ -685,15 +686,13 @@ mcp.tool(
 
 mcp.tool(
     name="user_profile_manage",
-    description="【v4 用户画像管理·三类文件】管理用户事实画像/风格画像/坏习惯（CRUD）。"
-               "profile_type：fact（事实画像，grounding，高优先级）/ style（表达风格，smoothing，低优先级）/ "
-               "bad_patterns（坏习惯，avoid，高优先级）。"
+    description="【v4 用户画像管理·画像文件】管理用户事实画像/话题画像（CRUD）。"
+               "profile_type：fact（事实画像，grounding，高优先级）/ facts_topics（话题画像，话题选择层，自动提取）。"
                "action：get（读取画像）/ update（更新段落，fact 会记录 change_history）/ "
                "add_asset（添加素材：话题/故事）/ query_assets（查询素材）/ "
-               "add_bad_pattern（添加坏习惯）/ mark_pattern_corrected（标记坏习惯已纠正）/ "
                "reset_style_override（重置联系人特化层）。"
-               "文件：data/user_profile_fact.yaml + data/user_style_profile.yaml + "
-               "data/user_style_overrides/<id>.yaml + data/user_bad_patterns.yaml。"
+               "文件：data/user_profile_fact.yaml + data/user_facts_topics_profile.yaml + "
+               "data/user_style_overrides/<id>.yaml。"
                "工具不生成回复风格建议，不决策'对这个人该用什么语气'，不评估人设是否合适。",
     annotations={"readOnlyHint": False},
 )(tools_profile.user_profile_manage)
@@ -834,6 +833,39 @@ mcp.tool(
                "❌ 不生成退避策略建议（由 Agent 基于 7.7 节表决策）❌ 不做归因分析。",
     annotations={"readOnlyHint": False},
 )(tools_reply_state.reply_state_manage)
+
+# ── 注册图片搜索工具 ─────────────────────────────────────────────
+mcp.tool(
+    name="search_user_pictures",
+    description="【用户图片搜索】模糊搜索用户图片库，返回匹配图片的描述和绝对路径。"
+               "设计原则：工具只提供数据，不替 agent 做决策。不按 stage 过滤，suitable_stages 作为信息返回供 agent 参考。"
+               "Agent 看不到图片内容，通过本工具搜索图片索引（data/user_pictures_index.yaml），"
+               "拿到描述后自行决定用哪张，拿到 absolute_path 后传给 wechat_send_image 发送。"
+               "参数：keywords（关键词列表，模糊匹配：搜'猫'可匹配'三花猫'/'猫咖'，也搜索描述文本）/ "
+               "category（分类精确过滤：猫/旅行/游戏/美食/户外活动等，不传返回所有）/ "
+               "max_privacy_level（安全控制：safe/internal/private，默认 safe）/ "
+               "limit（最多返回数，默认 20）。"
+               "返回包含 categories_summary（所有分类概览，供 agent 浏览）+ results（匹配图片列表，含 description/suitable_stages/keywords 等信息）。"
+               "使用场景：聊到猫→keywords=['猫'] / 想看有什么图片→不传 keywords / 看特定分类→category='旅行'。",
+    annotations={"readOnlyHint": True},
+)(tools_pictures.search_user_pictures)
+
+# ── 注册罐装素材搜索工具 ───────────────────────────────────────
+mcp.tool(
+    name="search_canned_materials",
+    description="【罐装素材搜索】模糊搜索罐装素材库（data/canned_materials.yaml），返回匹配素材的完整内容。"
+               "设计原则：工具只提供数据，不替 agent 做决策。stage 作为信息返回，不用于过滤。"
+               "素材类型：brain_teasers(脑筋急转弯) / fun_facts(冷知识) / cold_jokes(冷笑话) / "
+               "movie_quotes(电影台词) / self_deprecating_humor(自嘲幽默) / romantic_movie_quotes(浪漫台词) / "
+               "body_language(身体语言) / eye_contact_training(眼神训练) / voice_training(声音训练) / life_wisdom(人生感悟)。"
+               "参数：keywords（关键词列表，模糊匹配：搜'电影'可匹配'电影台词'/'浪漫电影台词'，也搜索 quote/suitable_when 等文本字段）/ "
+               "category（子分类精确过滤，如 brain_teasers，不传返回所有）/ "
+               "stage（可选，信息筛选提示：stage_1/stage_2/stage_3/self_improvement，非强制过滤）/ "
+               "limit（最多返回数，默认 20）。"
+               "返回包含 categories_summary（所有子分类概览，供 agent 浏览）+ results（匹配素材列表，含 stage/usage/content）。"
+               "使用场景：破冰→category='brain_teasers' / 聊到电影→keywords=['电影'] / 看有什么素材→不传参数浏览 categories_summary。",
+    annotations={"readOnlyHint": True},
+)(tools_canned.search_canned_materials)
 
 if __name__ == "__main__":
     try:

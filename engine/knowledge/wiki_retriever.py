@@ -176,7 +176,7 @@ class WikiRetriever:
         if task_type in page.scenarios:
             score += 3
 
-        # stage 匹配（强权重——阶段是核心过滤条件）
+        # stage 匹配（排名信号——阶段匹配的页面排名更高，但不过滤非匹配页面）
         if stage and stage in page.stages:
             score += 5
 

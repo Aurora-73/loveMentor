@@ -354,7 +354,7 @@ tools:
     skill_ref: workflows/auto_reply.md
     next_step:
       - wechat_send
-    description: "【v4 用户画像】管理事实/风格/坏习惯三类画像。读取后用于委员会审查时核对用户一致性"
+    description: "【v4 用户画像】管理事实/话题两类画像+编造记录。读取后用于委员会审查时核对用户一致性"
 
   date_briefing:
     skill_ref: workflows/auto_reply.md
@@ -446,6 +446,17 @@ tools:
       - wechat_send
       - server_chan_notify
     description: "【v4 回复状态管理】Agent 行为层状态机（7.7 + 7.8.4 节）。record/update/check_retry/check_suspended/clear_suspended/stats。重试前必调 check_retry，轮询前必调 check_suspended"
+
+  search_user_pictures:
+    skill_ref: mcp-tools.md
+    next_step:
+      - wechat_send_image
+    description: "【用户图片搜索】模糊搜索图片库，返回描述+绝对路径。不按 stage 过滤（agent 自行决策）。搜'猫'可匹配'三花猫'/'猫咖'。返回 absolute_path 后传给 wechat_send_image"
+
+  search_canned_materials:
+    skill_ref: mcp-tools.md
+    next_step: []
+    description: "【罐装素材搜索】模糊搜索罐装素材库（canned_materials.yaml），返回完整素材内容。素材类型：脑筋急转弯/冷知识/冷笑话/电影台词/浪漫台词/身体语言等 10 类。不替 agent 做决策，stage 仅作信息。场景：破冰→category='brain_teasers' / 聊电影→keywords=['电影'] / 浏览→不传参数看 categories_summary"
 
   live_monitor_status:
     skill_ref: mcp-tools.md

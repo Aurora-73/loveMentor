@@ -146,7 +146,7 @@ description: |
 | `contact_priority_manage` | 联系人优先级管理（P1） | `tools_priority.py` |
 | `wechat_send` | 三重硬约束增强（P0） | `tools_wechat.py` |
 
-> `user_style_profile` 非 MCP 工具，是前置批处理脚本（`scripts/user_style_profile.py`）
+> `user_facts_topics_profile` 非 MCP 工具，是前置批处理脚本（`engine/user_facts_topics_profile.py`）
 
 ---
 

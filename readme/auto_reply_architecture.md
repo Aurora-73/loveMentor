@@ -20,7 +20,7 @@ v4 自动回复架构是 LoveMentor 的核心能力，让 Agent 能够自主管�
     ├─ 对话线索层（conversation_thread）← 短期上下文管理
     ├─ 数据层（person_chat/metrics/evidence）← 联系人数据
     ├─ 知识层（wiki_context）← 方法论主轴
-    ├─ 用户画像层（user_profile_manage）← grounding + smoothing + bad_patterns
+    ├─ 用户画像层（user_profile_manage）← grounding + facts_topics
     │
     ├─ 委员会层（5 官 subagent 并行审查）← 草案质量把关
     │   ├─ 拟人度审查官
@@ -44,7 +44,7 @@ v4 自动回复架构是 LoveMentor 的核心能力，让 Agent 能够自主管�
 |------|------|------|
 | `conversation_thread` | `mcp_server/tools_thread.py` | 对话线索管理（10 个 action：get/update/append_summary/clear/check_expired/clear_cancel_flag 等）|
 | `schedule_manage` | `mcp_server/tools_schedule.py` | 日程管理（7 个 action：query/add/update/remove/list_slots/update_preferences/add_note）|
-| `user_profile_manage` | `mcp_server/tools_profile.py` | 用户画像管理（3 类文件：user_profile_fact / user_style_profile / user_bad_patterns）|
+| `user_profile_manage` | `mcp_server/tools_profile.py` | 用户画像管理（2 类文件：user_profile_fact / user_facts_topics_profile）|
 | `date_briefing` | `mcp_server/tools_date.py` | 约会前简报生成 |
 | `date_feedback_loop` | `mcp_server/tools_date.py` | 约会后反馈闭环 |
 | `recent_replies_check` | `mcp_server/tools_replies.py` | 最近回复检查 |
@@ -92,9 +92,9 @@ v4 自动回复架构是 LoveMentor 的核心能力，让 Agent 能够自主管�
 
 | 审查官 | 职责 | 输入信息 | 硬否决权 |
 |--------|------|----------|----------|
-| **拟人度** | 5 维度：句长/用词/emoji/AI痕迹/风格一致性 | 草案 + user_style_profile | 否 |
-| **用户一致性** | 5 项：编造经历/身份冲突/人设突变/阶段突兀/坏习惯 | 草案 + user_profile_fact + user_bad_patterns + recent_summary | 否 |
-| **感情推进** | 4 维度：错失窗口/需求感/阶段节奏/pending_items | 草案 + Wiki + 阶段 + 情绪 + pending_items | 否 |
+| **拟人度** | 4 维度：句长/用词/emoji适度/无AI痕迹 | 草案（基于 Wiki 状态性聊天原则，不检查用户风格一致性） | 否 |
+| **用户一致性** | 3 项：编造经历(未记录)/身份冲突/阶段突兀 | 草案 + user_profile_fact + user_fabricated_facts + recent_summary | 否 |
+| **感情推进** | 5 维度：错失窗口/需求感/阶段节奏/推拉比例/pending_items | 草案 + Wiki + 阶段 + 情绪 + pending_items | 否 |
 | **风险** | 7 类风险 + 强制对抗性审查（至少 2 个风险点）| 草案 + 禁忌列表 + avoid_list + landmine_topics | **是**（severity=high 时硬否决）|
 | **邀约窗口** | 4 类窗口：IOI集群/服从性/暗示/阶段转换 | 对话线索 + IOI 信号 + 阶段（不审查草案）| N/A（只检测窗口）|
 
@@ -185,10 +185,9 @@ Risk 官 severity="high" → 硬否决，驳回重写
 | 文件 | 定位 | 优先级 | 内容 |
 |------|------|--------|------|
 | `data/user_profile_fact.yaml` | grounding（事实锚定）| 高 | 用户真实信息（职业/爱好/经历等），防止 Agent 编造 |
-| `data/user_style_profile.yaml` | smoothing（风格平滑）| 低 | 跨会话统计风格（句长/用词/emoji 习惯），批处理生成 |
-| `data/user_bad_patterns.yaml` | 避免模仿 | 高 | 坏习惯模式（太讨好/太解释/太秒回等），标记已纠正 |
+| `data/user_facts_topics_profile.yaml` | 话题选择层 | 中 | 事实+可谈论话题（自动提取，非对话风格），批处理生成 |
 
-**策略优先级**：Wiki > 上下文 > 事实 > 阶段 > 风格
+**策略优先级**：Wiki > 上下文 > 事实 > 阶段（风格层已删除，Agent 不模仿用户语言习惯）
 
 **联系人特化层**：`data/user_style_overrides/` 目录，每个联系人独立风格覆盖
 

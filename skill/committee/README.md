@@ -33,7 +33,7 @@ description: |
 | 审查官 | 核心问题 | prompt 文件 | 输入 | 硬否决权 |
 |--------|---------|------------|------|---------|
 | 拟人度 | 像不像真人发的？ | humanlike.md | 草案 + 用户风格画像 | 否（建议性） |
-| 用户一致性 | 符合用户真实人设吗？ | consistency.md | 草案 + fact + bad_patterns + recent_summary | 否（建议性） |
+| 用户一致性 | 符合用户真实人设吗？ | consistency.md | 草案 + fact + fabricated_facts + recent_summary | 否（建议性） |
 | 感情推进 | 对推进感情有帮助吗？ | progression.md | 草案 + Wiki 方法论 + 关系阶段 + 情绪趋势 + pending_items | 否（策略主导） |
 | 风险 | 有风险吗？ | risk.md | 草案 + Wiki 禁忌 + avoid_topics + landmine_topics | **是（硬否决）** |
 | 邀约窗口 | 当前是邀约窗口吗？ | invite_window.md | 对话线索 + IOI 信号 + 关系阶段（不审查草案） | 否（窗口报告） |
@@ -43,9 +43,8 @@ description: |
 | 信息 | 拟人度 | 用户一致性 | 感情推进 | 风险 | 邀约窗口 |
 |------|--------|----------|---------|------|---------|
 | 回复草案 | ✅ | ✅ | ✅ | ✅ | ❌ |
-| 用户风格画像 (style) | ✅ | ✅ | ❌ | ❌ | ❌ |
+| 用户话题画像 (facts_topics) | ❌ | ❌ | ❌ | ❌ | ❌ |
 | 用户事实档案 (fact) | ❌ | ✅ | ❌ | ❌ | ❌ |
-| 用户坏习惯 (bad_patterns) | ❌ | ✅ | ❌ | ❌ | ❌ |
 | recent_summary | ❌ | ✅ | ✅ | ❌ | ❌ |
 | Wiki 方法论 | ❌ | ❌ | ✅ | ❌ | ❌ |
 | 关系阶段 | ❌ | ✅ | ✅ | ❌ | ✅ |
@@ -103,8 +102,8 @@ reply_draft = "生成的回复草案"
 contact_name = "alice"
 relationship_stage = "stage_2"
 user_profile_fact = open("data/user_profile_fact.yaml").read()
-user_bad_patterns = open("data/user_bad_patterns.yaml").read()
-user_style_profile = open("data/user_style_profile.yaml").read()
+user_fabricated_facts = open("data/user_fabricated_facts.yaml").read()
+user_facts_topics = open("data/user_facts_topics_profile.yaml").read()
 conversation_thread_data = {...}  # 来自 conversation_thread 工具
 wiki_context_data = {...}  # 来自 wiki_context 工具
 ```
@@ -174,8 +173,8 @@ Task(
 | `{{contact_name}}` | 联系人参数 | "alice" |
 | `{{relationship_stage}}` | person_brief | "stage_2" |
 | `{{user_profile_fact}}` | 读取 data/user_profile_fact.yaml | YAML 内容 |
-| `{{user_bad_patterns}}` | 读取 data/user_bad_patterns.yaml | YAML 内容 |
-| `{{user_style_profile}}` | 读取 data/user_style_profile.yaml | YAML 内容 |
+| `{{user_fabricated_facts}}` | 读取 data/user_fabricated_facts.yaml | YAML 内容 |
+| `{{user_facts_topics}}` | 读取 data/user_facts_topics_profile.yaml | YAML 内容 |
 | `{{recent_summary}}` | conversation_thread.recent_summary | 最近对话摘要 |
 | `{{her_emotion_trend}}` | conversation_thread.her_emotion.trajectory | "上升" / "平稳" / "下降" |
 | `{{pending_items}}` | conversation_thread.pending_items | 待办事项列表 |

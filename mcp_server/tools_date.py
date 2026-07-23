@@ -51,7 +51,7 @@ def date_briefing(name: str, date_plan: Optional[dict] = None) -> dict:
         # 4. 聚合用户日程
         schedule_info = _fetch_schedule_conflicts(date_plan)
 
-        # 5. 聚合用户画像（事实+坏习惯）
+        # 5. 聚合用户画像（事实）
         user_profile = _fetch_user_profile()
 
         # 6. 生成 Wiki 查询建议（基于阶段 + 信号）
@@ -233,15 +233,13 @@ def _fetch_schedule_conflicts(date_plan: dict) -> dict:
 
 
 def _fetch_user_profile() -> dict:
-    """获取用户事实画像 + 坏习惯（约会中需避免）。"""
+    """获取用户事实画像。"""
     try:
         from mcp_server.tools_profile import user_profile_manage
 
         fact_result = user_profile_manage(action="get", profile_type="fact")
-        bad_result = user_profile_manage(action="get", profile_type="bad_patterns")
 
         fact_data = fact_result.get("profile", {}) or {}
-        bad_data = bad_result.get("profile", {}) or {}
 
         return {
             "available": True,
@@ -249,7 +247,6 @@ def _fetch_user_profile() -> dict:
             "user_values": fact_data.get("values", [])[:3],
             "user_material_topics": (fact_data.get("material_library", {}) or {}).get("topics", [])[:5],
             "user_material_stories": (fact_data.get("material_library", {}) or {}).get("stories", [])[:3],
-            "bad_patterns": [p for p in bad_data.get("patterns", []) if p.get("status") == "active"][:5],
         }
     except Exception as e:
         logger.warning(f"user_profile 聚合失败: {e}")
@@ -260,40 +257,25 @@ def _fetch_user_profile() -> dict:
 
 
 def _build_wiki_queries(stage: str, signals: dict) -> list[str]:
-    """基于关系阶段 + 信号构建 Wiki 查询建议（供 Agent 调用 wiki_context）。"""
-    queries = []
+    """构建约会相关的 Wiki 查询话题列表（供 Agent 参考，Agent 自行决定用哪些）。
 
-    # 基础查询：约会方法论
-    queries.append("第一次约会怎么安排")
-    queries.append("约会话题")
-
-    # 按阶段补充
-    stage_lower = (stage or "").lower()
-    if "stage 3" in stage_lower or "高频" in stage or "阶段 3" in stage:
-        queries.append("高频聊天转见面")
-        queries.append("邀约三步法")
-    elif "stage 4" in stage_lower or "已约见" in stage or "阶段 4" in stage:
-        queries.append("第二次约会")
-        queries.append("约会后跟进")
-
-    # 按信号补充
-    if signals:
-        signal_text = " ".join(
-            str(v) for v in signals.values() if isinstance(v, (str, list))
-        )
-        if isinstance(signals.get("manipulation"), list) and signals["manipulation"]:
-            queries.append("操控信号识别")
-        if "兴趣" in signal_text or "ioi" in signal_text.lower():
-            queries.append("IOI 窗口识别")
-
-    # 去重 + 限制 5 条（wiki_context 上限）
-    seen = set()
-    unique = []
-    for q in queries:
-        if q not in seen:
-            seen.add(q)
-            unique.append(q)
-    return unique[:5]
+    设计原则（2026-07-24）：代码不替 agent 做决策。
+    - 不按 stage 过滤话题（stage 是 agent 的决策维度）
+    - 不按 signals 推荐话题（agent 看到 signals 自行决定是否需要查）
+    - 只提供通用约会相关话题列表，Agent 基于 person_snapshot 自行选择
+    """
+    # 通用约会相关话题（不按 stage/signals 过滤，Agent 自行决定哪些相关）
+    queries = [
+        "第一次约会怎么安排",
+        "约会话题",
+        "高频聊天转见面",
+        "邀约三步法",
+        "第二次约会",
+        "约会后跟进",
+        "IOI 窗口识别",
+        "操控信号识别",
+    ]
+    return queries
 
 
 # ── 简报模板渲染 ────────────────────────────────────────────────
@@ -366,15 +348,6 @@ def _render_briefing(
                 lines.append(f"- ⚠️ 雷区：{topic}")
             for av in avoids[:3]:
                 lines.append(f"- 🚫 避谈：{av}")
-    # 坏习惯提醒
-    if user_profile.get("available"):
-        bad_patterns = user_profile.get("bad_patterns", [])
-        if bad_patterns:
-            lines.append("**用户自身需避免的坏习惯**：")
-            for p in bad_patterns[:3]:
-                pattern_name = p.get("name", "")
-                description = p.get("description", "")
-                lines.append(f"- ❌ {pattern_name}：{description}")
     lines.append("")
 
     # ── 第三段：可讨论的话题 ────────────────────────────────
@@ -430,12 +403,16 @@ def _render_briefing(
     # ── 附录：Wiki 查询建议 ─────────────────────────────────
     lines.append("---")
     lines.append("## 附录：Agent 下一步操作")
-    lines.append("**建议调用**：")
+    lines.append("**可选的 Wiki 查询话题**（Agent 自行判断哪些相关，不需要全部查询）：")
+    lines.append(f"```")
+    lines.append(f"可用话题：{', '.join(wiki_queries)}")
+    lines.append(f"```")
+    lines.append("Agent 基于 person_snapshot（stage/signals）自行选择相关话题，调用：")
     lines.append("```python")
     lines.append("wiki_context(")
-    lines.append(f"    queries={wiki_queries},")
+    lines.append("    queries=[...],  # Agent 自行选择上述话题中相关的子集")
     lines.append("    task_type='meet',")
-    lines.append(f"    stage='{stage}',")
+    lines.append(f"    stage='{stage}',  # 可选，用于 Wiki 内容排名（非过滤）")
     lines.append("    focus='date'")
     lines.append(")")
     lines.append("```")
