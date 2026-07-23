@@ -1,5 +1,5 @@
 """
-在搜索候选框窗口内匹配 [REDACTED] 头像并点击（含重试机制）。
+在搜索候选框窗口内匹配 test_contact_2 头像并点击（含重试机制）。
 
 优化点（按 talk.md）：
 1. 等待间隔从 2.0s 改为 1.0s
@@ -9,11 +9,11 @@
 流程（单次尝试）：
 1. 找微信主窗口
 2. PrintWindow 截图主窗口，检测搜索栏位置
-3. 物理点击搜索栏 + 输入 [REDACTED]
+3. 物理点击搜索栏 + 输入 test_contact_2
 4. 等待 1 秒（搜索候选框出现）
 5. 枚举窗口，找搜索候选框（标题 'Weixin' + 类名含 'ToolSaveBits'）
 6. PrintWindow 截图搜索候选框
-7. 多尺度匹配 [REDACTED].jpg
+7. 多尺度匹配 test_contact_2.jpg
 8. 点击头像
 9. 等待 1 秒后截图主窗口，验证绿色环
 10. 检查窗口数
@@ -1263,7 +1263,7 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
             logger.warning(f"    ⚠️ [v3.0-F] 刷新头像异常: {e}，用窗口数判断")
 
     if not post_points:
-        logger.warning(f"    ⚠️ 主窗口内未匹配到 [REDACTED] 头像 (最高置信度={post_best:.3f})")
+        logger.warning(f"    ⚠️ 主窗口内未匹配到 test_contact_2 头像 (最高置信度={post_best:.3f})")
         # 模板匹配失败时，不能用绿色环验证（找不到头像中心）
         # 此时用窗口数变化作为成功依据（阶段 G 会判断）
         # 这里先标记 found=False，由阶段 G 的窗口数判断是否真正成功
@@ -1273,7 +1273,7 @@ def run_one_attempt(attempt_idx, max_attempts, do_click,
         cv2.putText(debug, "TEMPLATE_MATCH_FAILED (will rely on window count)",
                     (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
     else:
-        logger.info(f"    主窗口内匹配到 {len(post_points)} 个 [REDACTED] 头像:")
+        logger.info(f"    主窗口内匹配到 {len(post_points)} 个 test_contact_2 头像:")
         for i, (x, y, s, sc) in enumerate(post_points):
             logger.info(f"      #{i}: ({x}, {y}) conf={s:.3f} scale={sc}px")
         post_target = max(post_points, key=lambda p: p[2])
@@ -1399,7 +1399,7 @@ def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     if not args:
         logger.error("用法: python click_avatar_in_search_window.py <联系人名> [--click]")
-        logger.error("示例: python click_avatar_in_search_window.py [REDACTED] --click")
+        logger.error("示例: python click_avatar_in_search_window.py test_contact_2 --click")
         logger.error(f"模板目录: {os.path.join(_PROJECT_ROOT, 'data', 'avatars')}")
         sys.exit(1)
     contact_name = args[0]

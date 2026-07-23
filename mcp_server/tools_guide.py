@@ -468,7 +468,7 @@ wechat_send 工具通过模拟物理鼠标点击和键盘输入操作微信 PC �
 
 ### 调用方式
 ```python
-wechat_send(name="[REDACTED]", message="你好，最近怎么样？")
+wechat_send(name="test_contact_2", message="你好，最近怎么样？")
 ```
 
 ### name 参数解析（自动）

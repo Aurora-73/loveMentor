@@ -18,7 +18,7 @@
 用法：
     from engine.wechat_sender.wechat_recorder import WechatRecorder
 
-    recorder = WechatRecorder(contact_name="[REDACTED]")
+    recorder = WechatRecorder(contact_name="test_contact_1")
     recorder.start()
     try:
         # 执行微信操作...
@@ -202,7 +202,7 @@ class WechatRecorder:
     """微信操作录屏器：独立线程截图，OpenCV VideoWriter 写入 MP4。
 
     用法：
-        recorder = WechatRecorder(contact_name="[REDACTED]")
+        recorder = WechatRecorder(contact_name="test_contact_1")
         recorder.start()
         try:
             # 执行微信操作...

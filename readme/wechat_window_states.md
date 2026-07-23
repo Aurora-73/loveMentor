@@ -434,7 +434,7 @@
     主 PID: 20984
     进程数: 14
 [2] 微信窗口（枚举所有，含不可见）: 3 个
-    #1: hwnd=4456532 title='[REDACTED]' class='Qt51514QWindowIcon'  ⚠️ 私聊独立窗口
+    #1: hwnd=4456532 title='test_nickname' class='Qt51514QWindowIcon'  ⚠️ 私聊独立窗口
         is_window=True is_visible=True is_iconic=False is_zoomed=False
         rect=(626,130,1387,892) size=761x762 pid=20984
     #2: hwnd=1445714 title='微信' class='Qt51514QWindowIcon'
@@ -444,7 +444,7 @@
         is_window=True is_visible=False is_iconic=False is_zoomed=False
         rect=(847,368,1065,615) size=218x247 pid=20984
 [3] 当前前台窗口:
-    hwnd=4456532 title='[REDACTED]' class='Qt51514QWindowIcon'  ⚠️ 前台是私聊独立窗口
+    hwnd=4456532 title='test_nickname' class='Qt51514QWindowIcon'  ⚠️ 前台是私聊独立窗口
 [4] 托盘微信图标:
     找到: True
     位置: (1679, 1042)
@@ -452,7 +452,7 @@
 
 **关键观察**：
 - **私聊独立窗口特征**：
-  - title = 联系人名（'[REDACTED]'，与主窗口 '微信' 不同）
+  - title = 联系人名（'test_nickname'，与主窗口 '微信' 不同）
   - class = `Qt51514QWindowIcon`（与主窗口相同）
   - size = 761x762（比主窗口小，比历史聊天界面小）
   - is_visible = True（可见）

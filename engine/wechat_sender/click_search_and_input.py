@@ -1,5 +1,5 @@
 """
-点击微信搜索栏并输入联系人昵称 [REDACTED]。
+点击微信搜索栏并输入联系人昵称 test_contact_2。
 
 流程：
 1. 查找微信窗口
@@ -7,7 +7,7 @@
 3. 检测分界线（复用 dynamic_detector）
 4. 检测搜索栏位置（中间栏最白行）
 5. 用 PostMessage 后台点击搜索栏（不干扰用户操作）
-6. 用剪贴板 + Ctrl+V 输入 "[REDACTED]"
+6. 用剪贴板 + Ctrl+V 输入 "test_contact_2"
 """
 import os
 import sys
@@ -454,11 +454,11 @@ def main():
     time.sleep(0.8)  # 等待搜索框激活
 
     # 8. 输入文本
-    logger.info("输入文本 [REDACTED]...")
-    input_text_via_clipboard(hwnd, "[REDACTED]")
+    logger.info("输入文本 test_contact_2...")
+    input_text_via_clipboard(hwnd, "test_contact_2")
     time.sleep(0.5)
 
-    logger.info("\n✅ 完成，请检查微信窗口搜索栏是否已输入 [REDACTED]")
+    logger.info("\n✅ 完成，请检查微信窗口搜索栏是否已输入 test_contact_2")
 
 
 if __name__ == "__main__":

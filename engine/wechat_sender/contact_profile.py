@@ -10,8 +10,8 @@
 
 典型使用：
     profile = ContactProfile(
-        wxid="[REDACTED]",
-        alias="[REDACTED]",
+        wxid="wxid_test_example",
+        alias="test_contact_1",
         display_name="茶",
         remark="备注名",
         nickname="昵称",
@@ -42,8 +42,8 @@ class ContactProfile:
     - avatar_url: 头像网络 URL（可能为空）
     """
 
-    wxid: str                                   # 微信ID（如 [REDACTED]）
-    alias: str                                  # 微信号（如 [REDACTED]，可能为空字符串）
+    wxid: str                                   # 微信ID（如 wxid_test_example）
+    alias: str                                  # 微信号（如 test_contact_1，可能为空字符串）
     display_name: str                           # 微信显示名（如"茶"）
     remark: Optional[str] = None                # 备注名
     nickname: Optional[str] = None              # 昵称

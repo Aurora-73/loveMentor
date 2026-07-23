@@ -228,7 +228,7 @@ flowchart TD
 from mcp_server.tools_wechat import wechat_send
 
 # 发送消息
-result = wechat_send("[REDACTED]", "你好")
+result = wechat_send("test_contact_1", "你好")
 # result = {"success": True, "message": "消息已成功发送给 ...", "contact": "...", "attempts": 1}
 ```
 
@@ -240,8 +240,8 @@ from engine.wechat_sender.wechat_e2e_run import run_e2e
 # 直接调用（需自行确保窗口状态）
 result = run_e2e(
     message="你好",
-    contact_name="[REDACTED]",
-    template_path="data/avatars/[REDACTED].jpg",
+    contact_name="test_contact_1",
+    template_path="data/avatars/test_contact_1.jpg",
 )
 ```
 
@@ -251,10 +251,10 @@ result = run_e2e(
 from engine.wechat_data.avatar_fetcher import get_avatar, get_avatar_with_meta
 
 # 简单获取（返回路径）
-avatar_path = get_avatar("[REDACTED]")
+avatar_path = get_avatar("test_contact_1")
 
 # 获取头像 + 完整元信息（MCP 工具 person_avatar 的业务实现）
-result = get_avatar_with_meta("[REDACTED]", force_refresh=True)
+result = get_avatar_with_meta("test_contact_1", force_refresh=True)
 # result = {"success": True, "avatar_path": "...", "wxid": "...", "display_name": "...", "updated": True}
 ```
 

@@ -331,7 +331,7 @@ def wechat_send(name: str, message: str, urgent: bool = False) -> dict:
     - name 可以是：微信号(alias)、wxid、昵称、备注名
     - 优先用微信号搜索（唯一），无微信号时回退到昵称搜索
     - 若按昵称匹配到多个联系人 → 拒绝发送，返回匹配列表
-    - 示例：wechat_send('[REDACTED]', '你好') → 数据库查找 [REDACTED] 的微信号 → 用微信号搜索
+    - 示例：wechat_send('test_contact_2', '你好') → 数据库查找 test_contact_2 的微信号 → 用微信号搜索
 
     头像定位逻辑（重要：用 wxid 而非显示名）：
     - 头像模板文件名用 wxid（唯一，不会冲突）

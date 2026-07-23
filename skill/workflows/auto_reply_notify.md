@@ -81,7 +81,7 @@ description: 紧急通知流程 — 5步从检测到推送
 
 **执行细节**：
 - **Server酱推送**（用户不在电脑前）：
-  - `server_chan_notify(title="紧急事件：[REDACTED] 情绪突变", content="...", priority=3)`
+  - `server_chan_notify(title="紧急事件：test_contact_2 情绪突变", content="...", priority=3)`
   - priority=3（Urgent）确保推送
   - content 包含：事件描述 + Agent 回复内容 + 后续建议
 - **AskUserQuestion**（用户在电脑前）：

@@ -537,7 +537,7 @@ mcp.tool(
                "流程：硬约束校验→解析联系人→搜索微信号→点击头像→输入消息→点击发送。"
                "内置防封号机制：分段随机输入+点击位置抖动+间隔随机化，无需配置。"
                "如果微信在后台运行但窗口不可见，会自动恢复窗口。"
-               "示例：wechat_send('[REDACTED]', '你好') / wechat_send('[REDACTED]', '在的', urgent=True)。"
+               "示例：wechat_send('test_contact_2', '你好') / wechat_send('test_contact_2', '在的', urgent=True)。"
                "详细说明：guide('reference/wechat')",
 )(tools_wechat.wechat_send)
 
@@ -553,7 +553,7 @@ mcp.tool(
                "与 wechat_send 的区别：阶段一/二相同，阶段三用表情面板搜索发送，不输入文字。"
                "表情面板是独立小窗口（类似搜索候选框），发送后面板自动关闭。"
                "如果微信在后台运行但窗口不可见，会自动恢复窗口。"
-               "示例：wechat_send_emoji('[REDACTED]', '猫猫') → 发送搜索'猫猫'得到的第一个表情包",
+               "示例：wechat_send_emoji('test_contact_2', '猫猫') → 发送搜索'猫猫'得到的第一个表情包",
 )(tools_wechat.wechat_send_emoji)
 
 mcp.tool(
@@ -569,7 +569,7 @@ mcp.tool(
                "v4 三重硬约束：1.线索已读校验 2.回复冷却校验（urgent 可绕过）3.互斥锁校验。"
                "与 wechat_send 的区别：阶段一/二相同，阶段三用剪贴板粘贴图片替代输入文字，"
                "图片预览加载比文字慢（等待 1.5s），验证用发送按钮颜色变化判断（无法用 OCR 文字验证）。"
-               "示例：wechat_send_image('[REDACTED]', 'C:\\\\Users\\\\test\\\\photo.jpg') → 发送 photo.jpg 给 [REDACTED]",
+               "示例：wechat_send_image('test_contact_2', 'C:\\\\Users\\\\test\\\\photo.jpg') → 发送 photo.jpg 给 test_contact_2",
 )(tools_wechat.wechat_send_image)
 
 mcp.tool(
@@ -585,7 +585,7 @@ mcp.tool(
                "技术方案：CF_HDROP 剪贴板格式（模拟 Explorer 复制文件）→ Ctrl+V 粘贴 → 微信自动识别类型 → 点击发送。"
                "与 wechat_send_image 的区别：剪贴板用 CF_HDROP（文件拖放）而非 CF_DIB（位图），支持任意文件类型。"
                "v4 三重硬约束：1.线索已读校验 2.回复冷却校验（urgent 可绕过）3.互斥锁校验。"
-               "示例：wechat_send_file('[REDACTED]', 'C:\\\\Users\\\\test\\\\video.mp4') → 发送 video.mp4 给 [REDACTED]",
+               "示例：wechat_send_file('test_contact_2', 'C:\\\\Users\\\\test\\\\video.mp4') → 发送 video.mp4 给 test_contact_2",
 )(tools_wechat.wechat_send_file)
 
 mcp.tool(
@@ -600,7 +600,7 @@ mcp.tool(
                "每次发送前校验聊天框左上角显示名，校验失败则回退到完整流程。"
                "v4 三重硬约束：1.线索已读校验 2.回复冷却校验（urgent 可绕过）3.互斥锁校验（整个批量过程串行）。"
                "适用场景：分段发送长文本、连续发送多条独立消息。"
-               "示例：wechat_send_batch('[REDACTED]', ['你好', '最近怎么样', '周末有空吗']) → 连续发送 3 条消息",
+               "示例：wechat_send_batch('test_contact_2', ['你好', '最近怎么样', '周末有空吗']) → 连续发送 3 条消息",
 )(tools_wechat.wechat_send_batch)
 
 mcp.tool(
@@ -615,7 +615,7 @@ mcp.tool(
                "验证结果'未验证'≠'发送失败'，可能是同步延迟。"
                "只对比我方消息（sender_id == my_wxid），不对比对方消息。"
                "图片/表情包/语音用 extract_display_content 生成可读标签。"
-               "示例：wechat_verify_send('[REDACTED]', 1784721800) → 验证 ts=1784721800 后的消息",
+               "示例：wechat_verify_send('test_contact_2', 1784721800) → 验证 ts=1784721800 后的消息",
 )(tools_wechat.wechat_verify_send)
 
 mcp.tool(
@@ -653,7 +653,7 @@ mcp.tool(
                "数据源优先级：本地缓存 → core.db → WeFlow API → contacts.json 缓存（CDN 直链，不需要服务运行）。"
                "参数：name（联系人标识符），force_refresh（强制重新下载，默认false），"
                "check_update（检查URL变化，默认true）。"
-               "示例：person_avatar('[REDACTED]') → 获取 [REDACTED] 的头像并保存为 [REDACTED].jpg",
+               "示例：person_avatar('test_contact_2') → 获取 test_contact_2 的头像并保存为 test_contact_2.jpg",
 )(tools_avatar.person_avatar)
 
 # ── 注册 v4 自动回复架构新工具（P0）──────────────────────────────

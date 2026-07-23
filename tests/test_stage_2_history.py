@@ -16,7 +16,7 @@
 用法：
     python tests/test_stage_2_history.py [联系人名]
 
-    联系人名默认 [REDACTED]，模板路径为 data/avatars/<联系人名>.jpg
+    联系人名默认 test_contact_2，模板路径为 data/avatars/<联系人名>.jpg
 """
 import os
 import sys
@@ -46,8 +46,8 @@ def main():
     output_dir = os.path.join(_PROJECT_ROOT, "data", "outputs", "test_stage_2")
     os.makedirs(output_dir, exist_ok=True)
 
-    # 联系人名（命令行参数，默认 [REDACTED]）
-    contact_name = sys.argv[1] if len(sys.argv) > 1 else "[REDACTED]"
+    # 联系人名（命令行参数，默认 test_contact_2）
+    contact_name = sys.argv[1] if len(sys.argv) > 1 else "test_contact_2"
     template_path = os.path.join(TEMPLATES_DIR, f"{contact_name}.jpg")
 
     logger.info("=" * 60)

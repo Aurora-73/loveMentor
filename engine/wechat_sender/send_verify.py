@@ -298,7 +298,7 @@ if __name__ == "__main__":
     # 命令行测试：python send_verify.py <联系人名> <before_ts>
     if len(sys.argv) < 3:
         print("用法: python send_verify.py <联系人名> <before_ts>")
-        print("示例: python send_verify.py [REDACTED] 1784721800")
+        print("示例: python send_verify.py test_contact_1 1784721800")
         sys.exit(1)
     contact_name = sys.argv[1]
     before_timestamp = int(sys.argv[2])

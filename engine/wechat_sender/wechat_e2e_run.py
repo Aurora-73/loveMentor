@@ -1486,7 +1486,7 @@ def send_message_batch(name: str, messages: list) -> dict:
 def main():
     if len(sys.argv) < 3:
         logger.info("用法: python E:\\Code\\loveMentor\\send_message\\wechat_e2e_run.py <联系人名> \"<消息内容>\"")
-        logger.info("示例: python E:\\Code\\loveMentor\\send_message\\wechat_e2e_run.py [REDACTED] \"你好\"")
+        logger.info("示例: python E:\\Code\\loveMentor\\send_message\\wechat_e2e_run.py test_contact_2 \"你好\"")
         logger.info(f"模板目录: {TEMPLATES_DIR}（模板文件名应为 <联系人名>.jpg）")
         sys.exit(1)
     contact_name = sys.argv[1]

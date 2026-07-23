@@ -23,7 +23,7 @@
 
 用法：
     from mcp_server.weflow_cdp import refresh_contact_avatar
-    result = refresh_contact_avatar("[REDACTED]")
+    result = refresh_contact_avatar("wxid_test_example")
     if result["success"]:
         print(result["avatarUrl"], result["displayName"])
 """
@@ -183,7 +183,7 @@ def refresh_contact_avatar(wxid: str, timeout: float = 30.0) -> dict:
       5. 返回 { avatarUrl, displayName }
 
     Args:
-        wxid: 联系人 wxid（如 [REDACTED]）
+        wxid: 联系人 wxid（如 wxid_test_example）
         timeout: 超时秒数
 
     Returns:
