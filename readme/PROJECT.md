@@ -1,6 +1,6 @@
 # LoveMentor 项目文档
 
-> 最后更新：2026-07-13
+> 最后更新：2026-07-24
 > 基于项目当前代码状态编写
 
 ---
@@ -43,7 +43,7 @@ LoveMentor 是一个 AI 驱动的恋爱关系辅助系统。用户通过 Claude 
 
 **核心原则**：代码负责数据，Agent 负责推理，Wiki 是知识依据，公式是参考视角。
 
-用户通过 Claude Code（Agent）与系统交互，Agent 直接调用 Python 工具获取数据，结合 Wiki 知识库自行分析后输出结果。或通过 MCP 协议暴露给 Claude Desktop / Cursor（见 [mcp.md](mcp.md)），MCP Server (FastMCP stdio) 提供 49 个工具，复用 engine/tools.py。
+用户通过 Claude Code（Agent）与系统交互，Agent 直接调用 Python 工具获取数据，结合 Wiki 知识库自行分析后输出结果。或通过 MCP 协议暴露给 Claude Desktop / Cursor（见 [mcp.md](mcp.md)），MCP Server (FastMCP stdio) 提供完整工具集，复用 engine/tools.py。
 
 **数据来源**：
 
@@ -343,6 +343,96 @@ stats = turn_stats("姓名", window_days=30)  # Markdown，直接给 Agent 读
 - composite=0.10 是"有互动/无互动"的关键分界线
 - 趋势斜率 >+0.005 为上升健康，<-0.005 为崩溃
 - "熹微异常"（composite 上升但失败）由语义分析解答：flirt 和 invitation 极低，聊得多但不暧昧不邀约
+
+### 2.14 v4 自动回复系统
+
+完整的微信自动回复架构，包含委员会审查、四重硬约束、状态机、消息切分、多媒体发送。详见 [auto_reply_architecture.md](auto_reply_architecture.md)。
+
+**核心架构**：
+
+| 组件 | 说明 |
+|------|------|
+| 委员会 5 官 subagent | 拟人度/用户一致性/感情推进/风险/邀约窗口并行审查，信息隔离，风险官有硬否决权 |
+| 四重硬约束 | 用户介入取消（第 0 重）+ 线索已读 + 回复冷却 + 跨进程互斥锁 |
+| reply_state_manage | 回复状态机（5 种失败类型 + 退避策略 + 连续失败保护） |
+| 消息自动切分 | 标点→多段发送，IME_CHAR 逐字输入（模拟真人打字） |
+| conversation_thread | 对话线索管理（10 action，recent_summary/current_threads/pending_items/her_emotion） |
+
+**综合裁决规则**：
+- 风险官 verdict=reject + severity=high → **硬否决**
+- ≥2 官 reject → 驳回重写
+- 1 官 modify → 自行修改
+- 全 pass → 发送
+
+**端到端测试已通过**（干跑模式 + 真实发送）。
+
+### 2.15 微信发送与控制
+
+| 功能 | 工具 | 说明 |
+|------|------|------|
+| 文本发送 | `wechat_send` | IME_CHAR 逐字输入，自动切分标点 |
+| 表情发送 | `wechat_send_emoji` | 表情面板选择 |
+| 图片发送 | `wechat_send_image` | CF_DIB 剪贴板格式 |
+| 视频/文件发送 | `wechat_send_file` | CF_HDROP 剪贴板格式 |
+| 批量混合发送 | `wechat_send_batch` | text/emoji/image/file 混合 |
+| 发送验证 | `wechat_verify_send` | OCR 验证消息出现在聊天记录 |
+| 窗口控制 | `wechat_start/stop/status` | 微信窗口管理 |
+| OCR 识别 | `wechat_ocr` | 截图 OCR（PaddleOCR/RapidOCR） |
+
+详见 [wechat_auto_flow.md](wechat_auto_flow.md) 端到端流程图。
+
+### 2.16 实时监控
+
+| 功能 | 工具 | 说明 |
+|------|------|------|
+| 启动监控 | `live_monitor_start` | poll_interval 默认 10s，fetch_limit 可调，include_brief 预加载快照 |
+| 停止监控 | `live_monitor_stop` | 停止指定联系人监控 |
+| 监控状态 | `live_monitor_status` | 查询所有监控状态 |
+| 增量读取 | `live_chat_read` | since_last_read 基于偏移量，避免全文件扫描 |
+
+缓存文件存储在 `data/cache/` 为 markdown 格式。
+
+### 2.17 图片素材库
+
+Agent 虽然看不到图片内容，但可以通过读取 README.md 描述来决定发送哪张图片。
+
+**架构**：
+- `data/user_pictures/` — 图片库根目录
+- `data/user_pictures/README.md` — 主目录说明（分类概览 + 使用流程）
+- `data/user_pictures/<分类>/README.md` — 子文件夹说明（描述 + 关键词 + 单文件描述）
+- `mcp_server/tools_pictures.py` — `search_user_pictures` MCP 工具
+
+**设计原则**：工具只提供数据 + 模糊搜索，不替 Agent 做决策
+- 不按 stage 过滤（Agent 自行判断）
+- 不设隐私级别过滤（Agent 读取描述中的标注自行判断）
+- 返回 categories_summary 供 Agent 浏览全部分类
+
+**单文件描述机制**：子文件夹 README.md 末尾的"## 单文件描述"section 为每个文件提供具体描述，工具解析后返回给 Agent。
+
+### 2.18 罐装素材库
+
+结构化的微信聊天素材库，包含破冰、熟悉期、暧昧期素材及自我提升内容。
+
+**架构**：
+- `data/canned_materials.yaml` — 素材库（按 stage 分类：脑筋急转弯/冷知识/冷笑话/电影台词/浪漫台词/身体语言/眼神训练/声音训练/人生感悟）
+- `mcp_server/tools_canned.py` — `search_canned_materials` MCP 工具
+- `data/date_props.yaml` — 约会道具（看手相话术 + 无酒精互动游戏）
+
+**设计原则**：同图片素材库，工具只提供搜索 + 浏览，不替 Agent 做决策。
+
+### 2.19 用户画像系统
+
+三类文件架构，Agent 不模仿用户语言风格，而是基于事实 + Wiki 知识设计对话。
+
+| 文件 | 定位 | 优先级 | 用途 |
+|------|------|--------|------|
+| `data/user_profile_fact.yaml` | grounding 层 | 高 | 防止编造经历（身高/职业/经历/约会地点等） |
+| `data/user_facts_topics_profile.yaml` | 话题选择层 | 中 | 用户可谈论的话题偏好（从聊天记录提取） |
+| `data/user_fabricated_facts.yaml` | 扩展事实层 | 标记 | Agent 编造的经历，见面前提供给用户 |
+
+**策略优先级**：Wiki > 上下文 > 事实 > 阶段
+
+**委员会用户一致性审查**：3 项检查（未记录编造/身份冲突/阶段突兀），不检查语言风格。
 
 ---
 
@@ -693,7 +783,7 @@ loveMentor/
     ├── PROJECT.md            #     项目总览（Wiki 主轴 + 公式辅助参考架构）
     ├── formulas.md           #     公式参考（辅助视角，含演进链条）
     ├── facts.md              #     事实档案（evidence/evaluation 分层 + 自检清单）
-    ├── mcp.md                #     MCP 工具文档（49 个工具）
+    ├── mcp.md                #     MCP 工具文档
     ├── architecture_correction_completed.md  # 架构矫正完成记录
     ├── future_formula_wiki_metadata.md       # P6 未来计划：公式-Wiki 结构化元数据
     └── ...                   #     其他模块文档
@@ -818,10 +908,13 @@ Agent 的主控文件，包含：
 
 | 工作流 | 名称 | 步骤数 | 适用场景 |
 |--------|------|--------|----------|
-| `analysis` | 人物分析完整流程 | 11 步 | "分析XX"、"帮我看看XX" |
+| `analysis` | 人物分析完整流程 | 12 步 | "分析XX"、"帮我看看XX" |
 | `emergency_reply` | 紧急回复流程 | 4 步 | "她发了XX怎么回" |
 | `weekly` | 周报流程 | 2 步 | "做周报" |
 | `maintain` | 维持关系流程 | 4 步 | "维持关系" |
+| `auto_reply` | v4 自动回复流程 | 12 步 | 委员会审查 + 发送 |
+| `auto_reply_invite` | 邀约自动回复流程 | 6 步 | 含邀约窗口检测 |
+| `auto_reply_notify` | 紧急通知流程 | 2 步 | Server酱推送 |
 
 ### 8.4 Skill 渐进式披露结构
 
@@ -834,10 +927,20 @@ skill/
 ├── mcp-tools.md             # 工具速查
 ├── mcp_index.yaml           # 双向索引数据源
 ├── workflows/               # 工作流子文件（渐进式披露）
-│   ├── analysis.md          # 分析流程详细步骤
+│   ├── analysis.md          # 分析流程详细步骤（12 步）
+│   ├── auto_reply.md        # v4 自动回复流程
+│   ├── auto_reply_invite.md # 邀约自动回复流程
+│   ├── auto_reply_notify.md # 紧急通知流程
 │   ├── emergency_reply.md   # 紧急回复流程
 │   ├── weekly.md            # 周报流程
 │   └── maintain.md          # 维持关系流程
+├── committee/               # v4 委员会审查官 prompts
+│   ├── README.md            # 设计说明 + 信息隔离矩阵
+│   ├── humanlike.md         # 拟人度审查官
+│   ├── consistency.md       # 用户一致性审查官
+│   ├── progression.md       # 感情推进审查官
+│   ├── risk.md              # 风险审查官（硬否决权）
+│   └── invite_window.md     # 邀约窗口审查官
 ├── signals/                 # 信号解读子文件
 │   ├── basic_signals.md     # 基础信号
 │   └── manipulation_signals.md # 操控信号

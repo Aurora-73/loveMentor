@@ -1,7 +1,7 @@
 # LoveMentor MCP 服务器
 
 > **状态**：已完工 — 全量验收通过，Claude Desktop / Claude Code 实测可用
-> **最后更新**：2026-07-23（删除工具数量描述，统一 analysis 工作流为 12 步 wiki_context，补全 v4/微信/监控/头像工具清单）
+> **最后更新**：2026-07-24（补全素材搜索工具、更新目录结构、新增 v4 工作流）
 
 ---
 
@@ -70,17 +70,33 @@ pydantic>=2.7     # 数据验证（fastmcp 依赖）
 mcp_server/                  # MCP 服务器
 ├── __init__.py
 ├── server.py                # FastMCP 服务器入口，注册所有工具
-├── tools_read.py            # 只读工具（含 system_sync/wcd_status/events_scan）
-├── tools_write.py           # 写入工具
+├── config.py                # 服务器配置
+├── tools_read.py            # 只读工具（brief/chat/metrics/rank/wiki 等）
+├── tools_write.py           # 写入工具（note/date/evaluate/save_analysis 等）
 ├── tools_formula.py         # 公式计算工具（辅助参考视角）
 ├── tools_guide.py           # 使用指南工具（11 个主题）
+├── tools_workflow.py        # 工作流导航（skill_map/workflow_step）
+├── tools_config.py          # 配置工具（get_backend/set_backend）
+├── tools_thread.py          # 对话线索工具（conversation_thread）
+├── tools_reply_state.py     # 回复状态机（reply_state_manage）
+├── tools_wechat.py          # 微信发送与控制（send/emoji/image/file/batch/verify/ocr）
+├── tools_live.py            # 实时监控（live_monitor_start/stop/status/read）
+├── tools_profile.py         # 用户画像管理（user_profile_manage）
+├── tools_schedule.py        # 日程管理（schedule_manage）
+├── tools_date.py            # 约会工具（date_briefing/date_feedback_loop）
+├── tools_replies.py         # 回复检查（recent_replies_check/effect_tracking）
+├── tools_notify.py          # 通知工具（server_chan_notify/config）
+├── tools_override.py        # 手动覆盖学习（override_learning）
+├── tools_priority.py        # 联系人优先级（contact_priority_manage）
+├── tools_pictures.py        # 图片素材搜索（search_user_pictures）
+├── tools_canned.py          # 罐装素材搜索（search_canned_materials）
+├── tools_avatar.py          # 头像工具（person_avatar）
+├── weflow_cdp.py            # WeFlow CDP 集成
 ├── README.md                # 使用说明
-├── QUALITY_CHECK.md         # 质量自检报告
 ├── user_feedback.md         # 实战测试反馈
 ├── ISSUES.md                # 实施过程中的问题记录
 ├── TOOL_MAPPING.md          # 工具映射表
-└── tests/
-    ├── test_final.py        # 全量验收测试（49 工具验证）
+└── tests/                   # 测试
     └── ...
 ```
 
@@ -235,6 +251,24 @@ python -X utf8 -m mcp_server.server
 |--------|------|------|
 | `person_avatar` | 获取联系人头像（5 级数据源优先级：本地缓存 → core.db → WCD/WeFlow API → contacts.json → CDP 强制刷新） | 只读 |
 
+### 5.13 素材搜索工具
+
+> 设计原则：工具只提供数据 + 模糊搜索，不替 Agent 做决策（不按 stage 过滤、不推荐"该用哪条素材"）。
+
+| 工具名 | 参数 | 说明 | 类型 |
+|--------|------|------|------|
+| `search_user_pictures` | `keywords, category, limit` | 搜索用户图片库，返回匹配图片的描述和绝对路径。数据来源：`data/user_pictures/README.md` + 子文件夹 README + 目录扫描。支持单文件描述解析 | 只读 |
+| `search_canned_materials` | `keywords, category, stage, limit` | 搜索罐装素材库（`data/canned_materials.yaml`），返回匹配素材的完整内容。按 stage 分类：脑筋急转弯/冷知识/冷笑话/电影台词/浪漫台词/身体语言等 | 只读 |
+
+**图片素材库结构**：
+- `data/user_pictures/README.md` — 主目录说明（分类概览 + 使用流程）
+- `data/user_pictures/<分类>/README.md` — 子文件夹说明（描述 + 关键词 + 单文件描述）
+- 子文件夹 README 末尾的"## 单文件描述"section 为每个文件提供具体描述
+
+**罐装素材库结构**：
+- `data/canned_materials.yaml` — 按 stage 分类（stage_1 破冰 / stage_2 熟悉 / stage_3 暧昧 / self_improvement 自我提升）
+- `data/date_props.yaml` — 约会道具（看手相话术 + 无酒精互动游戏）
+
 ---
 
 ## 六、核心设计决策
@@ -358,6 +392,9 @@ Layer 3: MCP 按需增量（person_sync，秒级完成）
 | `emergency_reply` | 紧急回复流程 | 4 步 | "她发了XX怎么回" |
 | `weekly` | 周报流程 | 2 步 | "做周报" |
 | `maintain` | 维持关系流程 | 4 步 | "维持关系" |
+| `auto_reply` | v4 自动回复流程 | 12 步 | 委员会审查 + 发送 |
+| `auto_reply_invite` | 邀约自动回复流程 | 6 步 | 含邀约窗口检测 |
+| `auto_reply_notify` | 紧急通知流程 | 2 步 | Server酱推送 |
 
 ### 10.4 分析工作流（analysis）详细步骤
 
@@ -384,7 +421,7 @@ Layer 3: MCP 按需增量（person_sync，秒级完成）
 
 `skill/mcp_index.yaml` 是融合架构的核心数据源，包含：
 
-- **tools**：40+ 个工具的映射（下一步建议、Skill 参考、工作流位置）
+- **tools**：工具映射（下一步建议、Skill 参考、工作流位置）
 - **workflows**：4 个工作流的详细步骤定义
 - **scenarios**：场景到工作流的路由映射
 
