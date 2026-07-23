@@ -95,7 +95,13 @@ def _parse_main_readme() -> tuple[list[dict], list[dict]]:
 def _parse_subfolder_readme(subfolder_path: str) -> dict:
     """解析子文件夹 README.md，返回详细描述信息。
 
-    返回: {"description": "...", "keywords": [...], "suitable_when": "...", "usage_tips": "..."}
+    返回: {
+        "description": "...",
+        "keywords": [...],
+        "suitable_when": "...",
+        "usage_tips": "...",
+        "file_descriptions": {"文件名": "描述", ...},  # 来自"## 单文件描述"section
+    }
     """
     readme_path = os.path.join(subfolder_path, "README.md")
     result = {
@@ -103,6 +109,7 @@ def _parse_subfolder_readme(subfolder_path: str) -> dict:
         "keywords": [],
         "suitable_when": "",
         "usage_tips": "",
+        "file_descriptions": {},
     }
 
     if not os.path.exists(readme_path):
@@ -125,11 +132,17 @@ def _parse_subfolder_readme(subfolder_path: str) -> dict:
         if section_match:
             # 保存前一个 section
             if current_section:
-                result[current_section] = "\n".join(section_content).strip()
+                if current_section == "file_descriptions":
+                    # 单文件描述 section 特殊处理：解析 - `file`: desc 格式
+                    result["file_descriptions"] = _parse_file_descriptions(section_content)
+                else:
+                    result[current_section] = "\n".join(section_content).strip()
 
             current_section_raw = section_match.group(1).strip()
             # 映射 section 名到字段
-            if "描述" in current_section_raw:
+            if "单文件描述" in current_section_raw:
+                current_section = "file_descriptions"
+            elif "描述" in current_section_raw:
                 current_section = "description"
             elif "适用场景" in current_section_raw:
                 current_section = "suitable_when"
@@ -145,7 +158,10 @@ def _parse_subfolder_readme(subfolder_path: str) -> dict:
 
     # 保存最后一个 section
     if current_section:
-        result[current_section] = "\n".join(section_content).strip()
+        if current_section == "file_descriptions":
+            result["file_descriptions"] = _parse_file_descriptions(section_content)
+        else:
+            result[current_section] = "\n".join(section_content).strip()
 
     # keywords 从逗号/顿号分隔的文本转为列表
     if isinstance(result["keywords"], str) and result["keywords"]:
@@ -155,6 +171,25 @@ def _parse_subfolder_readme(subfolder_path: str) -> dict:
     else:
         result["keywords"] = []
 
+    return result
+
+
+def _parse_file_descriptions(lines: list[str]) -> dict[str, str]:
+    """解析"## 单文件描述"section 的内容，返回 {文件名: 描述} 映射。
+
+    支持格式：
+        - `文件名.jpg`: 描述文本
+        - `文件名.jpg`: （空描述，待补充）
+    """
+    result = {}
+    for line in lines:
+        # 匹配 - `文件名`: 描述
+        m = re.match(r"^-\s+`([^`]+)`\s*:\s*(.*)$", line.strip())
+        if m:
+            filename = m.group(1).strip()
+            desc = m.group(2).strip()
+            if filename:
+                result[filename] = desc
     return result
 
 
@@ -241,7 +276,8 @@ def search_user_pictures(
                     "absolute_path": "e:\\Code\\loveMentor\\data\\user_pictures\\<category-a>\\1000144894.jpg",
                     "relative_path": "<category-a>/1000144894.jpg",
                     "category": "<category-a>",
-                    "description": "...",  # 来自 README 的描述
+                    "description": "...",  # 文件夹级别的描述
+                    "file_description": "...",  # 该文件的具体描述（来自"## 单文件描述"section，可能为空）
                     "keywords": ["猫", "三花猫", ...],
                     "suitable_when": "聊到猫/宠物/流浪猫/校园生活时",
                     "usage_tips": "...",  # 使用建议
@@ -254,6 +290,13 @@ def search_user_pictures(
                 "category": "..."
             }
         }
+
+    单文件描述机制：
+        - 子文件夹 README.md 中的"## 单文件描述"section 列出每个文件的具体描述
+        - 用户手动填写每个文件的描述（用途/场景/特点）
+        - 工具解析该 section，把描述合并到对应文件的结果中
+        - 搜索时也会匹配单文件描述中的关键词
+        - 留空的文件描述返回空字符串，agent 使用文件夹级别的通用描述
     """
     # 1. 解析主 README 获取分类列表
     categories, standalone_files = _parse_main_readme()
@@ -282,12 +325,20 @@ def search_user_pictures(
         # 合并描述：优先用子文件夹 README 的描述，fallback 到主 README 的描述
         description = readme_data.get("description", "") or cat["description"]
 
+        # 单文件描述映射
+        file_descs = readme_data.get("file_descriptions", {})
+
+        # 把单文件描述合并到每个文件对象中
+        for f in actual_files:
+            f["file_description"] = file_descs.get(f["name"], "")
+
         enriched_cat = {
             "name": cat_name,
             "description": description,
             "keywords": readme_data.get("keywords", []),
             "suitable_when": readme_data.get("suitable_when", ""),
             "usage_tips": readme_data.get("usage_tips", ""),
+            "file_descriptions": file_descs,  # 保留完整映射供 agent 参考
             "files": actual_files,
             "file_count": len(actual_files),
         }
@@ -338,8 +389,9 @@ def search_user_pictures(
         if category and cat["name"] != category:
             continue
 
-        # 构建搜索文本
-        search_text = f"{cat['description']} {cat['suitable_when']} {cat['usage_tips']}"
+        # 构建搜索文本（包含文件夹描述 + 单文件描述，让搜索单文件描述中的关键词也能命中）
+        file_descs_text = " ".join(cat.get("file_descriptions", {}).values())
+        search_text = f"{cat['description']} {cat['suitable_when']} {cat['usage_tips']} {file_descs_text}"
 
         # 关键词模糊匹配
         if not _fuzzy_match(keywords or [], cat["keywords"], search_text):
@@ -354,6 +406,7 @@ def search_user_pictures(
                 "relative_path": rel_path,
                 "category": cat["name"],
                 "description": cat["description"],
+                "file_description": f.get("file_description", ""),  # 该文件的具体描述
                 "keywords": cat["keywords"],
                 "suitable_when": cat["suitable_when"],
                 "usage_tips": cat["usage_tips"],
