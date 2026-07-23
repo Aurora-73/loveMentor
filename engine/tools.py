@@ -260,7 +260,7 @@ def wiki_context_data(
     max_chars: int = 8000,
     max_pages: int = 8,
 ) -> dict:
-    """批量构建 Wiki 上下文 — 多查询合并 + 阶段过滤 + 焦点加权 + 格式化返回。
+    """批量构建 Wiki 上下文 — 多查询合并 + 阶段排名 + 焦点加权 + 格式化返回。
 
     与 wiki_search/wik_read 的区别：
     - wiki_context 一次返回 prompt-ready 格式化段落（合并去重 + 预算裁剪）
@@ -273,7 +273,7 @@ def wiki_context_data(
             "meta": {
                 "hit_pages": int, "returned_pages": int,
                 "deduped": int, "total_chars": int,
-                "low_confidence": bool, "stage_filter": str, "focus": str,
+                "low_confidence": bool, "stage_signal": str, "focus": str,
             },
             "page_list": [{"title", "path", "page_type", "score", "summary"}, ...]
         }
@@ -296,7 +296,7 @@ def wiki_context_data(
             "meta": {
                 "hit_pages": 0, "returned_pages": 0, "deduped": 0,
                 "total_chars": 0, "low_confidence": True,
-                "stage_filter": stage, "focus": focus,
+                "stage_signal": stage, "focus": focus,
             },
             "page_list": [],
         }

@@ -156,7 +156,7 @@ def wiki_context(
     - 写报告前，需要回顾相关 Wiki 条目时
 
     与 wiki_search 的区别：
-    - wiki_context 合并多条查询 + 阶段过滤 + 焦点加权，一次返回格式化 prompt 段落
+    - wiki_context 合并多条查询 + 阶段排名 + 焦点加权，一次返回格式化 prompt 段落
     - wiki_search 返回候选列表，需要逐条 wiki_read 读全文
     wiki_search/wiki_read 保留用于精确钻取单页内容。
 
@@ -305,27 +305,17 @@ def person_moments_stats(name: str) -> dict:
         return {"error": "TOOL_ERROR", "message": str(e), "suggestion": "请检查联系人姓名是否正确"}
 
 
-_REASON_PRIORITY = {
-    "热度下降": "高",
-    "窗口未推进": "高",
-    "高潜力未投入": "中",
-    "需关注": "低",
-}
-
-_REASON_ACTION = {
-    "热度下降": "重新建立联系，分享轻松内容，避免关系冷却",
-    "窗口未推进": "推进关系，发起邀约或深入话题，抓住窗口期",
-    "高潜力未投入": "主动联系，投入更多关注，测试对方反应",
-    "需关注": "保持联系，观察信号变化，避免过度投入",
-}
-
-
 def maintain_list(limit: int = 10) -> dict:
     """获取需要维持关系的候选人列表。
 
     什么时候用：每周主动维护关系时，筛选需要联系的人。
     返回什么：dict 含 candidates 列表和 formatted Markdown。
     边界是什么：limit 控制返回候选人数。
+
+    设计原则（代码不替 agent 做决策）：
+    - 只提供客观数据（reason/signal_level/recent_days/composite/trend 等）
+    - 不生成 priority（优先级由 agent 自行判断）
+    - 不生成 suggested_action（行动方案由 agent 基于 Wiki 自行决定）
     """
     try:
         candidates = maintain_candidates(max_people=limit)
@@ -337,7 +327,6 @@ def maintain_list(limit: int = 10) -> dict:
                 {
                     "name": c.name,
                     "rank": c.rank,
-                    "priority": _REASON_PRIORITY.get(c.reason, "低"),
                     "reason": c.reason,
                     "signal_level": c.signal_level,
                     "recent_days": c.recent_days,
@@ -345,7 +334,6 @@ def maintain_list(limit: int = 10) -> dict:
                     "trend": c.trend,
                     "interaction_pattern": c.interaction_pattern,
                     "last_msg_summary": c.last_msg_summary,
-                    "suggested_action": _REASON_ACTION.get(c.reason, "保持联系，观察信号变化"),
                 }
                 for c in candidates
             ],
