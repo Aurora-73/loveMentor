@@ -1,7 +1,7 @@
 # LoveMentor MCP 服务器
 
-> **状态**：已完工 — 57 个工具全部注册，全量验收通过，Claude Desktop / Claude Code 实测可用
-> **最后更新**：2026-07-14（补充 wiki_context/weflow/config 工具到清单、更新分析工作流为 12 步、工具分类计数修正）
+> **状态**：已完工 — 全量验收通过，Claude Desktop / Claude Code 实测可用
+> **最后更新**：2026-07-23（删除工具数量描述，统一 analysis 工作流为 12 步 wiki_context）
 
 ---
 
@@ -36,7 +36,7 @@ Claude Desktop / Cursor / Windsurf
 | 架构 | 远端 REST client（httpx 调用后端 API） | 本地函数暴露（直接调用 Python 函数） |
 | 认证 | PAT + RLS + RBAC | 不需要（本地个人工具） |
 | 安全模型 | 企业级（跨租户隔离） | 简单（只有本人） |
-| 工具数量 | 6 个通用 CRUD 工具 | 50 个业务工具 |
+| 工具数量 | 通用 CRUD 工具 | 业务工具（含 v4 自动回复工具集） |
 | 复杂度 | 高 | 低 |
 
 ---
@@ -69,11 +69,11 @@ pydantic>=2.7     # 数据验证（fastmcp 依赖）
 ```
 mcp_server/                  # MCP 服务器
 ├── __init__.py
-├── server.py                # FastMCP 服务器入口，注册所有 50 个工具
-├── tools_read.py            # 只读工具（25 个，含 system_sync/wcd_status/events_scan）+ wcd_start
-├── tools_write.py           # 写入工具（14 个）
-├── tools_formula.py         # 公式计算工具（9 个，辅助参考视角）
-├── tools_guide.py           # 使用指南工具（1 个，11 个主题）
+├── server.py                # FastMCP 服务器入口，注册所有工具
+├── tools_read.py            # 只读工具（含 system_sync/wcd_status/events_scan）
+├── tools_write.py           # 写入工具
+├── tools_formula.py         # 公式计算工具（辅助参考视角）
+├── tools_guide.py           # 使用指南工具（11 个主题）
 ├── README.md                # 使用说明
 ├── QUALITY_CHECK.md         # 质量自检报告
 ├── user_feedback.md         # 实战测试反馈
@@ -245,14 +245,14 @@ Layer 3: MCP 按需增量（person_sync，秒级完成）
 
 | 时间 | 事件 |
 |------|------|
-| 2026-07-01 Phase 1 | 8 个核心工具注册，中文编码测试通过 |
+| 2026-07-01 Phase 1 | 核心工具注册，中文编码测试通过 |
 | 2026-07-01 Phase 2 P0 | wiki_read / sync_person / save_analysis 补齐 |
-| 2026-07-01 Phase 2 P1-P2 | 30 个工具全部注册（timeline/events/contact/sticker 等） |
-| 2026-07-01 Phase 3 | 9 个公式工具暴露 |
-| 2026-07-01 实战测试 | Claude Desktop 完成首次人物分析；Claude Code 全覆盖 47 工具测试，发现 9 个问题 |
-| 2026-07-01 反馈修复 | 9 个问题全部修复，6 个测试文件全部 PASS |
-| 2026-07-01 person_stage | 新增关系阶段自动识别工具（48 工具），30 个单元测试 |
-| 2026-07-02 guide 工具 | 新增使用指南工具（49 工具），11 个主题 + 别名映射，解决信息差 |
+| 2026-07-01 Phase 2 P1-P2 | 工具全部注册（timeline/events/contact/sticker 等） |
+| 2026-07-01 Phase 3 | 公式工具暴露 |
+| 2026-07-01 实战测试 | Claude Desktop 完成首次人物分析；Claude Code 全覆盖工具测试，发现 9 个问题 |
+| 2026-07-01 反馈修复 | 9 个问题全部修复，测试文件全部 PASS |
+| 2026-07-01 person_stage | 新增关系阶段自动识别工具 |
+| 2026-07-02 guide 工具 | 新增使用指南工具，11 个主题 + 别名映射，解决信息差 |
 
 ### 实战测试发现并修复的 9 个问题
 
@@ -270,10 +270,9 @@ Layer 3: MCP 按需增量（person_sync，秒级完成）
 
 ### 验收结果
 
-- 57 个工具全部注册（含 4 个配置与导航工具、2 个 WeFlow 后端工具）
-- 工具分类：29 只读 + 19 写入 + 9 公式 = 57 个
+- 工具全部注册（含配置与导航工具、WeFlow 后端工具、v4 自动回复工具集）
 - `fetch_keys` 安全隔离验证通过
-- 主项目 243 个单元测试通过 + 16 个 MCP 测试通过
+- 主项目单元测试 + MCP 测试通过
 
 ---
 

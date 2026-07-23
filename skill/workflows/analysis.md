@@ -1,6 +1,6 @@
 ---
 name: analysis-workflow
-description: 人物分析完整流程 — 11步详细工作流（wiki_context 为主入口）
+description: 人物分析完整流程 — 12步详细工作流（wiki_context 为主入口）
 ---
 
 # 人物分析完整流程

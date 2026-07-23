@@ -54,7 +54,7 @@ description: |
 
 | 目录 | 文件 | 内容 |
 |------|------|------|
-| `workflows/` | `analysis.md` | 分析流程 11 步详细步骤 |
+| `workflows/` | `analysis.md` | 分析流程 12 步详细步骤 |
 | `workflows/` | `emergency_reply.md` | 紧急回复 4 步流程 |
 | `workflows/` | `weekly.md` | 周报 2 步流程 |
 | `workflows/` | `maintain.md` | 维持关系 4 步流程 |
@@ -64,7 +64,7 @@ description: |
 | `committee/` | `README.md` + 5 个 prompt 模板 | 【v4 P2】委员会审查 subagent 设计（5 官 prompt + 信息隔离 + 编排示例） |
 | `signals/` | `basic_signals.md` | IOI、冷落、窗口、需求感等基础信号 |
 | `signals/` | `manipulation_signals.md` | 废物测试、框架操控、情绪操控等 |
-| `metrics/` | `metrics_system.md` | 15+1 维指标体系详解（15个有效指标 + 1旧版兼容） |
+| `metrics/` | `metrics_system.md` | 指标体系详解（行为统计 + Wiki 衍生 + 语义指标） |
 | `formulas/` | `war_formulas.md` | 战态公式详解（IVI/SPE/EWS等） |
 | `formulas/` | `skill_map.md` | 公式与 Skill 的映射关系 |
 
@@ -88,11 +88,11 @@ description: |
 
 | 用户说什么 | MCP 工具调用链 |
 |-----------|---------------|
-| "分析XX" | `person_sync` → `person_brief` → `wiki_search` → `person_chat` → `save_from_markdown` |
-| "她发了XX怎么回" | `person_sync` → `person_chat(recent=30)` → `person_metrics` → `wiki_search` → 给回复建议 |
+| "分析XX" | `person_sync` → `person_brief` → `wiki_context` → `person_chat` → `save_from_markdown` |
+| "她发了XX怎么回" | `person_sync` → `person_chat(recent=30)` → `person_metrics` → `wiki_context` → 给回复建议 |
 | "做周报" | `system_sync` → `weekly_report` |
-| "帮我搜一下XX" | `wiki_search` → `wiki_read` |
-| "约会中" | `person_brief` → `wiki_search("约会")` → 即时建议 |
+| "帮我搜一下XX" | `wiki_context` →（如需全文）`wiki_read` |
+| "约会中" | `person_brief` → `wiki_context` → 即时建议 |
 | "不知道下一步做什么" | `skill_map('当前工具名')` 或 `workflow_step('analysis', 当前步骤)` |
 | "她聊天态度怎么样" | `person_behaviors(name)` — 语义行为分析（10维标签+派生指标） |
 | "正在聊天/帮我盯着XX" | `live_monitor_start` → `live_chat_read` → `wiki_context` → `live_monitor_stop` |

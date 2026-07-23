@@ -100,6 +100,25 @@ mcp.tool(
 )(tools_read.person_metrics)
 
 mcp.tool(
+    name="person_behaviors",
+    description="语义行为分析报告（Markdown）。弥补行为统计指标看不到内容的盲区。"
+               "返回 10 维行为标签评分 + 派生指标（兴趣/友谊信号等）。"
+               "边界：只做行为特征压缩和全局辅助信号，不输出关系结论或策略建议。"
+               "参数：window_days 分析窗口（默认 30）；source='macbert'(模型)/'rule'(规则)；"
+               "model='b2'(默认)/'b0'(基线)；target_role='her'(默认)/'me'(自我视角)。"
+               "看到行为模式后调 wiki_context 解读。详见 guide('workflow/analysis')",
+    annotations={"readOnlyHint": True},
+)(tools_read.person_behaviors)
+
+mcp.tool(
+    name="person_behaviors_data",
+    description="语义行为分析结构化数据（dict）。Agent 内部分析需要结构化语义数据时使用。"
+               "返回标签均值/派生指标/窗口序列。边界同 person_behaviors，只提供客观数据，不做关系结论。"
+               "参数同 person_behaviors。",
+    annotations={"readOnlyHint": True},
+)(tools_read.person_behaviors_data)
+
+mcp.tool(
     name="person_rank",
     description="获取所有人的关系热度排名。对感兴趣的人调 person_brief 获取详情",
     annotations={"readOnlyHint": True},

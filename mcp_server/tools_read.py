@@ -12,7 +12,41 @@ from engine.tools import (
     contact, exclude, failure, sticker,
     message_context_data, save_from_markdown as _save_from_markdown,
     sync_moments as _sync_moments,
+    behaviors as _behaviors, behaviors_data as _behaviors_data,
 )
+
+
+def person_behaviors(
+    name: str, window_days: int = 30, source: str = "macbert",
+    model: str = "b2", target_role: str = "her",
+) -> str:
+    """语义行为分析报告（Markdown）。
+
+    什么时候用：需要分析聊天内容的语义特征时（弥补行为统计指标看不到内容的盲区）。
+    返回什么：Markdown 报告，含 10 维行为标签评分 + 派生指标（兴趣/友谊信号等）。
+    边界是什么：只做行为特征压缩和全局辅助信号，不输出关系结论或策略建议。最终判断由 Agent + Wiki + 事实档案完成。
+    参数：window_days 分析窗口天数；source="macbert"(模型)/"rule"(规则)；model="b2"(默认)/"b0"(基线)；target_role="her"(默认)/"me"(自我视角)。
+    """
+    try:
+        return _behaviors(name, window_days=window_days, source=source, model=model, target_role=target_role)
+    except Exception as e:
+        return f"语义分析失败: {e}"
+
+
+def person_behaviors_data(
+    name: str, window_days: int = 30, source: str = "macbert",
+    model: str = "b2", target_role: str = "her",
+) -> dict:
+    """语义行为分析结构化数据。
+
+    什么时候用：Agent 内部分析需要结构化语义数据时。
+    返回什么：dict 含标签均值/派生指标/窗口序列。
+    边界是什么：同 person_behaviors，只提供客观数据，不做关系结论。
+    """
+    try:
+        return _behaviors_data(name, window_days=window_days, source=source, model=model, target_role=target_role)
+    except Exception as e:
+        return {"error": "BEHAVIORS_FAILED", "message": str(e)}
 
 
 def person_brief(name: str) -> dict:

@@ -31,8 +31,9 @@ Wiki 不是"第二步做完就不管了"的参考材料。它是推理主轴，�
 ### 第一步：获取全局视图 + 初次 Wiki 查询
 1. `person_brief(name)` — 【MCP工具】结构化数据：身份信息、指标、事件、信号、Wiki 推荐
 2. 看到 brief 中的信号后，立即查 Wiki 建立方法论框架：
-   - `wiki_search("关键词")` — 【MCP工具】搜索
-   - `wiki_read("路径")` — 【MCP工具】读取具体页面全文
+   - `wiki_context(queries, stage, focus)` — 【MCP工具】【推荐主入口】批量构建知识框架（替代分散的 wiki_search+wiki_read）
+   - `wiki_search("关键词")` — 精确搜索某关键词（钻取时使用）
+   - `wiki_read("路径")` — 读取具体页面全文（引用时使用）
 
 常用 Wiki 框架速查：
 | 信号 | 推荐搜索词 |
@@ -48,7 +49,7 @@ Wiki 不是"第二步做完就不管了"的参考材料。它是推理主轴，�
 ---
 
 ### 第二步：详细数据 + 持续 Wiki 查询
-逐步获取数据，每看到新信息就查 Wiki 解读：
+逐步获取数据，每看到新信息就用 `wiki_context(queries, stage, focus)` 查 Wiki 解读（下方 wiki_search 关键词可传入 queries 参数）：
 
 1. `person_chat(name, recent=200)` — 【MCP工具】聊天记录
    → 看到聊天模式后：`wiki_search("聊天技巧"/"推拉"/"冷读")`

@@ -46,7 +46,7 @@ engine/              核心逻辑
   importers/         同步管道（wcd_client/weflow_client/db_init/sync_messages/ocr）
   knowledge/         Wiki 知识库检索（wiki_index/wiki_retriever/wiki_context）
   facts/             事实档案读写（people_archive/failure_archive）
-mcp_server/          FastMCP stdio 服务器，暴露 49 个工具复用 engine/tools.py
+mcp_server/          FastMCP stdio 服务器，复用 engine/tools.py
 data/
   raw/core.db         微信数据 SQLite（同步目标）
   system/config.yaml  系统配置（后端选择、指标权重、Wiki 路径等）
@@ -197,17 +197,20 @@ MCP 也提供 `guide(topic)` 工具（11 个主题），是 skill 的精简备�
 
 | 工作流 | 名称 | 步骤数 | 适用场景 |
 |--------|------|--------|----------|
-| `analysis` | 人物分析完整流程 | 13 步 | "分析XX"、"帮我看看XX" |
+| `analysis` | 人物分析完整流程 | 12 步 | "分析XX"、"帮我看看XX" |
 | `emergency_reply` | 紧急回复流程 | 4 步 | "她发了XX怎么回" |
 | `weekly` | 周报流程 | 2 步 | "做周报" |
 | `maintain` | 维持关系流程 | 4 步 | "维持关系" |
+| `auto_reply` | 【v4】自动回复完整流程 | 8 步 | "自动回复XX"（监听→线索→Wiki→查重→委员会→发送→更新） |
+| `auto_reply_invite` | 【v4】自动邀约流程 | 7 步 | "邀约XX"（窗口→日程→方案→确认→简报→记录） |
+| `auto_reply_notify` | 【v4】紧急通知流程 | 5 步 | 紧急情况通知用户（检测→线索→Wiki→紧急发送→通知） |
 
 ### 核心工作流（analysis）步骤
 
 ```
-0: person_sync → 1: person_brief → 2: wiki_search → 3: wiki_read → 4: person_chat
-→ 5: person_metrics → 6: person_signals → 7: person_stage → 8: person_timeline
-→ 9: person_evidence → 10: formula_get_params → 11: formula_calc_ivi → 12: save_from_markdown
+0: person_sync → 1: person_brief → 2: wiki_context → 3: person_chat
+  4: person_metrics → 5: person_signals → 6: person_stage → 7: person_timeline
+  8: person_evidence → 9: formula_get_params → 10: formula_calc_ivi → 11: save_from_markdown
 ```
 
 ### 使用模式
