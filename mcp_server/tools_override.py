@@ -342,7 +342,7 @@ def _build_learning_candidates(diff: dict, person: str, context: dict) -> list:
             "description": f"用户编辑了回复风格（长度变化 {metrics['length_diff']}，表情变化 {metrics['final_emoji_count'] - metrics['original_emoji_count']}）",
             "target_tool": "user_profile_manage",
             "target_action": "update profile_type=style",
-            "applied_action": "Agent 审核后更新用户风格画像",
+            "applied_action": "Agent 审核后记录用户编辑偏好（不学习语言风格，仅记录长度/表情偏好供参考）",
         })
 
     if diff_type == "strategy":

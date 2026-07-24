@@ -77,10 +77,10 @@ Layer 1: Observable Behavior（模型输出）
 - invitation / perfunctory / framing_boundary
 - 共 10 个文本行为标签
 
-Layer 2: Relationship Interpretation（engine 层融合）
+Layer 2: Derived Behavior Signals（engine 层聚合）
 ──────────────────────────────────────────
 engine 层将行为观测 + 统计指标 + 事件数据
-融合为关系解读：
+聚合为派生行为信号（客观统计，非关系判断）：
 interest_signal   = f(question_asking, self_disclosure, flirt, invitation, ...)
 friendzone_risk   = f(framing_boundary, perfunctory, stagnation, ...)
 emotion_balance   = emotion_positive / emotion_negative 计数比

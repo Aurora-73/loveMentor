@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import re
+import sys
 
 # ── 水印行（整行删除） ──
 WATERMARK_REGEX = [

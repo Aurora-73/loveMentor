@@ -317,7 +317,7 @@ def split_message_for_wechat(text: str) -> list:
 # ── 工具1: wechat_send ──────────────────────────────────────────
 
 def wechat_send(name: str, message: str, urgent: bool = False) -> dict:
-    """向微信联系人自动发送消息（v4 三重硬约束）。
+    """向微信联系人自动发送消息（v4 四重硬约束）。
 
     通过视觉识别自动化操作微信 PC 客户端：
     1. 解析联系人标识符 → 微信号（alias）用于搜索和头像定位（微信号唯一，避免重名）
@@ -345,14 +345,17 @@ def wechat_send(name: str, message: str, urgent: bool = False) -> dict:
     - 录屏路径：data/outputs/recordings/wechat_send_<timestamp>_<contact>.mp4
     - ⚠️ 录屏文件在 data/ 目录下，已被 .gitignore 忽略，不会提交到 git
 
-    v4 三重硬约束（5.3 + 6.4 节，发送前自动校验）：
-    1. 线索已读校验：conversation_thread.last_processed_message_id >= 数据库最新消息 ID
+    v4 四重硬约束（5.3 + 6.4 节，发送前自动校验）：
+    1. 用户接管取消校验：conversation_thread.user_took_over == False
+       - 用户手动接管时拒绝发送，返回 suggestion 调用 clear_cancel_flag
+       - 用户接管后 Agent 不再自动回复，直到用户显式取消接管
+    2. 线索已读校验：conversation_thread.last_processed_message_id >= 数据库最新消息 ID
        - 未读取最新消息时拒绝发送，返回 suggestion 调用 catch_up
        - 线索文件不存在或读取异常时跳过校验（兼容首次发送）
-    2. 回复冷却校验：按关系阶段最小冷却（Stage 1-2: 30min / Stage 3: 5min / Stage 4+: 3min）
+    3. 回复冷却校验：按关系阶段最小冷却（Stage 1-2: 30min / Stage 3: 5min / Stage 4+: 3min）
        - urgent=True 时绕过冷却（用于对方连续追问等紧急场景）
        - 冷却中拒绝发送，返回 wait_seconds 告知剩余等待时间
-    3. 互斥锁校验：视觉自动化串行（原有逻辑保留）
+    4. 互斥锁校验：视觉自动化串行（原有逻辑保留）
 
     Args:
         name: 微信联系人标识符（微信号 / wxid / 昵称 / 备注名 均可）
@@ -372,7 +375,7 @@ def wechat_send(name: str, message: str, urgent: bool = False) -> dict:
             "window_restored": bool,  # 是否触发了窗口恢复
             "matches": list|None,  # 多匹配时的联系人列表（仅 MULTIPLE_MATCHES 时有值）
             "recording_path": str|None,  # 失败时的录屏文件路径（成功时为 None）
-            "hard_constraints": dict,  # v4 新增：三重硬约束校验结果
+            "hard_constraints": dict,  # v4 新增：四重硬约束校验结果
                 # {"thread_read": "passed"/"failed", "cooldown": "passed"/"failed"/"bypassed",
                 #  "mutex": "passed", "stage": int, "urgent": bool}
         }
@@ -618,7 +621,7 @@ def wechat_send_emoji(name: str, emoji_keyword: str) -> dict:
 
 
 def wechat_send_image(name: str, image_path: str, urgent: bool = False) -> dict:
-    """向微信联系人自动发送图片（v4 第十六章多媒体发送能力 + 三重硬约束）。
+    """向微信联系人自动发送图片（v4 第十六章多媒体发送能力 + 四重硬约束）。
 
     技术方案（v4 16.2 节）：复用文本发送的剪贴板机制，把剪贴板内容从文字换成图片。
     流程：
@@ -634,10 +637,11 @@ def wechat_send_image(name: str, image_path: str, urgent: bool = False) -> dict:
 
     支持的图片格式：jpg/jpeg/png/bmp/gif/webp/tiff
 
-    v4 三重硬约束（与 wechat_send 相同）：
-    1. 线索已读校验：未读取最新消息时拒绝发送
-    2. 回复冷却校验：urgent=True 可绕过
-    3. 互斥锁校验：视觉自动化串行
+    v4 四重硬约束（与 wechat_send 相同）：
+    1. 用户接管取消校验：用户接管时拒绝发送
+    2. 线索已读校验：未读取最新消息时拒绝发送
+    3. 回复冷却校验：urgent=True 可绕过
+    4. 互斥锁校验：视觉自动化串行
 
     Args:
         name: 微信联系人标识符（微信号 / wxid / 昵称 / 备注名 均可）
@@ -656,7 +660,7 @@ def wechat_send_image(name: str, image_path: str, urgent: bool = False) -> dict:
             "window_restored": bool,
             "matches": list|None,
             "recording_path": str|None,
-            "hard_constraints": dict,  # 三重硬约束校验结果
+            "hard_constraints": dict,  # 四重硬约束校验结果
         }
     """
     import os as _os
@@ -770,7 +774,7 @@ def wechat_send_image(name: str, image_path: str, urgent: bool = False) -> dict:
 
 
 def wechat_send_file(name: str, file_path: str, urgent: bool = False) -> dict:
-    """向微信联系人自动发送文件/视频（v4 第十六章多媒体发送能力扩展 + 三重硬约束）。
+    """向微信联系人自动发送文件/视频（v4 第十六章多媒体发送能力扩展 + 四重硬约束）。
 
     技术方案（用户指导）：
     "视频和文件的逻辑是一样的，都是复制粘贴然后发送，就是 explorer 里的那种复制，
@@ -785,10 +789,11 @@ def wechat_send_file(name: str, file_path: str, urgent: bool = False) -> dict:
     - 支持文件类型：视频 + 任意文件（不限图片）
     - 文件较大时等待时间更长（根据文件大小动态调整 2-4s）
 
-    v4 三重硬约束（与 wechat_send 相同）：
-    1. 线索已读校验：未读取最新消息时拒绝发送
-    2. 回复冷却校验：urgent=True 可绕过
-    3. 互斥锁校验：视觉自动化串行
+    v4 四重硬约束（与 wechat_send 相同）：
+    1. 用户接管取消校验：用户接管时拒绝发送
+    2. 线索已读校验：未读取最新消息时拒绝发送
+    3. 回复冷却校验：urgent=True 可绕过
+    4. 互斥锁校验：视觉自动化串行
 
     Args:
         name: 微信联系人标识符（微信号 / wxid / 昵称 / 备注名 均可）
@@ -923,7 +928,7 @@ def wechat_send_file(name: str, file_path: str, urgent: bool = False) -> dict:
 # ── 工具4: wechat_send_batch ────────────────────────────────────
 
 def wechat_send_batch(name: str, messages: list, urgent: bool = False) -> dict:
-    """向同一联系人连续发送多条混合消息（v4 连续发送 + 混合消息能力 + 三重硬约束）。
+    """向同一联系人连续发送多条混合消息（v4 连续发送 + 混合消息能力 + 四重硬约束）。
 
     支持在一次调用中连续发送文字/表情/图片/视频/文件混合消息：
     - 第一条消息走完整流程（搜索+点击头像+发送）
@@ -953,10 +958,11 @@ def wechat_send_batch(name: str, messages: list, urgent: bool = False) -> dict:
 
     适用场景：分段发送长文本、文字+表情混合、文字+图片/视频混合等。
 
-    v4 三重硬约束（与 wechat_send 相同，只在第一条消息前校验一次）：
-    1. 线索已读校验：未读取最新消息时拒绝发送
-    2. 回复冷却校验：urgent=True 可绕过
-    3. 互斥锁校验：整个批量发送过程串行
+    v4 四重硬约束（与 wechat_send 相同，只在第一条消息前校验一次）：
+    1. 用户接管取消校验：用户接管时拒绝发送
+    2. 线索已读校验：未读取最新消息时拒绝发送
+    3. 回复冷却校验：urgent=True 可绕过
+    4. 互斥锁校验：整个批量发送过程串行
 
     Args:
         name: 微信联系人标识符（微信号 / wxid / 昵称 / 备注名 均可）

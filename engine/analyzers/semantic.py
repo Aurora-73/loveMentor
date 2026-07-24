@@ -1,10 +1,15 @@
-"""语义分析引擎 — Layer 2 关系解读融合。
+"""语义分析引擎 — Layer 2 派生行为信号聚合。
 
 架构定位（见 readme/PROJECT.md #语义分析）：
     Layer 1: MacBERT/规则 → 10 个可观测行为标签（文本层面）
-    Layer 2: 本模块 → 将观测结果融合为关系解读指标
+    Layer 2: 本模块 → 将观测结果聚合为派生行为信号（客观统计，非关系判断）
 
-融合公式（规划文档 2.3）：
+定位（行为信号层，非判断层）：
+    本模块输出的是结构化统计数据（比例、均值、聚合值），不是关系结论。
+    "interest_signal=0.8" 表示"兴趣相关行为标签占比 80%"，不是"她对你有兴趣"。
+    关系判断由 Agent + Wiki + 事实档案综合完成，本模块只提供客观观测值。
+
+聚合公式（规划文档 2.3）：
     conversation_layer = {information_exchange, opinion_expression, flirt}
                          + {emotion_positive, emotion_negative}
     emotion_balance    = emotion_positive / (emotion_positive + emotion_negative)

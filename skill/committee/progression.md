@@ -100,32 +100,38 @@ Wiki 原则（docs/wiki/wiki/entities/推拉.md）：推拉是核心技术，推
 - 不要审查风险/禁忌（那是风险审查官的事）
 - 专注于"策略是否正确"和"推进是否有效"
 
-# 输出格式
+# 输出格式（固化 schema）
 
 严格输出以下 JSON（不要输出任何其他内容、不要 markdown 代码块包裹）：
 
 ```json
 {
   "verdict": "pass | modify | reject",
-  "severity": "none | low | medium | high",
+  "hard_block": false,
+  "reasons": [
+    {
+      "type": "问题分类（如：错失IOI/需求感过强/阶段过快/pending未推进）",
+      "severity": "none | low | medium | high",
+      "description": "具体描述 + 可执行的策略建议",
+      "evidence": "引用草案原文 + Wiki 条目/阶段参考"
+    }
+  ],
+  "required_changes": ["必须修改的策略点（仅 modify/reject 时填，pass 时为空数组 []）"],
   "strategy_assessment": {
     "missed_window": "none | IOI | compliance | invite | escalation | emotional_peak",
     "neediness_level": "none | low | medium | high",
     "pace": "too_fast | appropriate | too_slow",
     "push_pull_balance": "balanced | push_heavy | pull_heavy | no_push_pull | push_too_hard | pull_too_fast",
     "pending_items_progress": "advanced | maintained | ignored | violated"
-  },
-  "issues": [
-    {
-      "type": "问题分类（如：错失IOI/需求感过强/阶段过快/pending未推进）",
-      "description": "具体描述",
-      "evidence": "引用草案原文 + Wiki 条目/阶段参考"
-    }
-  ],
-  "suggestions": ["具体策略建议，必须可执行，如：'把第三句改成冷读：你看起来像个夜猫子'"],
-  "must_fix": ["必须修改的策略点（仅 modify/reject 时填）"]
+  }
 }
 ```
+
+**字段说明**：
+- `hard_block`：固定为 `false`（感情推进官无硬否决权，策略主导权但非硬否决）
+- `reasons`：合并 issues + suggestions，每条 description 包含问题描述 + 可执行策略建议
+- `required_changes`：原 must_fix，pass 时为 `[]`
+- `strategy_assessment`：5 维度策略评估（扩展字段，保留特色）
 
 **verdict 判定标准**：
 - `pass`：策略正确，推进有效，无需求感过强，无错失窗口，推拉比例平衡

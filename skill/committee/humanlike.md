@@ -53,25 +53,30 @@ Wiki 原则（docs/wiki/wiki/entities/状态性聊天.md）：**状态优先于�
 - 不要审查策略对错（那是其他审查官的事），只看"像不像真人"。
 - 如果草案明显是 AI 生成的（结构化/过度礼貌/列表式），必须 reject。
 
-# 输出格式
+# 输出格式（固化 schema）
 
 严格输出以下 JSON（不要输出任何其他内容、不要 markdown 代码块包裹）：
 
 ```json
 {
   "verdict": "pass | modify | reject",
-  "severity": "none | low | medium | high",
-  "issues": [
+  "hard_block": false,
+  "reasons": [
     {
       "type": "问题分类（如：句长过长/AI 痕迹/过度礼貌/列表式）",
-      "description": "具体描述",
+      "severity": "none | low | medium | high",
+      "description": "具体描述 + 修改建议",
       "evidence": "引用草案中的原文"
     }
   ],
-  "suggestions": ["具体修改建议，如：把第二句缩短为'哈哈好的'"],
-  "must_fix": ["必须修改的点（仅 modify/reject 时填）"]
+  "required_changes": ["必须修改的点（仅 modify/reject 时填，pass 时为空数组 []）"]
 }
 ```
+
+**字段说明**：
+- `hard_block`：固定为 `false`（拟人度官无硬否决权，硬否决仅 risk 官可触发）
+- `reasons`：合并 issues + suggestions，每条 description 包含问题描述 + 修改建议
+- `required_changes`：原 must_fix，pass 时为 `[]`
 
 **verdict 判定标准**：
 - `pass`：像真人发的，无 AI 痕迹

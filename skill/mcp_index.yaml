@@ -340,7 +340,7 @@ tools:
     next_step:
       - wiki_context
       - wechat_send
-    description: "【v4 对话线索】自动回复前必读。读取后调 wiki_context 构建回复策略，再调 wechat_send 发送（含三重硬约束校验）"
+    description: "【v4 对话线索】自动回复前必读。读取后调 wiki_context 构建回复策略，再调 wechat_send 发送（含四重硬约束校验）"
 
   schedule_manage:
     skill_ref: workflows/auto_reply.md
@@ -417,21 +417,21 @@ tools:
     next_step:
       - wechat_ocr
       - effect_tracking
-    description: "【v4 图片发送】复用剪贴板机制发送图片。含三重硬约束（线索已读+冷却+互斥锁）。支持 jpg/png/bmp/gif/webp/tiff"
+    description: "【v4 图片发送】复用剪贴板机制发送图片。含四重硬约束（用户接管+线索已读+冷却+互斥锁）。支持 jpg/png/bmp/gif/webp/tiff"
 
   wechat_send_file:
     skill_ref: workflows/auto_reply.md
     next_step:
       - wechat_ocr
       - effect_tracking
-    description: "【v4 文件/视频发送】CF_HDROP 剪贴板格式（模拟 Explorer 复制）发送文件/视频。含三重硬约束。支持视频 mp4/mov/avi 等 + 任意文件 pdf/doc/zip 等"
+    description: "【v4 文件/视频发送】CF_HDROP 剪贴板格式（模拟 Explorer 复制）发送文件/视频。含四重硬约束。支持视频 mp4/mov/avi 等 + 任意文件 pdf/doc/zip 等"
 
   wechat_send_batch:
     skill_ref: workflows/auto_reply.md
     next_step:
       - wechat_verify_send
       - effect_tracking
-    description: "【v4 连续发送+混合消息】向同一联系人连续发多条文字/表情/图片/视频/文件混合消息。第一条走完整流程，后续跳过搜索直接发送+显示名校验。messages 支持字符串(文字)或字典{type: text|emoji|image|video|file, content}。含三重硬约束"
+    description: "【v4 连续发送+混合消息】向同一联系人连续发多条文字/表情/图片/视频/文件混合消息。第一条走完整流程，后续跳过搜索直接发送+显示名校验。messages 支持字符串(文字)或字典{type: text|emoji|image|video|file, content}。含四重硬约束"
 
   wechat_verify_send:
     skill_ref: workflows/auto_reply.md
@@ -638,7 +638,7 @@ workflows:
       - number: 6
         name: 发送回复
         tool: wechat_send
-        description: "【三重硬约束】线索已读校验 + 回复冷却校验 + 互斥锁。urgent=True 可绕过冷却"
+        description: "【四重硬约束】用户接管取消 + 线索已读校验 + 回复冷却校验 + 互斥锁。urgent=True 可绕过冷却"
 
       - number: 7
         name: 更新对话线索

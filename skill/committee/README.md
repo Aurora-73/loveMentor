@@ -32,7 +32,7 @@ description: |
 
 | 审查官 | 核心问题 | prompt 文件 | 输入 | 硬否决权 |
 |--------|---------|------------|------|---------|
-| 拟人度 | 像不像真人发的？ | humanlike.md | 草案 + 用户风格画像 | 否（建议性） |
+| 拟人度 | 像不像真人发的？ | humanlike.md | 草案 + 基于 Wiki 状态性聊天原则 + 上下文自然度 | 否（建议性） |
 | 用户一致性 | 符合用户真实人设吗？ | consistency.md | 草案 + fact + fabricated_facts + recent_summary | 否（建议性） |
 | 感情推进 | 对推进感情有帮助吗？ | progression.md | 草案 + Wiki 方法论 + 关系阶段 + 情绪趋势 + pending_items | 否（策略主导） |
 | 风险 | 有风险吗？ | risk.md | 草案 + Wiki 禁忌 + avoid_topics + landmine_topics | **是（硬否决）** |
@@ -58,35 +58,52 @@ description: |
 
 **隔离理由**：每个审查官只看与其角度相关的信息，避免被无关信息干扰，也防止泄露策略意图给风险官（风险官应独立判断，不应知道"为什么这么写"）。
 
-## 输出格式
+## 输出格式（固化 schema，v4 7.3 节）
 
-### 4 个审查官（拟人度/用户一致性/感情推进/风险）
+### 4 个审查官（拟人度/用户一致性/感情推进/风险）— 统一核心 schema
 
 ```json
 {
-  "verdict": "pass" | "modify" | "reject",
-  "severity": "none" | "low" | "medium" | "high",
-  "issues": [
+  "verdict": "pass | modify | reject",
+  "hard_block": false,
+  "reasons": [
     {
       "type": "问题分类",
-      "description": "问题描述",
-      "evidence": "引用证据"
+      "severity": "none | low | medium | high",
+      "description": "问题描述 + 具体修改建议",
+      "evidence": "引用草案原文 + Wiki/档案/线索证据"
     }
   ],
-  "suggestions": ["具体修改建议"],
-  "must_fix": ["必须修改的点（modify/reject 时）"]
+  "required_changes": ["必须修改的点（仅 modify/reject 时填，空数组 pass 时）"]
 }
 ```
 
-### 邀约窗口审查官（不同格式）
+**字段说明**：
+- `verdict`：审查结论（pass 通过 / modify 微调后通过 / reject 驳回重写）
+- `hard_block`：是否硬否决（仅 risk 官可为 true；其他 3 官固定 false）。true 时主 agent 必须驳回，不可覆盖
+- `reasons`：审查发现的所有问题/建议（合并原 issues + suggestions）。每条包含 type/severity/description/evidence
+- `required_changes`：必须修改的点（原 must_fix）。pass 时为空数组 `[]`
+
+**各官扩展字段**（保留特色，作为核心 schema 的补充）：
+- consistency 官：`checks`（3 项检查结果）、`fabrication_needed`（需记录的编造内容）
+- progression 官：`strategy_assessment`（5 维度策略评估）
+- risk 官：`risk_checks`（7 类风险检查结果）
+
+### 邀约窗口审查官（不同格式，不审查草案）
 
 ```json
 {
   "window_detected": true | false,
-  "window_type": "IOI_cluster" | "compliance_test" | "hint" | "stage_transition" | null,
+  "window_type": "IOI_cluster | compliance_test | hint | stage_transition | null",
   "confidence": 0.0,
-  "evidence": ["信号证据"],
-  "recommendation": "invite_now" | "wait" | "not_applicable"
+  "signals_found": [
+    {
+      "type": "IOI | compliance | hint | stage_transition",
+      "description": "信号描述",
+      "evidence": "引用原文"
+    }
+  ],
+  "recommendation": "invite_now | wait | not_applicable"
 }
 ```
 
@@ -145,15 +162,20 @@ Task(
 
 主 agent 收到 5 份 JSON 结果后，按以下规则裁决：
 
-**裁决规则**（v4 7.3-7.4 节）：
+**裁决规则**（v4 7.3-7.4 节，基于固化 schema）：
 
 | 情况 | 裁决 | 动作 |
 |------|------|------|
-| Risk 官 verdict="reject" 或 severity="high" | **硬否决** | 驳回重写 |
-| ≥2 官 verdict="reject" | 严重驳回 | 驳回重写 |
-| 1 官 verdict="modify" | 轻微问题 | Agent 自行修改后通过 |
-| 所有官 verdict="pass" | 综合通过 | 发送 |
-| 邀约窗口官 window_detected=true | 触发邀约流程 | 走 auto_reply_invite workflow |
+| 任一官 `hard_block=true` | **硬否决** | 驳回重写，不可覆盖（仅 risk 官可触发） |
+| ≥2 官 `verdict="reject"` | 严重驳回 | 驳回重写 |
+| 1 官 `verdict="modify"` | 轻微问题 | Agent 自行修改后通过（参考 `required_changes`） |
+| 所有官 `verdict="pass"` | 综合通过 | 发送 |
+| 邀约窗口官 `window_detected=true` | 触发邀约流程 | 走 auto_reply_invite workflow |
+
+**hard_block 触发条件**（仅 risk 官）：
+- verdict="reject" 且 severity="high" → hard_block=true
+- 命中禁忌话术 / 信息泄露 / avoid_topics → hard_block=true
+- 其他情况 → hard_block=false
 
 **3 次重试上限**：超过 3 次仍无法通过 → 记录失败原因，本次跳过，等下次对方发消息（v4 7.7 节）。
 

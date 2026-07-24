@@ -122,6 +122,7 @@ def agent_weekly(deep: bool = False) -> str:
         ranking, md = generate_weekly_report(conn, config, deep=deep)
         summary = format_weekly_summary(ranking, conn=conn)
         report_path = OUTPUTS_REPORTS_DIR / f"{ranking.week}_report.md"
+        report_path.parent.mkdir(parents=True, exist_ok=True)
         with open(report_path, "w", encoding="utf-8") as f:
             f.write(md)
         return f"{summary}\n\n---\n周报已保存: {report_path}\n排名快照: {OUTPUTS_RANKINGS_DIR / f'{ranking.week}.yaml'}"

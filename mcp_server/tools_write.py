@@ -12,7 +12,14 @@ from engine.tools import (
 
 
 def person_note(name: str, content: str) -> dict:
-    """添加人物备注。"""
+    """添加人物备注（事实档案，高可信）。
+
+    污染控制：本工具写入事实档案（evidence layer），只能记录客观事实。
+    - ✅ 可以写：对方原话、对方行为、客观事件（"她说喜欢猫"/"凌晨主动发消息"）
+    - ❌ 不可写：Agent 推断、关系结论、策略判断（"她对我有好感"/"值得追"）
+    - 自检：这条信息是对方说的/做的，还是我推断的？只能写前者。
+    主观判断请用 person_evaluate 或 person_save_analysis。
+    """
     try:
         result = note(name, content)
         return {"success": True, "message": result}
@@ -21,7 +28,13 @@ def person_note(name: str, content: str) -> dict:
 
 
 def person_date_record(name: str, date_text: str, location: Optional[str] = None, rating: Optional[int] = None) -> dict:
-    """记录约会信息。"""
+    """记录约会信息（事实档案，高可信）。
+
+    污染控制：本工具写入事实档案（evidence layer），记录客观约会事实。
+    - ✅ 可以写：约会日期、地点、客观发生的事
+    - ❌ 不可写：对约会的分析判断（"约会很成功说明她喜欢我"）
+    约会后的分析请用 person_evaluate 或 person_save_analysis。
+    """
     try:
         result = date(name, date_text=date_text, location=location, rating=rating)
         return {"success": True, "message": result}
@@ -88,7 +101,13 @@ def person_save_analysis(
 
 
 def person_evaluate(name: str, text: str) -> dict:
-    """添加人物评价。
+    """添加人物评价（分析归档层，低优先级参考）。
+
+    定位：本工具写入的是 Agent 主观判断，概念上属于分析归档（evaluation layer），
+    不是事实档案。虽然物理存储在事实档案文件的 evaluations 段落，但：
+    - 冲突裁决优先级为 5（最低，低于公式和历史数据）
+    - Agent 读取时应保持批判性，不能与 notes/events/dates 等客观事实同等对待
+    - 3 个月后可能过时，需重新评估
 
     什么时候用：需要对某人的关系状态做出评价判断时。
     返回什么：dict 含 success/message 字段。
@@ -239,7 +258,12 @@ def failure_add(
 
 
 def save_from_markdown_tool(name: str, markdown_text: str) -> dict:
-    """从结构化 Markdown 保存分析（覆盖写入）。
+    """从结构化 Markdown 保存分析（覆盖写入，分析归档层）。
+
+    定位：本工具写入分析归档（evaluation layer），不是事实档案。
+    - 写入位置：data/outputs/analysis/<name>/latest.yaml + latest.md
+    - 冲突裁决优先级为 5（最低，低于公式和历史数据）
+    - Agent 的主观分析输出，低优先级参考
 
     什么时候用：需要从 Markdown 格式的分析文本保存结论时。
     返回什么：dict 含 success/message 字段。

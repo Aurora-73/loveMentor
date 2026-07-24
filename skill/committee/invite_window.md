@@ -93,7 +93,7 @@
 - 如果没有窗口信号，window_detected=false，recommendation="not_applicable"
 - 不要编造信号 — 只基于提供的信息判断
 
-# 输出格式
+# 输出格式（特殊格式，不审查草案）
 
 严格输出以下 JSON（不要输出任何其他内容、不要 markdown 代码块包裹）：
 
@@ -109,12 +109,13 @@
       "evidence": "引用 conversation_threads/ioi_signals/recent_summary 中的原文"
     }
   ],
-  "recommendation": "invite_now | wait | not_applicable",
-  "next_action": "如果 invite_now：建议主 agent 走 auto_reply_invite workflow；如果 wait：建议继续观察 N 条对话后重新评估；如果 not_applicable：无邀约动作"
+  "recommendation": "invite_now | wait | not_applicable"
 }
 ```
 
+**说明**：邀约窗口审查官不审查草案，无 verdict/hard_block 字段，输出格式与 4 官不同。
+
 **recommendation 判定标准**：
-- `invite_now`：window_detected=true 且 confidence 达到阶段阈值
-- `wait`：window_detected=true 但 confidence 未达阈值，或 stage_1 且 confidence < 0.8
-- `not_applicable`：window_detected=false
+- `invite_now`：window_detected=true 且 confidence 达到阶段阈值（主 agent 走 auto_reply_invite workflow）
+- `wait`：window_detected=true 但 confidence 未达阈值，或 stage_1 且 confidence < 0.8（继续观察）
+- `not_applicable`：window_detected=false（无邀约动作）

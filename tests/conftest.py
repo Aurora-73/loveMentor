@@ -33,6 +33,7 @@ def tmp_db(tmp_path):
             content TEXT, raw_content TEXT, reply_to_id TEXT, media_path TEXT,
             group_nickname TEXT, raw_json TEXT, revoked INTEGER DEFAULT 0,
             platform TEXT DEFAULT 'wechat', source TEXT DEFAULT 'sync',
+            voice_text TEXT, image_text TEXT,
             synced_at INTEGER NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_msg_conv ON messages(conversation_id, timestamp);

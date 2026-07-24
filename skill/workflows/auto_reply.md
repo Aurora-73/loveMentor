@@ -9,7 +9,7 @@ description: 自动回复完整流程 — 8步从监听到发送
 
 ```
 0: 启动监听 → 1: 读取新消息 → 2: 读取对话线索 → 3: Wiki知识框架
-→ 4: 跨联系人查重 → 5: 委员会审查 → 6: 发送回复（三重硬约束）→ 7: 更新线索
+  4: 跨联系人查重 → 5: 委员会审查 → 6: 发送回复（四重硬约束）→ 7: 更新线索
 ```
 
 ---
@@ -106,19 +106,19 @@ description: 自动回复完整流程 — 8步从监听到发送
 
 **信息隔离**：每个 subagent 只接收其角度所需的信息（信息隔离矩阵详见 `skill/committee/README.md`），不共享主 agent 上下文。
 
-### 输出格式
+### 输出格式（固化 schema）
 
-4 个审查官返回 JSON（verdict/severity/issues/suggestions/must_fix），邀约窗口官返回窗口检测报告（window_detected/confidence/recommendation）。
+4 个审查官返回 JSON（verdict/hard_block/reasons/required_changes + 各官扩展字段），邀约窗口官返回窗口检测报告（window_detected/confidence/recommendation）。
 
-### 综合审核协议（v4 7.3-7.4 节）
+### 综合审核协议（v4 7.3-7.4 节，基于固化 schema）
 
 | 情况 | 裁决 | 动作 |
 |------|------|------|
-| Risk 官 verdict="reject" 或 severity="high" | **硬否决** | 驳回重写 |
-| ≥2 官 verdict="reject" | 严重驳回 | 驳回重写 |
-| 1 官 verdict="modify" | 轻微问题 | Agent 自行修改后通过 |
-| 所有官 verdict="pass" | 综合通过 | 发送 |
-| 邀约窗口官 window_detected=true | 触发邀约流程 | 发送当前回复后走 auto_reply_invite |
+| 任一官 `hard_block=true` | **硬否决** | 驳回重写，不可覆盖（仅 risk 官可触发） |
+| ≥2 官 `verdict="reject"` | 严重驳回 | 驳回重写 |
+| 1 官 `verdict="modify"` | 轻微问题 | Agent 自行修改后通过（参考 `required_changes`） |
+| 所有官 `verdict="pass"` | 综合通过 | 发送 |
+| 邀约窗口官 `window_detected=true` | 触发邀约流程 | 发送当前回复后走 auto_reply_invite |
 
 **3 次重试上限**：超过 3 次仍无法通过 → 记录失败原因，本次跳过，等下次对方发消息（v4 7.7 节）。
 
@@ -128,15 +128,17 @@ description: 自动回复完整流程 — 8步从监听到发送
 
 **工具**：`wechat_send(name, message, urgent=False)` 【MCP工具】
 
-**目的**：发送回复（v4 三重硬约束）。
+**目的**：发送回复（v4 四重硬约束）。
 
-**三重硬约束**（自动校验）：
-1. **线索已读校验**：`last_processed_message_id >= 最新消息 ID`
+**四重硬约束**（自动校验）：
+1. **用户接管取消校验**：`conversation_thread.user_took_over == False`
+   - 失败返回 `USER_TOOK_OVER`，需用户显式调 `conversation_thread(action='clear_cancel_flag')` 取消接管
+2. **线索已读校验**：`last_processed_message_id >= 最新消息 ID`
    - 失败返回 `THREAD_NOT_CAUGHT_UP`，需先调 `conversation_thread(action='catch_up')`
-2. **回复冷却校验**：按阶段最小冷却（Stage 1-2: 30min / Stage 3: 5min / Stage 4+: 3min）
+3. **回复冷却校验**：按阶段最小冷却（Stage 1-2: 30min / Stage 3: 5min / Stage 4+: 3min）
    - 失败返回 `COOLDOWN_ACTIVE` 和 `wait_seconds`
    - `urgent=True` 可绕过（用于对方连续追问等紧急场景）
-3. **互斥锁校验**：视觉自动化串行
+4. **互斥锁校验**：视觉自动化串行
 
 ---
 

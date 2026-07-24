@@ -250,6 +250,8 @@ data = moments_stats("小溪")
 
 ### 2.11 语义分析（Phase 0-2 完成 + B2 双模型部署）
 
+**定位**：语义分析是 Agent 的**行为信号层**（传感器），不是第二个 Agent。输出客观观测值（行为标签比例、派生统计），不输出关系结论、不生成策略建议。关系判断由 Agent + Wiki + 事实档案综合完成。
+
 10 个可观测行为标签的双层检测系统，共标注 **13,675 条对话窗口**（每条约 20 轮聊天，清洗去重后），并部署 B0'/B2 双模型架构：
 
 **Layer 1 — 行为检测（模型/规则）**：
@@ -280,14 +282,16 @@ data = moments_stats("小溪")
 
 模型使用 **13,675 条对话窗口**（清洗去重后）训练：2,083 条来自真实微信私聊（core.db），11,592 条来自恋爱教学案例库（完整聊天记录、Tinder 案例、PUA 教学系列，经 4000+ 原始文件清洗得到）。外部数据按 1000 条一批分 14 批，通过 LLM 批量标注（含 `quality_ok` 质量开关），清洗去重后保留 11,592 条。
 
-**Layer 2 — 关系解读融合（engine/analyzers/semantic.py）**：
+**Layer 2 — 派生行为信号聚合（engine/analyzers/semantic.py）**：
 
 | 派生指标 | 计算方式 | 含义 |
 |----------|----------|------|
-| emotion_balance | pos / (pos + neg) | 正负情绪比 |
-| interest_signal | avg(question, disclosure, invitation, flirt) | 兴趣信号强度 |
-| friendship_signal | avg(framing_boundary, perfunctory) | 友谊区/敷衍信号 |
-| conversation_depth | avg(info, opinion, emo_pos, emo_neg, flirt) | 互动深度 |
+| emotion_balance | pos / (pos + neg) | 正负情绪标签计数比（客观统计） |
+| interest_signal | avg(question, disclosure, invitation, flirt) | 兴趣相关行为标签占比（客观统计） |
+| friendship_signal | avg(framing_boundary, perfunctory) | 边界/敷衍行为标签占比（客观统计） |
+| conversation_depth | avg(info, opinion, emo_pos, emo_neg, flirt) | 互动类行为标签占比（客观统计） |
+
+**注意**：派生指标是 Layer 1 标签的数学聚合（比例/均值），不是关系判断。"interest_signal=0.8" 表示"兴趣相关行为标签占比 80%"，不是"她对你有兴趣"。关系判断由 Agent 结合 Wiki + 事实档案综合完成。
 
 **回测验证结果**：flirt 和 invitation 是区分成功/失败案例的最强指标。成功案例 invitation ≥3.79，失败案例 ≤0.88。语义指标已融入 composite 加权体系（见 2.2 节）。
 
@@ -422,7 +426,7 @@ Agent 虽然看不到图片内容，但可以通过读取 README.md 描述来决
 
 ### 2.19 用户画像系统
 
-三类文件架构，Agent 不模仿用户语言风格，而是基于事实 + Wiki 知识设计对话。
+两类基础画像 + 联系人特化覆盖，Agent 不模仿用户语言风格，而是基于事实 + Wiki 知识设计对话。
 
 | 文件 | 定位 | 优先级 | 用途 |
 |------|------|--------|------|

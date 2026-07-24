@@ -520,18 +520,19 @@ mcp.tool(
 
 mcp.tool(
     name="wechat_send",
-    description="【微信自动发消息·v4 三重硬约束】向微信联系人自动发送消息（通过视觉识别操作微信 PC 客户端）。"
+    description="【微信自动发消息·v4 四重硬约束】向微信联系人自动发送消息（通过视觉识别操作微信 PC 客户端）。"
                "⚠️ 会抢鼠标：执行期间会移动鼠标并占用键鼠，调用前 Agent 应当口头提醒用户"
                "'即将发送微信消息，执行期间请勿操作鼠标键盘'（不需要阻塞等待确认，说出来即可）。"
                "前置条件：微信已运行并登录，联系人头像模板已存放在 data/avatars/<display_name>.jpg。"
                "参数：name（联系人标识符：微信号/wxid/昵称/备注名 均可），message（要发送的消息内容），"
                "urgent（可选，默认 False；True 时绕过回复冷却校验，用于对方连续追问等紧急场景，但仍然校验线索已读）。"
-               "v4 三重硬约束（自动校验）："
-               "① 线索已读校验 — conversation_thread.last_processed_message_id 必须 >= 数据库最新消息 ID，"
+               "v4 四重硬约束（自动校验）："
+               "① 用户接管取消校验 — conversation_thread.user_took_over == False，用户接管时返回 USER_TOOK_OVER 错误；"
+               "② 线索已读校验 — conversation_thread.last_processed_message_id 必须 >= 数据库最新消息 ID，"
                "未读取最新消息时返回 THREAD_NOT_CAUGHT_UP 错误，需先调 conversation_thread(action='catch_up')；"
-               "② 回复冷却校验 — 按关系阶段最小冷却（Stage 1-2: 30min / Stage 3: 5min / Stage 4+: 3min），"
+               "③ 回复冷却校验 — 按关系阶段最小冷却（Stage 1-2: 30min / Stage 3: 5min / Stage 4+: 3min），"
                "冷却中返回 COOLDOWN_ACTIVE 错误和 wait_seconds；urgent=True 可绕过；"
-               "③ 互斥锁校验 — 视觉自动化串行。"
+               "④ 互斥锁校验 — 视觉自动化串行。"
                "联系人解析：name 会先在数据库中查找对应的微信号（alias），用微信号搜索（唯一，避免重名）。"
                "若按昵称匹配到多个联系人 → 拒绝发送，返回 matches 列表，需用微信号或 wxid 重新调用。"
                "流程：硬约束校验→解析联系人→搜索微信号→点击头像→输入消息→点击发送。"
@@ -566,7 +567,7 @@ mcp.tool(
                "支持 jpg/jpeg/png/bmp/gif/webp/tiff），urgent（紧急模式，True 时绕过回复冷却校验）。"
                "流程：解析联系人→搜索微信号→点击头像进入聊天→点击输入框→剪贴板放图片→Ctrl+V 粘贴→"
                "微信显示图片预览→点击发送按钮。"
-               "v4 三重硬约束：1.线索已读校验 2.回复冷却校验（urgent 可绕过）3.互斥锁校验。"
+               "v4 四重硬约束：1.用户接管取消 2.线索已读校验 3.回复冷却校验（urgent 可绕过）4.互斥锁校验。"
                "与 wechat_send 的区别：阶段一/二相同，阶段三用剪贴板粘贴图片替代输入文字，"
                "图片预览加载比文字慢（等待 1.5s），验证用发送按钮颜色变化判断（无法用 OCR 文字验证）。"
                "示例：wechat_send_image('test_contact_2', 'C:\\\\Users\\\\test\\\\photo.jpg') → 发送 photo.jpg 给 test_contact_2",
@@ -584,7 +585,7 @@ mcp.tool(
                "其他文件：pdf/doc/zip 等（微信发送为文件）。"
                "技术方案：CF_HDROP 剪贴板格式（模拟 Explorer 复制文件）→ Ctrl+V 粘贴 → 微信自动识别类型 → 点击发送。"
                "与 wechat_send_image 的区别：剪贴板用 CF_HDROP（文件拖放）而非 CF_DIB（位图），支持任意文件类型。"
-               "v4 三重硬约束：1.线索已读校验 2.回复冷却校验（urgent 可绕过）3.互斥锁校验。"
+               "v4 四重硬约束：1.用户接管取消 2.线索已读校验 3.回复冷却校验（urgent 可绕过）4.互斥锁校验。"
                "示例：wechat_send_file('test_contact_2', 'C:\\\\Users\\\\test\\\\video.mp4') → 发送 video.mp4 给 test_contact_2",
 )(tools_wechat.wechat_send_file)
 
@@ -598,7 +599,7 @@ mcp.tool(
                "urgent（紧急模式，True 时绕过回复冷却校验）。"
                "流程：第一条消息走完整流程（搜索+点击头像+发送），后续消息跳过搜索，"
                "每次发送前校验聊天框左上角显示名，校验失败则回退到完整流程。"
-               "v4 三重硬约束：1.线索已读校验 2.回复冷却校验（urgent 可绕过）3.互斥锁校验（整个批量过程串行）。"
+               "v4 四重硬约束：1.用户接管取消 2.线索已读校验 3.回复冷却校验（urgent 可绕过）4.互斥锁校验（整个批量过程串行）。"
                "适用场景：分段发送长文本、连续发送多条独立消息。"
                "示例：wechat_send_batch('test_contact_2', ['你好', '最近怎么样', '周末有空吗']) → 连续发送 3 条消息",
 )(tools_wechat.wechat_send_batch)

@@ -44,7 +44,7 @@ v4 自动回复架构是 LoveMentor 的核心能力，让 Agent 能够自主管�
 |------|------|------|
 | `conversation_thread` | `mcp_server/tools_thread.py` | 对话线索管理（10 个 action：get/update/append_summary/clear/check_expired/clear_cancel_flag 等）|
 | `schedule_manage` | `mcp_server/tools_schedule.py` | 日程管理（7 个 action：query/add/update/remove/list_slots/update_preferences/add_note）|
-| `user_profile_manage` | `mcp_server/tools_profile.py` | 用户画像管理（2 类文件：user_profile_fact / user_facts_topics_profile）|
+| `user_profile_manage` | `mcp_server/tools_profile.py` | 用户画像管理（2 类基础画像：user_profile_fact / user_facts_topics_profile + 联系人特化覆盖）|
 | `date_briefing` | `mcp_server/tools_date.py` | 约会前简报生成 |
 | `date_feedback_loop` | `mcp_server/tools_date.py` | 约会后反馈闭环 |
 | `recent_replies_check` | `mcp_server/tools_replies.py` | 最近回复检查 |
@@ -203,7 +203,7 @@ Risk 官 severity="high" → 硬否决，驳回重写
 - date_briefing（约会简报）
 - recent_replies_check（最近回复检查）
 - server_chan_notify（Server酱推送）
-- wechat_send 三重硬约束
+- wechat_send 四重硬约束
 
 ### Phase 2 (完善) — ✅ 完成
 

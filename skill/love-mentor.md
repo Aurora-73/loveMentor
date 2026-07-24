@@ -116,11 +116,12 @@ description: |
 | `auto_reply_invite` | 检测到邀约窗口 | `person_brief` → `schedule_manage` → `wiki_context` → `date_briefing` |
 | `auto_reply_notify` | 紧急事件（情绪突变/断联风险） | `live_chat_read` → `conversation_thread` → `wechat_send(urgent=True)` → `server_chan_notify` |
 
-### 三重硬约束（wechat_send 自动校验）
+### 四重硬约束（wechat_send 自动校验）
 
-1. **线索已读校验**：`last_processed_message_id >= 最新消息 ID`（未追上拒绝发送）
-2. **回复冷却校验**：按阶段最小冷却（Stage 1-2: 30min / Stage 3: 5min / Stage 4+: 3min），`urgent=True` 可绕过
-3. **互斥锁校验**：视觉自动化串行
+1. **用户接管取消校验**：`user_took_over == False`（用户接管时拒绝发送）
+2. **线索已读校验**：`last_processed_message_id >= 最新消息 ID`（未追上拒绝发送）
+3. **回复冷却校验**：按阶段最小冷却（Stage 1-2: 30min / Stage 3: 5min / Stage 4+: 3min），`urgent=True` 可绕过
+4. **互斥锁校验**：视觉自动化串行
 
 ### 委员会 5 官审查
 
@@ -144,7 +145,7 @@ description: |
 | `effect_tracking` | 效果追踪统计（P1） | `tools_replies.py` |
 | `override_learning` | 手动覆盖学习（P1） | `tools_override.py` |
 | `contact_priority_manage` | 联系人优先级管理（P1） | `tools_priority.py` |
-| `wechat_send` | 三重硬约束增强（P0） | `tools_wechat.py` |
+| `wechat_send` | 四重硬约束增强（P0） | `tools_wechat.py` |
 
 > `user_facts_topics_profile` 非 MCP 工具，是前置批处理脚本（`engine/user_facts_topics_profile.py`）
 

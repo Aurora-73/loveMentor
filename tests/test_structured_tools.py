@@ -91,6 +91,7 @@ class TestQueryChatMessages:
         assert set(msg.keys()) == {
             "id", "conversation_id", "sender_id", "is_mine",
             "timestamp", "time_str", "content", "type", "platform", "source",
+            "raw_content", "reply_to_id", "revoked",
         }
         assert msg["conversation_id"] == "wxid_target"
 

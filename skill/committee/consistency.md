@@ -81,32 +81,38 @@
 - **不检查坏习惯**（2026-07-24 v2 架构调整）：bad_patterns 已删除，Agent 完全参考 Wiki 对话建议，不需要"避免用户坏习惯"。行为模式（如需求感控制）由感情推进审查官和风险审查官基于 Wiki 检查。
 - 不要审查策略对错（那是感情推进审查官的事），不要审查风险（那是风险审查官的事）
 
-# 输出格式
+# 输出格式（固化 schema）
 
 严格输出以下 JSON（不要输出任何其他内容、不要 markdown 代码块包裹）：
 
 ```json
 {
   "verdict": "pass | modify | reject",
-  "severity": "none | low | medium | high",
+  "hard_block": false,
+  "reasons": [
+    {
+      "type": "问题分类（如：未记录编造/身份冲突/阶段突兀）",
+      "severity": "none | low | medium | high",
+      "description": "具体描述 + 修改建议",
+      "evidence": "引用草案原文 + 冲突的档案字段"
+    }
+  ],
+  "required_changes": ["必须修改的点（仅 modify/reject 时填，pass 时为空数组 []）"],
   "checks": {
     "no_unrecorded_fabrication": "pass | fail",
     "no_identity_conflict": "pass | fail",
     "stage_appropriate": "pass | fail"
   },
-  "issues": [
-    {
-      "check": "对应失败的检查项",
-      "type": "问题分类（如：未记录编造/身份冲突/阶段突兀）",
-      "description": "具体描述",
-      "evidence": "引用草案原文 + 冲突的档案字段"
-    }
-  ],
-  "suggestions": ["具体修改建议"],
-  "must_fix": ["必须修改的点（仅 modify/reject 时填）"],
   "fabrication_needed": ["如果草案包含未记录的编造，列出需要记录到 user_fabricated_facts.yaml 的内容"]
 }
 ```
+
+**字段说明**：
+- `hard_block`：固定为 `false`（用户一致性官无硬否决权）
+- `reasons`：合并 issues + suggestions，每条 description 包含问题描述 + 修改建议
+- `required_changes`：原 must_fix，pass 时为 `[]`
+- `checks`：3 项检查结果（扩展字段，保留特色）
+- `fabrication_needed`：需记录的编造内容（扩展字段，保留特色）
 
 **verdict 判定标准**：
 - `pass`：3 项检查全部通过（编造内容已记录或无编造）
