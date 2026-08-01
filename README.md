@@ -199,7 +199,7 @@ emotion_balance   = emotion_positive / emotion_negative 计数比
 
 ### MCP 服务器
 
-48 个工具通过 [FastMCP](https://github.com/jlowin/fastmcp) stdio 协议暴露，兼容 Claude Desktop / Cursor：
+全部工具通过 [FastMCP](https://github.com/jlowin/fastmcp) stdio 协议暴露，兼容 Claude Desktop / Cursor：
 
 - **23 只读** — brief / chat / metrics / rank / wiki_search 等
 - **写入** — note / date / evaluate / save_analysis / evidence 等

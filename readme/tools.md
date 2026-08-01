@@ -215,5 +215,5 @@ result = save_analysis(
 
 - `readme/PROJECT.md` — 项目总览（含工具列表摘要）
 - `readme/agent.md` — Agent 工具实现层文档（工具分层、返回 schema、权限规范）
-- `readme/mcp.md` — MCP 服务器文档（49 个工具清单、配置方法）
+- `readme/mcp.md` — MCP 服务器文档（工具清单、配置方法）
 - `ml/MODEL_USAGE.md` — 语义分析模型使用文档（B0'/B2 双模型架构）

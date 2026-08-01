@@ -38,7 +38,7 @@ v4 自动回复架构是 LoveMentor 的核心能力，让 Agent 能够自主管�
 
 ## 二、工具清单
 
-### v4 新增 MCP 工具（11 个）
+### v4 新增 MCP 工具
 
 | 工具 | 文件 | 功能 |
 |------|------|------|
@@ -54,7 +54,7 @@ v4 自动回复架构是 LoveMentor 的核心能力，让 Agent 能够自主管�
 | `contact_priority_manage` | `mcp_server/tools_priority.py` | 联系人优先级管理 |
 | `reply_state_manage` | `mcp_server/tools_reply_state.py` | 回复状态管理（6 个 action：record/update/check_retry/check_suspended/clear_suspended/stats）|
 
-### 微信发送工具（5 个）
+### 微信发送工具
 
 | 工具 | 功能 | 输入方式 |
 |------|------|----------|
@@ -78,7 +78,7 @@ v4 自动回复架构是 LoveMentor 的核心能力，让 Agent 能够自主管�
 | 3 | **互斥锁** | `CrossProcessLock("loveMentor_wechat_op")` 跨进程锁 | 等待锁释放后执行 |
 
 **实现位置**：
-- 硬约束 0：`mcp_server/tools_wechat.py` L121 `_check_user_took_over`（4 个发送工具都有）
+- 硬约束 0：`mcp_server/tools_wechat.py` L121 `_check_user_took_over`（所有发送工具都有）
 - 硬约束 1-2：`mcp_server/tools_wechat.py` 发送前校验
 - 硬约束 3：`engine/wechat_sender/cross_process_lock.py`（Win32 Named Mutex，支持 WAIT_ABANDONED 崩溃恢复）
 
@@ -240,7 +240,7 @@ v4 实现后进行了质量审查，发现并修复了 8 项工程不变量差�
 | 1. user_took_over 缺 timestamp | 低 | ✅ 已修复 | `tools_thread.py` L78 `user_took_over_time` + L281-284 同步记录 |
 | 2. 版本冲突处理不完整 | 中 | ✅ 已修复 | `tools_thread.py` L211-254 `_action_update` 3 次重试 + `_log_thread_conflict` |
 | 3. 字段级合并规则不完整 | 中 | ✅ 已修复 | `tools_thread.py` L310-374 `_merge_fields`（her_emotion/initiative_tracker/pending_items）|
-| 4. cancel_flag 机制未实现 | **高** | ✅ 已修复 | `tools_wechat.py` L121 `_check_user_took_over`（4 个发送工具都有）|
+| 4. cancel_flag 机制未实现 | **高** | ✅ 已修复 | `tools_wechat.py` L121 `_check_user_took_over`（所有发送工具都有）|
 | 5. 发送失败重试状态机 | 中 | ✅ 已修复 | `tools_reply_state.py`（新建，`reply_state_manage` 工具 + RETRY_LIMITS 表）|
 | 6. 失败退避策略 | 中 | ✅ 已修复 | `tools_reply_state.py` 连续失败保护（24h 内 ≥3 次暂停）|
 | 7. abandoned 标记 | 中 | ✅ 已修复 | `tools_reply_state.py` L228-231 重试上限后标记 abandoned |

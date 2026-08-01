@@ -14,7 +14,7 @@ Skill 层（业务流程编排）                    MCP 层（标准化执行�
     ├── mcp-methodology.md（方法论）           ├── wiki_search
     ├── mcp-rules.md（规则）                   ├── person_chat
     ├── mcp-tools.md（工具速查）               ├── person_metrics
-    ├── mcp_index.yaml（双向索引）             ├── ... (50个工具)
+    ├── mcp_index.yaml（双向索引）             ├── ...
     ├── workflows/（工作流）
     ├── signals/（信号解读）
     ├── metrics/（指标体系）
@@ -29,8 +29,8 @@ skill/
 ├── mcp-analysis.md          # 分析流程 + 决策树 + 报告模板
 ├── mcp-methodology.md       # 方法论（Wiki主轴/公式辅助/冲突裁决/指标体系）
 ├── mcp-rules.md             # 规则（权限/事实档案/回复构造/路由表/禁止事项）
-├── mcp-tools.md             # 工具速查（49个工具的参数和用法）
-├── mcp_index.yaml           # 双向索引数据源（工具→Skill→工作流映射，49个工具）
+├── mcp-tools.md             # 工具速查（参数和用法）
+├── mcp_index.yaml           # 双向索引数据源（工具→Skill→工作流映射）
 ├── workflows/               # 工作流子文件（渐进式披露）
 │   ├── analysis.md          # 分析流程 11 步详细步骤
 │   ├── emergency_reply.md   # 紧急回复 4 步流程
@@ -80,7 +80,7 @@ skill/
 
 | 文件 | 职责 | 核心内容 |
 |------|------|---------|
-| `mcp-tools.md` | 工具速查 | 49个工具的参数、返回值、用途分类 |
+| `mcp-tools.md` | 工具速查 | 全部工具的参数、返回值、用途分类 |
 
 ### 信号文档
 

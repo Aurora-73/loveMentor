@@ -30,7 +30,7 @@
 | 1 | `readme/PROJECT.md` | 公式降级为"2.3 辅助参考"小节；架构图重构（Wiki 主轴）；数据优先级拆为操作顺序+冲突裁决两表；新增"2.4 Wiki 知识库"章节 |
 | 2 | `readme/formulas.md` | 标题改为"公式参考（辅助视角）"；开篇声明 chat-skills 遗产；新增公式演进链条 + IVI 核验示例 |
 | 3 | `.claude/skills/love-mentor.md` | 路由表公式推荐降至 6.25%（1/16）；新增 Agent 分析风格指引；新增 Wiki 检索 fallback 策略表 |
-| 4 | `readme/mcp.md` | Wiki 工具标"推理第一依据"；公式工具标"辅助参考"；工具数量修正为 48（23+16+9） |
+| 4 | `readme/mcp.md` | Wiki 工具标"推理第一依据"；公式工具标"辅助参考"；工具数量已修正 |
 | 5 | `engine/formulas.py` | docstring 改为"辅助参考公式"；每个函数加"参考视角，不机械套用" |
 | 6 | `engine/knowledge/wiki_context.py` | 修正"优先级低"表述为"Wiki 是方法论主轴"；提取 `_format_snippets`；添加空结果/低分命中 fallback |
 | 6.5 | `exchange/architecture/架构.md` | 路径修正 `formulas_*.py`→`formulas.py`；引用修正 `example.log`→`example_analysis_love.md` |

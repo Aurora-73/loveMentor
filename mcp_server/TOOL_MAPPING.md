@@ -1,9 +1,9 @@
 # MCP 工具映射表
 
-> 反映全部 47 个工具的最终实现状态（Phase 1 + Phase 2 + Phase 3）
+> 反映全部工具的最终实现状态（Phase 1 + Phase 2 + Phase 3）
 > 最后更新：2026-07-01 v2
 
-## 一、Phase 1 核心工具映射（8 个）
+## 一、Phase 1 核心工具映射
 
 | MCP 工具名 | engine.tools 函数 | 实际签名 | 返回类型 | 备注 |
 |-----------|------------------|----------|----------|------|
@@ -16,7 +16,7 @@
 | `person_note` | `note(name, content)` | `agent_note(name: str, content: str) -> str` | str | ✅ 写入工具，MCP 层包装为 dict |
 | `person_date_record` | `date(name, date_text, location, rating)` | `agent_date(name: str, date_text: str, location=None, rating=None) -> str` | str | ✅ 写入工具，MCP 层包装为 dict |
 
-## 二、Phase 2 P0 工具映射（3 个）
+## 二、Phase 2 P0 工具映射
 
 | MCP 工具名 | engine.tools 函数 | 实际签名 | 返回类型 | 备注 |
 |-----------|------------------|----------|----------|------|
@@ -25,7 +25,7 @@
 | `person_sync` | `sync_person(name, mode)` | `sync_person(name: str, mode: str = "incremental") -> str` | str | ✅ MCP 层包装为 dict |
 | `person_save_analysis` | `save_analysis(name, **kwargs)` | `save_analysis(name, stage, confidence, reasoning, ...) -> str` | str | ✅ MCP 层包装为 dict |
 
-## 三、Phase 2 P1 工具映射（13 个）
+## 三、Phase 2 P1 工具映射
 
 | MCP 工具名 | engine.tools 函数 | 实际签名 | 返回类型 | 备注 |
 |-----------|------------------|----------|----------|------|
@@ -42,7 +42,7 @@
 | `system_sync` | `sync(mode, meta_only)` | `sync(mode="incremental", meta_only=False) -> str` | str | ✅ 写入，长耗时 |
 | `wcd_status` | `check_keys()` | `check_keys() -> str` | str | ✅ 启动 WCD 后端（用缓存密钥），当前仅检查密钥状态 |
 
-## 四、Phase 2 P2 工具映射（14 个）
+## 四、Phase 2 P2 工具映射
 
 | MCP 工具名 | engine.tools 函数 | 实际签名 | 返回类型 | 备注 |
 |-----------|------------------|----------|----------|------|
@@ -61,7 +61,7 @@
 | `save_from_markdown` | `save_from_markdown(...)` | `save_from_markdown(...) -> str` | str | ✅ 覆盖写入 |
 | `sync_moments` | `sync_moments(name)` | `sync_moments(name) -> str` | str | ✅ 追加写入 |
 
-## 五、Phase 3 P3 公式工具映射（9 个）
+## 五、Phase 3 P3 公式工具映射
 
 | MCP 工具名 | engine.formulas 函数 | 实际签名 | 返回类型 | 备注 |
 |-----------|---------------------|----------|----------|------|

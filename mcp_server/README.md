@@ -2,7 +2,7 @@
 
 ## 概述
 
-`mcp_server/` 是 LoveMentor 的 **MCP（Model Context Protocol）服务器**，基于 FastMCP 框架，将 `engine/tools.py` 的 50 个工具通过 stdio 协议暴露给 AI 代理（Claude Desktop、Cursor 等）。MCP 是一层薄包装，不重复实现业务逻辑，直接调用 engine 层函数。
+`mcp_server/` 是 LoveMentor 的 **MCP（Model Context Protocol）服务器**，基于 FastMCP 框架，将 `engine/tools.py` 的全部工具通过 stdio 协议暴露给 AI 代理（Claude Desktop、Cursor 等）。MCP 是一层薄包装，不重复实现业务逻辑，直接调用 engine 层函数。
 
 ## 架构定位
 
@@ -63,14 +63,14 @@ python -m mcp_server.server
 ```
 mcp_server/
 ├── __init__.py
-├── server.py              # FastMCP 服务器入口，注册所有 50 个工具
+├── server.py              # FastMCP 服务器入口，注册所有工具
 ├── config.py              # 配置（复用 engine.config）
 ├── tools_config.py        # 工具配置
-├── tools_read.py          # 只读工具（25 个，含 system_sync/wcd_status/events_scan）+ wcd_start
-├── tools_write.py         # 写入工具（14 个）
-├── tools_formula.py       # 公式计算工具（9 个，辅助参考视角）
-├── tools_guide.py         # 使用指南工具（1 个，11 个主题）
-├── tools_workflow.py      # 工作流导航工具（2 个：skill_map/workflow_step）
+├── tools_read.py          # 只读工具（含 system_sync/wcd_status/events_scan）+ wcd_start
+├── tools_write.py         # 写入工具
+├── tools_formula.py       # 公式计算工具（辅助参考视角）
+├── tools_guide.py         # 使用指南工具（11 个主题）
+├── tools_workflow.py      # 工作流导航工具（skill_map/workflow_step）
 ├── README.md              # 本文件
 ├── TOOL_MAPPING.md        # 工具映射表
 ├── ISSUES.md              # 问题记录
@@ -83,12 +83,12 @@ mcp_server/
     ├── test_smoke.py      # 冒烟测试
     ├── test_p0.py         # P0 工具测试
     ├── test_bugfix.py     # Bug 修复验证
-    └── test_final.py      # 全量验收测试（50 工具验证）
+    └── test_final.py      # 全量验收测试
 ```
 
-## 工具清单（50 个）
+## 工具清单
 
-### 核心工具（8 个）
+### 核心工具
 
 | 工具名 | 参数 | 说明 | 类型 |
 |--------|------|------|------|
@@ -101,7 +101,7 @@ mcp_server/
 | `person_note` | `name, content` | 添加人物备注到事实档案 | 写入 |
 | `person_date_record` | `name, date_text, location, rating` | 记录约会信息 | 写入 |
 
-### 即时补齐（3 个）
+### 即时补齐
 
 | 工具名 | 说明 | 类型 |
 |--------|------|------|
@@ -109,21 +109,21 @@ mcp_server/
 | `person_sync` | 增量同步单个人最新消息（几秒完成） | 写入 |
 | `person_save_analysis` | 保存分析结论，旧版本自动转为 previous | 写入 |
 
-### 已实现工具（14 个）
+### 已实现工具
 
-**只读（8 个）：**
+**只读：**
 `person_timeline`、`person_signals`、`person_evidence`、`person_stage`、`person_compare`、`weekly_report`、`person_moments_stats`、`maintain_list`
 
-**写入（6 个）：**
+**写入：**
 `events_scan`（只读检测）、`events_save`（检测写入）、`person_evaluate`（追加写入）、`system_sync`（全量/增量同步）、`wcd_status`（只读状态检测）、`wcd_start`（启动 WCD 后端进程）
 
-### 拆分工具（15 个）
+### 拆分工具
 
 **只读：** `contact_search`、`sticker_scan`、`sticker_list`、`exclude_list`、`failure_list`、`message_context`
 
 **写入：** `contact_alias`、`contact_alias_remove`、`contact_merge`（不可逆，带 confirm）、`sticker_label`、`exclude_add`、`exclude_remove`、`failure_add`、`save_from_markdown`、`sync_moments`
 
-### 公式工具（9 个，辅助参考视角）
+### 公式工具（辅助参考视角）
 
 | 工具名 | 说明 |
 |--------|------|
@@ -137,13 +137,13 @@ mcp_server/
 | `formula_calc_cs` | 参考计算 CS（矛盾演化状态） |
 | `formula_calc_action` | 参考决策（进攻/拉扯/重置/维持） |
 
-### 使用指南工具（1 个）
+### 使用指南工具
 
 | 工具名 | 参数 | 说明 |
 |--------|------|------|
 | `guide` | `topic` | 获取使用指南和工作流文档。11 个主题：getting-started / workflow/analysis / report-template / methodology / rules/evidence / rules/permissions / rules/reply / workflow/maintain / reference/sync / reference/formula / reference/stickers |
 
-### 工作流导航工具（2 个）
+### 工作流导航工具
 
 | 工具名 | 参数 | 说明 |
 |--------|------|------|
