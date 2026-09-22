@@ -177,6 +177,8 @@ emotion_balance   = emotion_positive / emotion_negative 计数比
 | [窗口降温](examples/window-cooling.md) | 邀约没有被接住时，如何降低投入并观察后续信号 |
 | [朋友信号 ≠ 浪漫信号](examples/friend-signal-vs-romantic.md) | 如何避免把低成本友好误读为浪漫窗口 |
 | [冲突修复](examples/boundary-repair.md) | 为什么先处理边界与修复，再讨论关系推进 |
+| [分数滞后](examples/score-lag.md) | 为什么综合分较高时，仍要重视近期的延期与行动反馈变化 |
+| [话题失配](examples/topic-mismatch.md) | 为什么消息很多，却仍没有形成自然推进的共同体验 |
 
 案例的完整脱敏标准见 [examples/README.md](examples/README.md)。
 
