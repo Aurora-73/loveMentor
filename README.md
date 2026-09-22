@@ -24,7 +24,9 @@
 
 ---
 
-![LoveMentor synthetic report preview](readme/assets/demo-report.svg)
+![LoveMentor hero cover](readme/assets/hero-cover.png)
+
+> 图片说明：本 README 中的全部人物图片均由 AI 生成，仅作产品视觉演示。人物、场景和关系均为虚构，不代表真实用户、聊天记录或互动经历。
 
 **无需上传聊天记录。** 先用合成演示体验输出；接入真实数据时，数据全程保留在本地。
 
@@ -165,6 +167,10 @@ emotion_balance   = emotion_positive / emotion_negative 计数比
 ### 公开案例
 
 仓库附带的是**合成、不可回溯**的案例：它们展示“可观测信号 → 推理框架 → 低压力行动”的过程，不包含原始聊天、联系人信息或精确时间线。
+
+![LoveMentor synthetic relationship overview](readme/assets/relationship-overview.png)
+
+> 上图中的人物和界面均为 AI 生成的合成视觉素材；卡片仅表达分析概念，不含真实聊天或个人数据。
 
 | 案例 | 你会看到什么 |
 |------|--------------|
@@ -311,7 +317,9 @@ save_analysis("姓名", stage="暧昧期", strategy="邀约推进", ...)
 
 ## 架构设计
 
-![LoveMentor architecture](readme/assets/architecture.svg)
+![LoveMentor relationship journey](readme/assets/relationship-journey.png)
+
+> 上图为 AI 生成的概念插画，用于说明“回顾互动 → 发现变化 → 理解彼此 → 审慎行动”的使用旅程。
 
 ### 核心原则
 
