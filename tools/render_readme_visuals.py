@@ -45,7 +45,7 @@ def render_hero() -> None:
     center_text(draw, (836, 411), "认真了解一段关系", font(42, bold=True), TEXT)
     center_text(draw, (836, 476), "从看见互动开始", font(28), MUTED)
     panel(image, (656, 548, 1016, 604), radius=28)
-    center_text(draw, (836, 560), "本地优先 · 隐私留在自己手里", font(18, bold=True), CORAL)
+    center_text(draw, (836, 560), "项目完全本地运行 · 数据由你掌握", font(18, bold=True), CORAL)
     image.convert("RGB").save(ASSETS / "hero-cover-captioned.png", quality=95)
 
 
