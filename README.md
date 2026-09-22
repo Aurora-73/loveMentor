@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <em>AI 驱动的本地微信恋爱关系辅助系统</em>
+  <em>本地优先的对话观察与关系决策辅助系统</em>
 </p>
 
 <p align="center">
@@ -11,27 +11,44 @@
   <img src="https://img.shields.io/badge/platform-Windows-lightgrey" alt="Platform">
   <img src="https://img.shields.io/badge/MCP-49%20tools-green?logo=claude" alt="MCP Tools">
   <img src="https://img.shields.io/badge/license-MIT-yellow" alt="License">
+  <img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome">
+  <a href="https://github.com/Aurora-73/loveMentor/issues?q=state%3Aopen%20label%3A%22good%20first%20issue%22"><img src="https://img.shields.io/github/issues/Aurora-73/loveMentor/good%20first%20issue?label=good%20first%20issues" alt="Good first issues"></a>
   <img src="https://img.shields.io/badge/status-active-brightgreen" alt="Status">
 </p>
 
 <p align="center">
-  <strong>数据自动同步 · 行为指标量化 · 语义分析 · Wiki 知识推理 · Agent 决策</strong>
+  <strong>本地数据 · 可观测信号 · 可解释分析 · 谨慎行动建议</strong>
   <br><br>
   <b>代码负责数据，Agent 负责推理。</b>
 </p>
 
 ---
 
+![LoveMentor synthetic report preview](readme/assets/demo-report.svg)
+
+**无需上传聊天记录。** 先用合成演示体验输出；接入真实数据时，数据全程保留在本地。
+
+```bash
+git clone https://github.com/Aurora-73/loveMentor.git
+cd loveMentor
+python -m lovementor.demo
+```
+
+> 初学者友好：欢迎文档、测试、示例、Bug 修复和功能 PR。维护者会认真 Review，并尽量在 7 天内回复 Issue 和 PR。请从 [贡献指南](CONTRIBUTING.md) 或 GitHub 上的 `good first issue` 开始。
+
 ## 目录
 
 - [为什么需要 LoveMentor](#为什么需要-lovementor)
 - [设计理念](#设计理念)
 - [功能特性](#功能特性)
+- [公开案例](#公开案例)
 - [快速开始](#快速开始)
 - [架构设计](#架构设计)
 - [对比](#对比)
 - [项目结构](#项目结构)
 - [文档索引](#文档索引)
+- [参与贡献](#参与贡献)
+- [路线图](#路线图)
 - [License](#license)
 
 ---
@@ -124,33 +141,16 @@ emotion_balance   = emotion_positive / emotion_negative 计数比
 
 互动模式分类：`lover` / `provider` / `neutral`
 
-### 语义分析（Phase 0-2 完成 + B2 双模型部署）
+### 语义分析：把“感觉”拆成可观察的信号
 
-10 个可观测行为标签的检测系统已完成三阶段演进，共标注 **13,675 条对话窗口**（清洗去重后），并部署 B0'/B2 双模型架构：
+系统不把一句话或一次点赞解释为关系结论，而是识别十类文本行为（如提问、分享、邀约、边界表达），再与回复节奏、话题延续和互动趋势结合。
 
-| 阶段 | 内容 | 数据量 | 状态 |
-|------|------|--------|------|
-| Phase 0 | 规则 baseline（10 个 YAML 词典，kappa 0.885） | — | ✅ 完成 |
-| Phase 1a | 人工标注真实微信对话（来自 core.db 私聊窗口） | 2,099 条 | ✅ 完成 |
-| Phase 1b | 恋爱教学案例批量标注（Tinder/恋爱案例/PUA 教学等，按批次 1000 条/组） | 14,000 条原始 | ✅ 完成 |
-| Phase 2 | MacBERT 训练 + ONNX 部署 + Layer 2 融合 | 13,675 条（去重后） | ✅ 完成 |
-| B2 部署 | B0'/B2 双模型并行架构，behaviors() 默认 model="b2" | — | ✅ 完成 |
+- **规则与模型双参考**：`source="rule"` 适合快速解释；`source="macbert"` 用于语义推理和交叉核验。
+- **角色感知分析**：支持区分对话双方，避免把同一句话放错语境。
+- **派生信号而非判决**：`interest_signal`、`friendzone_indicator`、`engagement_depth` 等只提示下一步需要核验的方向。
+- **本地数据不随仓库发布**：训练数据、模型权重和个人聊天内容均不包含在公开仓库中。
 
-**数据来源**：2,083 条来自用户真实微信聊天（core.db 私聊窗口），11,592 条来自恋爱教学案例库（完整聊天记录、100 套真实聊天案例、老吴越级狙击系列等 4000+ 文件清洗得到，去重后）。
-
-**批量标注**：14,000 条外部数据分 14 批（每批 1000 条），使用 `ANNOTATION_PROMPT.md` 引导 LLM 标注，每条输出 10 个行为分数 + `quality_ok` 质量开关。低质量样本自动跳过。去重后保留 11,592 条。
-
-**双参考机制**：`source="macbert"`（模型推理，慢但准确）和 `source="rule"`（词典匹配，快且可解释），两种结果可对比参考。
-
-**B2 双模型架构**：
-- **B0'**（roleless）：纯文本输入，生产基线/回退模型（`model="b0"`）
-- **B2**（role-aware）：含 `[TARGET]/[OTHER]` 角色前缀，默认生产模型（`model="b2"`）
-- `behaviors("姓名")` 默认走 B2 her-side，Agent 无感知切换
-- B2 me-side 只在 SELF/OTHER 对比分析中使用，不直接输出确定性结论
-
-**Layer 2 派生指标**：emotion_balance（情绪平衡）、interest_signal（兴趣信号）、friendzone_indicator（友谊区指标）、engagement_depth（互动深度）。
-
-**回测验证**：`flirt` 和 `invitation` 是区分成功/失败案例的最强指标。成功案例 invitation ≥3.79，失败案例 ≤0.88。语义指标已融入 composite 加权体系。
+模型输出始终是辅助证据。它不替用户判断他人意图，也不鼓励操纵、纠缠或越过边界。
 
 ### 回测框架
 
@@ -160,7 +160,19 @@ emotion_balance   = emotion_positive / emotion_negative 计数比
 - **描述性统计**：分布表、重叠区间、均值差异（不做推断统计）
 - **留一验证**：Leave-One-Case-Out 验证参数稳定性
 - **语义回测**：用 MacBERT 分析聊天内容，验证语义指标区分力
-- **全量扫描**：230 人全量扫描，28 人标注分析
+- **全量扫描**：从多个对象的汇总趋势中发现值得复核的变化
+
+### 公开案例
+
+仓库附带的是**合成、不可回溯**的案例：它们展示“可观测信号 → 推理框架 → 低压力行动”的过程，不包含原始聊天、联系人信息或精确时间线。
+
+| 案例 | 你会看到什么 |
+|------|--------------|
+| [窗口降温](examples/window-cooling.md) | 邀约没有被接住时，如何降低投入并观察后续信号 |
+| [朋友信号 ≠ 浪漫信号](examples/friend-signal-vs-romantic.md) | 如何避免把低成本友好误读为浪漫窗口 |
+| [冲突修复](examples/boundary-repair.md) | 为什么先处理边界与修复，再讨论关系推进 |
+
+案例的完整脱敏标准见 [examples/README.md](examples/README.md)。
 
 ### 事件检测
 
@@ -213,24 +225,24 @@ AI 可直接驱动完整分析工作流。
 
 ### 环境要求
 
-- Python 3.13+
-- 数据后端（二选一）：
+- Python 3.13+（演示模式无需额外依赖）
+- 真实数据后端（二选一，可选）：
   - [WCD (WeChatDataAnalysis)](https://github.com/LifeArchiveProject/WeChatDataAnalysis) — Windows，需解密环境
   - [WeFlow](https://github.com/hicccc77/WeFlow) — 跨平台，轻量部署
 
 ### 安装
 
 ```bash
-# 1. 克隆仓库
-git clone https://github.com/your-username/loveMentor.git
+# 1. 克隆仓库并体验合成演示（无需微信、WCD 或 WeFlow）
+git clone https://github.com/Aurora-73/loveMentor.git
 cd loveMentor
+python -m lovementor.demo
 
-# 2. 安装依赖
+# 2. 如需开发核心功能，安装依赖
 pip install pyyaml fastmcp pydantic pytest
 # OCR（可选）：pip install rapidocr-onnxruntime Pillow
 
-# 3. 初始化数据库
-python -c "from engine.importers.db_init import init_db; init_db()"
+# 3. 接入真实数据前，按下方配置可选 Provider
 ```
 
 ### 配置
@@ -298,6 +310,8 @@ save_analysis("姓名", stage="暧昧期", strategy="邀约推进", ...)
 ---
 
 ## 架构设计
+
+![LoveMentor architecture](readme/assets/architecture.svg)
 
 ### 核心原则
 
@@ -469,7 +483,7 @@ loveMentor/
 │   ├── tools_config.py             # 配置管理
 │   └── tests/                      # 集成测试
 │
-├── ml/                             # 语义分析（Phase 0-2 + B2 部署完成，13,675 条标注数据）
+├── ml/                             # 语义分析与训练管线（公开仓库不含训练数据）
 │   ├── dataset/                    # 2083 条微信标注 + 11592 条外部数据（去重后）
 │   │   ├── samples_phase0.jsonl    # 微信对话样本（2099 条原始）
 │   │   ├── batches/                # 外部数据批次（batch_001~014.jsonl，每批 1000 条）
@@ -512,6 +526,21 @@ loveMentor/
 
 ---
 
+## 参与贡献
+
+LoveMentor 欢迎第一次参与开源的贡献者；你不需要先理解全部架构。
+
+- 改进文档、错误提示、测试和合成示例；
+- 为指标计算、身份解析或同步适配器补边界测试；
+- 改进演示报告与可视化；
+- 实现可选数据源适配器或跨平台兼容性修复。
+
+提交前请阅读 [贡献指南](CONTRIBUTING.md)。标有 `good first issue` 或 `help wanted` 的 GitHub 任务会优先拆分为可独立提交的范围。维护者会认真 Review 合理 PR，并尽量在 7 天内回应。
+
+## 路线图
+
+首个公开 Release 定义为 **v0.1.0 — Core & Demo**：分析核心与合成预览必须可用；WCD、WeFlow 和本地模型是可选 Provider，不会阻塞首次体验。详见 [ROADMAP.md](ROADMAP.md) 和 [CHANGELOG.md](CHANGELOG.md)。
+
 ## 隐私说明
 
 - 本项目处理个人微信聊天数据，`data/` 和 `docs/` 为独立 git 仓库
@@ -528,4 +557,4 @@ loveMentor/
 
 ---
 
-*LoveMentor — AI 驱动的本地微信恋爱关系辅助系统。代码负责数据，Agent 负责推理。*
+*LoveMentor — 本地优先的对话观察与关系决策辅助系统。代码负责数据，Agent 负责推理。*

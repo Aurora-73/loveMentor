@@ -1,0 +1,20 @@
+name: Bug report
+description: Report a reproducible problem without sharing personal data.
+title: "bug: "
+labels: [bug]
+body:
+  - type: textarea
+    attributes:
+      label: What happened?
+      description: Do not paste chat content, tokens, contact identifiers, or screenshots containing personal data.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Environment
+      placeholder: Windows version, Python version, provider (if any)

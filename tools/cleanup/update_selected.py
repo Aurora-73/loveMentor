@@ -2,8 +2,9 @@ import json
 import sys
 from pathlib import Path
 
-INPUT_FILE = r"<project_root>\selected_full.json"
-OUTPUT_FILE = r"<project_root>\selected_full.json"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+INPUT_FILE = PROJECT_ROOT / "selected_full.json"
+OUTPUT_FILE = PROJECT_ROOT / "selected_full.json"
 
 CORE_SELECTIONS = {
     "【A01】各大情感导师\\A04、林老头": "林老头私教体系(P0)",
@@ -59,7 +60,7 @@ def main():
     not_found = []
     
     for rel_path, reason in CORE_SELECTIONS.items():
-        full_path = rf"<project_root>\docs\文档\{rel_path}"
+        full_path = str(PROJECT_ROOT / "docs" / "文档" / rel_path)
         found = False
         for item in data['selected']:
             if item['path'] == full_path:

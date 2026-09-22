@@ -4,7 +4,7 @@ from __future__ import annotations
 import os, shutil, sys
 from pathlib import Path
 
-BASE = Path(r"<project_root>\docs\文档")
+BASE = Path(__file__).resolve().parents[2] / "docs" / "文档"
 DRY_RUN = "--dry-run" in sys.argv
 
 

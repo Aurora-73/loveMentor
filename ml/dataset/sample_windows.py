@@ -30,8 +30,9 @@ from dataset.data_loader import (
 from dataset.filter_conversations import is_business_conversation
 
 
-DB_PATH = Path(r"<project_root>\data\raw\core.db")
-OUTPUT_PATH = Path(r"<project_root>\data\ml_dataset") / "samples_phase0.jsonl"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DB_PATH = PROJECT_ROOT / "data" / "raw" / "core.db"
+OUTPUT_PATH = PROJECT_ROOT / "data" / "ml_dataset" / "samples_phase0.jsonl"
 
 TARGET_COUNT = 5000
 WINDOW_SIZE = 20

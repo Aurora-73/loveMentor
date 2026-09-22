@@ -843,10 +843,10 @@ mcp.tool(
                "Agent 看不到图片内容，通过本工具读取 data/user_pictures/README.md 和子文件夹 README.md 的描述，"
                "拿到描述后自行决定用哪张，拿到 absolute_path 后传给 wechat_send_image 发送。"
                "参数：keywords（关键词列表，模糊匹配：搜'猫'可匹配'三花猫'/'猫咖'，也搜索描述文本）/ "
-               "category（分类精确过滤：子文件夹名如'<category-a>'/'<category-b>'/'<category-c>'，不传返回所有）/ "
+               "category（分类精确过滤：子文件夹名，例如'category-a'，不传返回所有）/ "
                "limit（最多返回数，默认 20）。"
                "返回包含 categories_summary（所有分类概览，供 agent 浏览）+ results（匹配图片列表，含 description/keywords/suitable_when/usage_tips）。"
-               "使用场景：聊到猫→keywords=['猫'] / 想看有什么图片→不传 keywords / 看特定分类→category='<category-b>'。",
+               "使用场景：按关键词搜索→keywords=['topic'] / 想看有什么图片→不传 keywords / 看特定分类→category='category-a'。",
     annotations={"readOnlyHint": True},
 )(tools_pictures.search_user_pictures)
 

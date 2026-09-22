@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="420" viewBox="0 0 1280 420" role="img" aria-labelledby="title desc">
+  <title id="title">LoveMentor architecture</title><desc id="desc">Optional providers feed a local database, analysis engine, MCP tools, and agent workflow.</desc>
+  <defs><linearGradient id="bg" x1="0" x2="1"><stop stop-color="#0b1220"/><stop offset="1" stop-color="#172554"/></linearGradient><marker id="a" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0,0L10,3L0,6Z" fill="#67e8f9"/></marker></defs>
+  <rect width="1280" height="420" rx="24" fill="url(#bg)"/>
+  <text x="64" y="72" fill="#f8fafc" font-size="34" font-family="Segoe UI,Arial" font-weight="700">Local-first, provider-optional architecture</text>
+  <g font-family="Segoe UI,Arial" font-size="20" text-anchor="middle"><g fill="#0f766e" stroke="#99f6e4"><rect x="60" y="160" width="180" height="110" rx="16"/><rect x="310" y="160" width="180" height="110" rx="16"/><rect x="560" y="160" width="180" height="110" rx="16"/><rect x="810" y="160" width="180" height="110" rx="16"/><rect x="1060" y="160" width="160" height="110" rx="16"/></g><g fill="#ecfeff"><text x="150" y="204">Demo / WCD</text><text x="150" y="234">/ WeFlow</text><text x="400" y="210">Sync adapters</text><text x="650" y="210">Local SQLite</text><text x="900" y="204">Metrics +</text><text x="900" y="234">semantics</text><text x="1140" y="210">MCP + Agent</text></g></g>
+  <g stroke="#67e8f9" stroke-width="4" marker-end="url(#a)"><path d="M245 215H300"/><path d="M495 215H550"/><path d="M745 215H800"/><path d="M995 215H1050"/></g>
+  <text x="64" y="350" fill="#bae6fd" font-size="18" font-family="Segoe UI,Arial">Personal data stays local. Demo mode runs without a provider or chat archive.</text>
+</svg>

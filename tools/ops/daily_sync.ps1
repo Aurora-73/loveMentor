@@ -3,8 +3,8 @@
 # 用法：注册为计划任务，每天 03:00 执行
 
 param(
-    [string]$ProjectRoot = "<project_root>",
-    [string]$LogFile = "<project_root>\data\system\sync_log.txt"
+    [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path,
+    [string]$LogFile = (Join-Path (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path 'data\system\sync_log.txt')
 )
 
 $ErrorActionPreference = "Stop"

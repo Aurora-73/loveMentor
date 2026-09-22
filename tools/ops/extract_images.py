@@ -17,9 +17,9 @@ if sys.stdout.encoding and sys.stdout.encoding.upper() != "UTF-8":
 
 # === 配置 ===
 SOURCE_DIRS = [
-    r"<project_root>\docs\文档",
+    str(Path(__file__).resolve().parents[2] / "docs" / "文档"),
 ]
-TARGET_ROOT = r"<project_root>\docs\图片"
+TARGET_ROOT = str(Path(__file__).resolve().parents[2] / "docs" / "图片")
 
 # 覆盖已有文件？
 OVERWRITE = False

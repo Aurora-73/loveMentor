@@ -139,8 +139,12 @@ def get_all_files() -> list[Path]:
         # 检查是否在排除目录中
         rel = p.relative_to(ROOT_DIR)
         parts = rel.parts
-        if any(part in EXCLUDE_DIRS or str(Path(*parts[:i+1])) in EXCLUDE_DIRS
-               for i, part in enumerate(parts)):
+        if any(
+            part in EXCLUDE_DIRS
+            or part.startswith(".git.backup-")
+            or part.startswith(".git.rewritten-")
+            for part in parts
+        ):
             continue
         # 检查扩展名
         if p.suffix.lower() in EXCLUDE_EXTS:
@@ -195,12 +199,18 @@ def main():
                         help=f"输出报告路径（默认: {REPORT_PATH}）")
     parser.add_argument("--all", action="store_true",
                         help="扫描所有文件（含未跟踪），默认只扫描 git 跟踪文件")
+    parser.add_argument("--path-prefix", action="append", default=[],
+                        help="仅扫描指定相对路径前缀；可重复传入该参数")
     parser.add_argument("--min-len", type=int, default=2,
                         help="最小匹配长度（默认2，避免单字符误报）")
+    parser.add_argument("--source", action="append", default=[],
+                        help="仅扫描指定词条来源（如 custom、my_identity.nickname）；可重复传入")
     args = parser.parse_args()
 
     # 加载搜索词
     terms = load_search_terms(args.dict, min_len=args.min_len)
+    if args.source:
+        terms = [(value, source) for value, source in terms if source in args.source]
     if not terms:
         print("字典库为空，无可搜索条目。请先运行 build_dictionary.py 并确认 custom 区。")
         return
@@ -216,6 +226,13 @@ def main():
     else:
         files = get_tracked_files()
         print(f"扫描 git 跟踪文件: {len(files)} 个")
+
+    if args.path_prefix:
+        prefixes = tuple(prefix.replace("\\", "/").rstrip("/") + "/"
+                         for prefix in args.path_prefix)
+        files = [path for path in files
+                 if path.relative_to(ROOT_DIR).as_posix().startswith(prefixes)]
+        print(f"按路径前缀过滤后: {len(files)} 个")
 
     # 扫描
     all_results = []

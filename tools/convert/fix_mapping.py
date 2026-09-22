@@ -1,7 +1,8 @@
 import json
 import time
+from pathlib import Path
 
-MAP_FILE = r"<project_root>\docs\.name_mapping\ocr_name_map.json"
+MAP_FILE = Path(__file__).resolve().parents[2] / "docs" / ".name_mapping" / "ocr_name_map.json"
 
 def main():
     with open(MAP_FILE, "r", encoding="utf-8") as f:

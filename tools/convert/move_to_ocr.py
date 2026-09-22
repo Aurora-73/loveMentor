@@ -18,8 +18,9 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-SOURCE_BASE = r"<project_root>\docs\文档"
-TARGET_BASE = r"<project_root>\docs\文档_ocr"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+SOURCE_BASE = str(PROJECT_ROOT / "docs" / "文档")
+TARGET_BASE = str(PROJECT_ROOT / "docs" / "文档_ocr")
 
 EXTENSIONS = {".pdf", ".doc", ".docx", ".epub", ".txt", ".html", ".htm", ".ppt", ".pptx"}
 

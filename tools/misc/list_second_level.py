@@ -3,8 +3,9 @@
 只递归一层，不会无限展开。
 """
 import os
+from pathlib import Path
 
-BASE = r"<project_root>\docs\文档"
+BASE = str(Path(__file__).resolve().parents[2] / "docs" / "文档")
 
 for entry in sorted(os.listdir(BASE)):
     path = os.path.join(BASE, entry)

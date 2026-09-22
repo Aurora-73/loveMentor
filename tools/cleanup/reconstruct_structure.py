@@ -284,14 +284,15 @@ def match_doc_dirs(
 
 
 def main():
+    project_root = Path(__file__).resolve().parents[2]
     ap = argparse.ArgumentParser(
         description="Reconstruct top-level category structure in 文档/"
     )
-    ap.add_argument("--baidu-root", default=r"<project_root>\docs\百度网盘",
+    ap.add_argument("--baidu-root", default=str(project_root / "docs" / "百度网盘"),
                     help="Path to 百度网盘 directory")
-    ap.add_argument("--doc-root", default=r"<project_root>\docs\文档",
+    ap.add_argument("--doc-root", default=str(project_root / "docs" / "文档"),
                     help="Path to 文档 directory")
-    ap.add_argument("--audio-uploaded-dir", default=r"<project_root>\docs\音频\...已上传",
+    ap.add_argument("--audio-uploaded-dir", default=str(project_root / "docs" / "音频" / "...已上传"),
                     help="Path to uploaded audio directory (unclassified courses)")
     ap.add_argument("--save-index", default=None,
                     help="Build index from 百度网盘/ and save to JSON file, then exit")

@@ -412,8 +412,9 @@ def generate_annotation_template(samples_path: Path, output_path: Path):
 
 
 if __name__ == "__main__":
-    DB_PATH = Path(r"<project_root>\data\raw\core.db")
-    OUT_DIR = Path(r"<project_root>\data\pre_check")
+    project_root = Path(__file__).resolve().parents[2]
+    DB_PATH = project_root / "data" / "raw" / "core.db"
+    OUT_DIR = project_root / "data" / "pre_check"
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
     samples_path = OUT_DIR / "precheck_samples_50.jsonl"

@@ -236,9 +236,10 @@ def main():
     print("(train logistic regression on rule labels + embeddings)")
     print("=" * 60)
 
-    samples_path = Path(r"<project_root>\data\ml_dataset") / "samples_5000.jsonl"
-    rule_path = Path(r"<project_root>\data\ml_outputs") / "baseline_results.jsonl"
-    output_path = Path(r"<project_root>\data\ml_outputs") / "weak_supervised_results.jsonl"
+    project_root = Path(__file__).resolve().parents[2]
+    samples_path = project_root / "data" / "ml_dataset" / "samples_5000.jsonl"
+    rule_path = project_root / "data" / "ml_outputs" / "baseline_results.jsonl"
+    output_path = project_root / "data" / "ml_outputs" / "weak_supervised_results.jsonl"
 
     print()
     summary = train_weak_classifier(samples_path, rule_path, output_path)

@@ -23,9 +23,9 @@ if sys.stdout.encoding and sys.stdout.encoding.upper() != "UTF-8":
 
 # === 配置 ===
 SOURCE_DIRS = [
-    r"<project_root>\docs\文档",
+    str(Path(__file__).resolve().parents[2] / "docs" / "文档"),
 ]
-TARGET_ROOT = r"<project_root>\docs\音频\...待上传"
+TARGET_ROOT = str(Path(__file__).resolve().parents[2] / "docs" / "音频" / "...待上传")
 
 # 视频扩展名（需要提取音频流）
 VIDEO_EXTS = {".mp4", ".mkv", ".avi", ".mov", ".flv", ".wmv", ".webm", ".f4v", ".rmvb", ".mpg", ".mpeg",

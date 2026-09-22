@@ -2,7 +2,7 @@
 import sqlite3
 from pathlib import Path
 
-DB_PATH = Path(r"<project_root>\data\raw\core.db")
+DB_PATH = Path(__file__).resolve().parents[2] / "data" / "raw" / "core.db"
 
 conn = sqlite3.connect(DB_PATH)
 

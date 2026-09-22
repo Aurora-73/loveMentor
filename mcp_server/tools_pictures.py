@@ -40,7 +40,7 @@ _IGNORE_EXTS = {".trashed", ".txt", ".md", ".py"}
 def _parse_main_readme() -> tuple[list[dict], list[dict]]:
     """解析主 README.md，返回 (子文件夹分类列表, 独立文件列表)。
 
-    子文件夹分类: [{"name": "<category-a>", "description": "<category description>"}]
+    子文件夹分类: [{"name": "category-a", "description": "category description"}]
     独立文件: [{"name": "体检-身高体重.jpg", "description": "体检报告..."}]
     """
     if not os.path.exists(MAIN_README):
@@ -263,7 +263,7 @@ def search_user_pictures(
         keywords: 关键词列表（模糊匹配，任一匹配即可）
                   支持子串匹配：搜 "猫" 可匹配 "三花猫"/"猫咖"/"流浪猫"
                   也搜索 description/suitable_when 等文本字段
-        category: 分类精确过滤（子文件夹名，如 "<category-a>"/"<category-b>"/"<category-c>"）
+        category: 分类精确过滤（子文件夹名，例如 "category-a"）
                   不传则返回所有分类
         limit: 最多返回结果数（默认 20，让 agent 看到更多选项）
 
@@ -273,9 +273,9 @@ def search_user_pictures(
             "categories_summary": [...],  # 所有分类概览（供 agent 浏览）
             "results": [
                 {
-                    "absolute_path": "e:\\Code\\loveMentor\\data\\user_pictures\\<category-a>\\1000144894.jpg",
-                    "relative_path": "<category-a>/1000144894.jpg",
-                    "category": "<category-a>",
+                    "absolute_path": "<project_root>/data/user_pictures/<category>/<file>",
+                    "relative_path": "<category>/<file>",
+                    "category": "<category>",
                     "description": "...",  # 文件夹级别的描述
                     "file_description": "...",  # 该文件的具体描述（来自"## 单文件描述"section，可能为空）
                     "keywords": ["猫", "三花猫", ...],

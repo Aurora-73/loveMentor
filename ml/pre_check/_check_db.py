@@ -1,7 +1,10 @@
 import sqlite3
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 for db_path in [
-    r"<project_root>\data\raw\core.db",
-    r"<project_root>\data\messages.db",
+    PROJECT_ROOT / "data" / "raw" / "core.db",
+    PROJECT_ROOT / "data" / "messages.db",
 ]:
     try:
         conn = sqlite3.connect(db_path)

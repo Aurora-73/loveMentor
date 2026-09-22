@@ -5,8 +5,9 @@ import time
 from pathlib import Path
 
 NEED_DIR = Path(r"<external_path>")
-MAP_FILE = Path(r"<project_root>\docs\.name_mapping\ocr_name_map.json")
-FILE_PATHS = Path(r"<project_root>\file_paths.txt")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+MAP_FILE = PROJECT_ROOT / "docs" / ".name_mapping" / "ocr_name_map.json"
+FILE_PATHS = PROJECT_ROOT / "file_paths.txt"
 
 def load_mapping():
     with open(MAP_FILE, "r", encoding="utf-8") as f:

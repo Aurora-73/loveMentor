@@ -29,8 +29,9 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterator, List, Tuple
 
-CHAT_DIR = Path(r"<project_root>\docs\聊天记录")
-OUTPUT_DIR = Path(r"<project_root>\data\ml_dataset")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+CHAT_DIR = PROJECT_ROOT / "docs" / "聊天记录"
+OUTPUT_DIR = PROJECT_ROOT / "data" / "ml_dataset"
 OUTPUT_FILE = OUTPUT_DIR / "samples_chat_records.jsonl"
 
 WINDOW_SIZE = 20

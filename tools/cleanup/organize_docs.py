@@ -5,7 +5,7 @@ import hashlib
 from datetime import datetime
 from pathlib import Path
 
-BASE_DIR = Path(r"<project_root>\docs\文档")
+BASE_DIR = Path(__file__).resolve().parents[2] / "docs" / "文档"
 BACKUP_DIR = BASE_DIR.parent / "_整理备份"
 LOG_FILE = BASE_DIR.parent / "整理操作日志.json"
 UNDO_FILE = BASE_DIR.parent / "整理撤销日志.json"

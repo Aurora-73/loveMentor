@@ -8,7 +8,7 @@
 import os
 from pathlib import Path
 
-ROOT = Path(r"<project_root>\docs\百度网盘")
+ROOT = Path(__file__).resolve().parents[2] / "docs" / "百度网盘"
 
 
 def remove_empty_dirs(root: Path) -> int:

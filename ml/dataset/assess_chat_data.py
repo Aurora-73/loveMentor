@@ -17,7 +17,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
-CHAT_DIR = Path(r"<project_root>\docs\聊天记录")
+CHAT_DIR = Path(__file__).resolve().parents[2] / "docs" / "聊天记录"
 
 
 def find_json_files(base_dir: Path) -> list[Path]:

@@ -3,7 +3,7 @@
 # 或注册为 Windows 计划任务（触发器：登录时）
 
 param(
-    [string]$ProjectRoot = "<project_root>"
+    [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 )
 
 $ErrorActionPreference = "SilentlyContinue"

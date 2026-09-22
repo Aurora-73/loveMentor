@@ -1,9 +1,11 @@
 ﻿﻿import json
 import random
+from pathlib import Path
 
-samples_path = r"<project_root>\data\ml_dataset\samples_phase0.jsonl"
-baseline_path = r"<project_root>\data\ml_outputs\baseline_results.jsonl"
-output_path = r"<project_root>\data\pre_check\annotation_template.md"
+project_root = Path(__file__).resolve().parents[2]
+samples_path = project_root / "data" / "ml_dataset" / "samples_phase0.jsonl"
+baseline_path = project_root / "data" / "ml_outputs" / "baseline_results.jsonl"
+output_path = project_root / "data" / "pre_check" / "annotation_template.md"
 
 samples = []
 with open(samples_path, "r", encoding="utf-8") as f:

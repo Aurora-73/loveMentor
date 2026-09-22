@@ -229,7 +229,7 @@ def main():
     parser.add_argument("--min-len", type=int, default=2,
                         help="最小匹配长度（默认2）")
     mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--dry-run", action="store_true", default=True,
+    mode.add_argument("--dry-run", action="store_true", default=False,
                       help="预览模式（默认）：只展示替换内容，不修改历史")
     mode.add_argument("--force", action="store_true",
                       help="⚠️ 真正执行历史重写（需先备份）")

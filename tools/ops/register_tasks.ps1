@@ -2,7 +2,7 @@
 # 以管理员身份运行此脚本
 
 param(
-    [string]$ProjectRoot = "<project_root>"
+    [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 )
 
 $ErrorActionPreference = "Stop"

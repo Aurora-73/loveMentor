@@ -1,9 +1,9 @@
-"""Tree 展示 <project_root>\docs\聊天记录 的目录结构（仅文件夹）。"""
+"""Tree 展示项目 docs/聊天记录 的目录结构（仅文件夹）。"""
 
 import sys
 from pathlib import Path
 
-ROOT = Path(r"<project_root>\docs\聊天记录")
+ROOT = Path(__file__).resolve().parents[2] / "docs" / "聊天记录"
 
 
 def show_tree(path: Path, prefix: str = "", is_last: bool = True):

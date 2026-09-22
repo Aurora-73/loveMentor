@@ -34,8 +34,9 @@ def load_jsonl(path: Path) -> dict[str, dict]:
 
 
 def main():
-    rule_path = Path(r"<project_root>\data\ml_outputs") / "baseline_results.jsonl"
-    emb_path = Path(r"<project_root>\data\ml_outputs") / "embedding_results.jsonl"
+    project_root = Path(__file__).resolve().parents[2]
+    rule_path = project_root / "data" / "ml_outputs" / "baseline_results.jsonl"
+    emb_path = project_root / "data" / "ml_outputs" / "embedding_results.jsonl"
 
     rule = load_jsonl(rule_path)
     emb = load_jsonl(emb_path)

@@ -206,10 +206,14 @@ def main():
                         help="最小匹配长度（默认2）")
     parser.add_argument("--max-commits", type=int, default=0,
                         help="最多扫描的提交数（0=全部）")
+    parser.add_argument("--source", action="append", default=[],
+                        help="仅扫描指定词条来源（如 custom、my_identity.nickname）；可重复传入")
     args = parser.parse_args()
 
     # 加载搜索词
     terms = load_search_terms(args.dict, min_len=args.min_len)
+    if args.source:
+        terms = [(value, source) for value, source in terms if source in args.source]
     if not terms:
         print("字典库为空，无可搜索条目。请先运行 build_dictionary.py")
         return

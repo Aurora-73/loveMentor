@@ -5,10 +5,11 @@ from pathlib import Path
 
 
 def main():
+    project_root = Path(__file__).resolve().parents[2]
     parser = argparse.ArgumentParser(description='Copy or move selected folders by priority')
     parser.add_argument('--priority', type=int, required=True, help='Priority level to process (1, 2, etc.)')
     parser.add_argument('--json', default='selected.json', help='Path to selected.json')
-    parser.add_argument('--output', default=r'<project_root>\docs\选中', help='Output directory')
+    parser.add_argument('--output', default=str(project_root / 'docs' / '选中'), help='Output directory')
     parser.add_argument('--mode', choices=['copy', 'move'], default='copy', help='Operation mode: copy (default) or move')
     args = parser.parse_args()
 

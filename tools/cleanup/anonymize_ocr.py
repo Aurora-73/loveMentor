@@ -29,7 +29,7 @@ import time
 from pathlib import Path
 
 
-BASE_DIR = Path(r"<project_root>\docs\文档_ocr")
+BASE_DIR = Path(__file__).resolve().parents[2] / "docs" / "文档_ocr"
 MAPPING_DIR = BASE_DIR.parent / ".name_mapping"
 MAPPING_FILE = MAPPING_DIR / "ocr_name_map.json"
 
